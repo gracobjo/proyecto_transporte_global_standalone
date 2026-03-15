@@ -84,6 +84,69 @@ El script está pensado para ejecutarse de forma periódica (p. ej. cada 15 min 
 
 ---
 
+## Visualización de datos en Cassandra
+
+Los datos del gemelo digital se almacenan en el keyspace **`logistica_espana`**. Se pueden consultar por **línea de comandos** con `cqlsh` o visualizarlos en el **dashboard** Streamlit.
+
+### Tablas y contenido
+
+| Tabla | Descripción | Uso en visualización |
+|-------|-------------|----------------------|
+| **`nodos_estado`** | Estado de cada nodo (hub/ciudad): coordenadas, estado (OK/Congestionado/Bloqueado), motivo, clima, temperatura, humedad. | En el mapa: círculos por ciudad; color según estado; popup con motivo y PageRank. |
+| **`aristas_estado`** | Estado de cada arista (ruta entre nodos): origen, destino, distancia, estado. | Líneas entre nodos; color según estado (verde/naranja/rojo). |
+| **`tracking_camiones`** | Posición GPS de cada camión, origen/destino, ruta sugerida, estado, motivo. | Marcadores azules en el mapa; línea azul discontinua = ruta alternativa. |
+| **`pagerank_nodos`** | PageRank por nodo (importancia en la red). | Tabla “PageRank - Nodos más críticos” en el dashboard; popup en cada nodo. |
+
+### Acceso por línea de comandos (`cqlsh`)
+
+Con Cassandra en marcha (`nc -z 127.0.0.1 9042`):
+
+```bash
+# Entrar al keyspace
+cqlsh -e "USE logistica_espana;"
+
+# Ver estado de nodos
+cqlsh -e "USE logistica_espana; SELECT id_nodo, lat, lon, estado, motivo_retraso, clima_actual FROM nodos_estado LIMIT 20;"
+
+# Ver aristas
+cqlsh -e "USE logistica_espana; SELECT src, dst, distancia_km, estado FROM aristas_estado LIMIT 20;"
+
+# Ver camiones
+cqlsh -e "USE logistica_espana; SELECT id_camion, lat, lon, ruta_origen, ruta_destino, estado_ruta FROM tracking_camiones;"
+
+# Ver PageRank
+cqlsh -e "USE logistica_espana; SELECT id_nodo, pagerank FROM pagerank_nodos LIMIT 15;"
+```
+
+Modo interactivo: `cqlsh` → `USE logistica_espana;` → luego las consultas anteriores.
+
+### Dashboard Streamlit (mapa e interfaz)
+
+La app **`app_visualizacion.py`** se conecta a Cassandra (`CASSANDRA_HOST` y `KEYSPACE` en `config.py`) y:
+
+1. **Carga los datos** con el driver `cassandra-driver`: ejecuta `SELECT` sobre `nodos_estado`, `aristas_estado`, `tracking_camiones` y `pagerank_nodos`.
+2. **Construye un mapa Folium** centrado en España:
+   - **Nodos**: `CircleMarker` por cada ciudad; color según `estado` (verde OK, naranja Congestionado, rojo Bloqueado); radio mayor en hubs; popup con estado, motivo y PageRank.
+   - **Aristas**: `PolyLine` entre nodos; color según estado de la arista; tooltip con origen–destino y estado.
+   - **Camiones**: marcador azul por camión; popup con id, ruta origen→destino y motivo de retraso.
+   - **Rutas alternativas**: si un camión tiene `ruta_sugerida` con al menos 2 nodos, se dibuja una **línea azul discontinua** entre ellos.
+3. **Muestra métricas**: “Paso simulación” (contador de pasos de 15 min) y tabla “PageRank - Nodos más críticos” (top 10).
+4. **Leyenda**: colores por estado y significado de la línea azul discontinua.
+
+Si **no hay datos en Cassandra**, la app usa nodos y camiones de ejemplo a partir de `config_nodos.py` para que el mapa sea visible igualmente.
+
+**Arranque del dashboard:**
+
+```bash
+cd ~/proyecto_transporte_global
+source venv_transporte/bin/activate
+streamlit run app_visualizacion.py
+```
+
+El botón **“Paso Siguiente (15 min)”** ejecuta la ingesta y el procesamiento Spark, actualiza Cassandra y recarga el mapa con los nuevos datos.
+
+---
+
 ## Requisitos y arranque rápido
 
 - **Python 3** con `venv` recomendado.
@@ -170,4 +233,3 @@ chmod +x subir_github.sh
 ## Licencia y uso
 
 Proyecto de referencia para gemelo digital logístico. Ajustar `config.py` y `config_nodos.py` según entorno y topología deseada. No incluir API keys en el repositorio; usar variables de entorno o secretos en producción.
-# proyecto_transporte_global_standalone
