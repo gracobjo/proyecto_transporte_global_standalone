@@ -28,6 +28,7 @@ from config import (
     KEYSPACE,
     KAFKA_BOOTSTRAP,
     TOPIC_TRANSPORTE,
+    HIVE_DB,
 )
 
 # Pesos de penalización por clima/estado
@@ -62,15 +63,13 @@ def cargar_estados_desde_kafka(spark):
 
 
 def crear_spark():
-    """Spark con Cassandra, JARs configurados. master=local (1 JVM, sin executor separado) para evitar RpcEndpointNotFoundException."""
-    # Evitar que hostname (nodo1.home) rompa RPC; usar localhost
-    os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
-    # GraphFrames JAR es para Spark 3.5 (Scala 2.12). Usar Spark del sistema (/opt/spark) con PySpark 3.5.
-    # No quitar SPARK_HOME para evitar NoClassDefFoundError: scala/Serializable con PySpark 4.x
+    """Spark con Cassandra, JARs configurados. master=local por defecto; usar SPARK_MASTER=yarn para YARN."""
+    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
+    master = os.environ.get("SPARK_MASTER", "local")
     return (
         SparkSession.builder
         .appName("MineriaTransporteEspaña")
-        .master("local")
+        .master(master)
         .config("spark.driver.memory", "512m")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
@@ -82,6 +81,7 @@ def crear_spark():
         .config("spark.jars.packages", "com.datastax.spark:spark-cassandra-connector_2.12:3.5.0")
         .config("spark.eventLog.enabled", "false")
         .config("spark.hadoop.dfs.client.use.datanode.hostname", "false")
+        .enableHiveSupport()
         .getOrCreate()
     )
 
@@ -139,6 +139,121 @@ def shortest_paths(g, origen, destino):
     except Exception:
         pass
     return None
+
+
+def enriquecer_desde_hive(spark, estados_nodos, estados_aristas, camiones):
+    """
+    Enriquecimiento desde datos maestros en Hive (PDF Fase II).
+    Lee tabla nodos_maestro (id_nodo, lat, lon, tipo, hub) y añade hub a estados_nodos.
+    Si la tabla no existe o está vacía, asegura crearla y poblarla desde config_nodos.
+    """
+    nodos = get_nodos()
+    db = HIVE_DB if HIVE_DB else "logistica_espana"
+    try:
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {db}")
+        spark.sql(f"USE {db}")
+        spark.sql("""
+            CREATE TABLE IF NOT EXISTS nodos_maestro (
+                id_nodo STRING, lat DOUBLE, lon DOUBLE, tipo STRING, hub STRING
+            ) STORED AS PARQUET
+        """)
+        # Poblar desde config_nodos si la tabla está vacía
+        df_master = spark.sql("SELECT * FROM nodos_maestro LIMIT 1")
+        if df_master.count() == 0:
+            rows = []
+            for nid, datos in nodos.items():
+                hub = datos.get("hub", nid if datos.get("tipo") == "hub" else "")
+                rows.append((nid, float(datos["lat"]), float(datos["lon"]), datos["tipo"], hub))
+            from pyspark.sql import Row
+            spark.createDataFrame(rows, ["id_nodo", "lat", "lon", "tipo", "hub"]).write.mode("overwrite").saveAsTable(f"{db}.nodos_maestro")
+        # Leer maestros y enriquecer
+        df_maestro = spark.sql(f"SELECT id_nodo, hub FROM {db}.nodos_maestro")
+        maestro = {r.id_nodo: r.hub for r in df_maestro.collect()}
+        for nid in list(estados_nodos.keys()):
+            if isinstance(estados_nodos.get(nid), dict) and nid in maestro:
+                estados_nodos[nid]["hub"] = maestro[nid]
+    except Exception as e:
+        print(f"[ENRIQUECIMIENTO HIVE] No disponible: {e}")
+    return estados_nodos, estados_aristas, camiones
+
+
+def limpiar_datos_antes_cassandra(estados_nodos, estados_aristas, camiones):
+    """
+    Gestión de calidad de datos antes de escribir en Cassandra:
+    - Rellenar nulos en campos clave (lat/lon, estado, motivo).
+    - Eliminar duplicados por id_camion (quedarse con el primero).
+    - Normalizar valores de estado (OK, Congestionado, Bloqueado).
+    Devuelve (estados_nodos, estados_aristas, camiones) ya limpios.
+    """
+    # Normalizar estado a valores canónicos
+    def norm_estado(v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "OK"
+        v = str(v).strip().lower().replace("ó", "o")
+        if v in ("ok", "fluido"):
+            return "OK"
+        if v in ("congestionado", "congestion"):
+            return "Congestionado"
+        if v in ("bloqueado", "blocked"):
+            return "Bloqueado"
+        return "OK"
+
+    # Limpiar nodos: nulos y normalizar estado
+    nodos_limpios = {}
+    for nid, d in (estados_nodos or {}).items():
+        if not nid:
+            continue
+        nodos_limpios[nid] = {
+            "estado": norm_estado(d.get("estado")),
+            "motivo": d.get("motivo") or "",
+            "clima_desc": d.get("clima_desc"),
+            "temp": d.get("temp"),
+            "humedad": d.get("humedad"),
+            "viento": d.get("viento"),
+        }
+
+    # Limpiar aristas: nulos y normalizar estado
+    aristas_limpias = {}
+    for k, d in (estados_aristas or {}).items():
+        if not k or "|" not in k:
+            continue
+        aristas_limpias[k] = {
+            "estado": norm_estado(d.get("estado")),
+            "motivo": d.get("motivo") or "",
+            "distancia_km": float(d.get("distancia_km", 0)) if d.get("distancia_km") is not None else 0.0,
+        }
+
+    # Limpiar camiones: nulos en lat/lon, duplicados por id_camion
+    seen_ids = set()
+    camiones_limpios = []
+    for c in (camiones or []):
+        cid = c.get("id_camion") or c.get("id")
+        if not cid or cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+        lat = c.get("lat")
+        lon = c.get("lon")
+        if lat is None:
+            lat = 40.4
+        if lon is None:
+            lon = -3.7
+        try:
+            lat, lon = float(lat), float(lon)
+        except (TypeError, ValueError):
+            lat, lon = 40.4, -3.7
+        if not (35 <= lat <= 44 and -10 <= lon <= 5):
+            continue  # Fuera de España, filtrar
+        camiones_limpios.append({
+            "id_camion": cid,
+            "lat": lat,
+            "lon": lon,
+            "ruta_origen": c.get("ruta_origen") or (c.get("ruta") or [None])[0] or "",
+            "ruta_destino": c.get("ruta_destino") or (c.get("ruta") or [None])[-1] or "",
+            "ruta_sugerida": c.get("ruta_sugerida") or c.get("ruta") or [],
+            "estado_ruta": c.get("estado_ruta") or "En ruta",
+            "motivo_retraso": c.get("motivo_retraso"),
+        })
+    return nodos_limpios, aristas_limpias, camiones_limpios
 
 
 def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
@@ -368,18 +483,43 @@ def main():
                 for i in range(1, 6)
             ]
         else:
-            estados_nodos = payload.get("nodos_estado", {})
-            estados_aristas = payload.get("aristas_estado", {})
+            # El JSON de ingesta usa "estados_nodos" y "estados_aristas"
+            estados_nodos = payload.get("estados_nodos", payload.get("nodos_estado", {}))
+            estados_aristas = payload.get("estados_aristas", payload.get("aristas_estado", {}))
             camiones = payload.get("camiones", [])
+            # Normalizar formato camiones (ingesta usa "id", "posicion_actual", "ruta")
+            camiones = [
+                {
+                    "id_camion": c.get("id") or c.get("id_camion"),
+                    "lat": c.get("posicion_actual", {}).get("lat") if isinstance(c.get("posicion_actual"), dict) else c.get("lat"),
+                    "lon": c.get("posicion_actual", {}).get("lon") if isinstance(c.get("posicion_actual"), dict) else c.get("lon"),
+                    "ruta": c.get("ruta", []),
+                    "ruta_sugerida": c.get("ruta_sugerida", c.get("ruta", [])),
+                    "ruta_origen": (c.get("ruta") or [None])[0],
+                    "ruta_destino": (c.get("ruta") or [None])[-1],
+                    "estado_ruta": c.get("estado_ruta", "En ruta"),
+                    "motivo_retraso": c.get("motivo_retraso"),
+                }
+                for c in camiones
+            ]
             # Enriquecer clima en nodos hub
-            clima = payload.get("clima_hubs", {})
-            for hub, c in clima.items():
+            clima_list = payload.get("clima", [])
+            clima = {c.get("ciudad"): c for c in clima_list if c.get("ciudad")} if isinstance(clima_list, list) else payload.get("clima_hubs", {})
+            for hub, c in (clima or {}).items():
                 if hub in estados_nodos:
                     estados_nodos[hub]["clima_desc"] = c.get("descripcion", "N/A")
-                    estados_nodos[hub]["temp"] = c.get("temp")
+                    estados_nodos[hub]["temp"] = c.get("temperatura", c.get("temp"))
                     estados_nodos[hub]["humedad"] = c.get("humedad")
                     estados_nodos[hub]["viento"] = c.get("viento")
 
+        # Enriquecimiento desde Hive (datos maestros: nodos_maestro)
+        estados_nodos, estados_aristas, camiones = enriquecer_desde_hive(
+            spark, estados_nodos, estados_aristas, camiones
+        )
+        # Calidad de datos antes de Cassandra: nulos, duplicados, normalización
+        estados_nodos, estados_aristas, camiones = limpiar_datos_antes_cassandra(
+            estados_nodos, estados_aristas, camiones
+        )
         procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones)
         print("[PROCESAMIENTO] OK - Cassandra y Hive actualizados")
     finally:

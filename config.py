@@ -30,9 +30,11 @@ if not os.path.exists(JAR_GRAPHFRAMES):
 API_WEATHER_KEY = "735df735c4780d78a550d6bb6b52dfd7"
 API_WEATHER_BASE = "https://api.openweathermap.org/data/2.5/weather"
 
-# Kafka
+# Kafka - Dos temas según PDF: Datos Crudos y Datos Filtrados
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
-TOPIC_TRANSPORTE = "transporte_status"
+TOPIC_RAW = "transporte_raw"           # Datos crudos (auditoría)
+TOPIC_FILTERED = "transporte_filtered" # Datos filtrados/validados para procesamiento
+TOPIC_TRANSPORTE = TOPIC_FILTERED      # Compatibilidad: consumidores usan filtrado
 
 # Cassandra
 CASSANDRA_HOST = os.environ.get("CASSANDRA_HOST", "127.0.0.1")

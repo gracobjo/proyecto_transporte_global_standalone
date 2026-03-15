@@ -16,6 +16,35 @@ Sistema de **gemelo digital** para logística y transporte en España. Utiliza u
 
 ---
 
+## Responsabilidades de cada componente
+
+Cada pieza del sistema tiene una función concreta. Ningún componente “le pasa datos” a otro de forma cruzada: la ingesta alimenta al procesamiento; el procesamiento escribe en Cassandra (estado actual) y, opcionalmente, en Hive (histórico).
+
+| Componente | Responsabilidad única | Entrada | Salida |
+|------------|------------------------|---------|--------|
+| **Ingesta** (`ingesta_kdd.py`) | Generar el “snapshot” del sistema cada 15 min: clima real, estados simulados de nodos/aristas, posiciones de camiones. | API OpenWeatherMap, topología `config_nodos`. | Un JSON enriquecido → Kafka (topic `transporte_status`) y copia en HDFS. |
+| **Kafka** | Cola de mensajes: recibe el JSON de la ingesta y lo deja disponible para el consumidor (Spark u otro). | Mensajes publicados por la ingesta. | Lectura por el procesamiento (o por cualquier consumidor del topic). |
+| **HDFS** | Almacén de respaldo: guardar copias del JSON de ingesta por si Kafka no está o para reprocesar. | JSON escrito por la ingesta. | Archivos JSON que el procesamiento Spark puede leer como fuente alternativa. |
+| **Procesamiento Spark** (`procesamiento_grafos.py`) | Construir el grafo, autosanación, rutas alternativas, PageRank, y persistir resultados. | JSON de ingesta desde HDFS (o datos simulados). Topología `config_nodos`. | Escritura en **Cassandra** (nodos, aristas, camiones, PageRank) y opcional en **Hive** (histórico). |
+| **Cassandra** | Guardar **solo el estado actual** del gemelo digital para consultas rápidas y dashboard. | Datos escritos por Spark. | Lecturas por el dashboard y por `cqlsh` / aplicaciones. |
+| **Hive** | Guardar **histórico** para análisis en el tiempo (eventos, clima, rutas, agregados). No alimenta a Cassandra. | Datos escritos por Spark o por `persistencia_hive.py`. | Consultas SQL (HiveQL) para reportes y tendencias. |
+| **Dashboard** (`app_visualizacion.py`) | Mostrar en mapa el estado actual (nodos, aristas, camiones, PageRank). Puede lanzar “Paso Siguiente”. | Solo **Cassandra** (lectura). No lee de Hive. | Interfaz web (Streamlit + Folium). |
+| **Airflow** (DAG) | Orquestar cada 15 min: comprobar servicios y ejecutar Ingesta → Procesamiento. | Configuración del DAG. | Ejecución programada de los scripts. |
+
+Flujo de datos:
+
+```
+Ingesta → Kafka + HDFS
+    ↓
+Procesamiento Spark ← (lee HDFS o simula)
+    ↓
+Cassandra (estado actual)   ←  Dashboard lee aquí
+    +
+Hive (histórico)            ←  Consultas analíticas / reportes
+```
+
+---
+
 ## Ingesta de datos (`ingesta_kdd.py`)
 
 La **ingesta** es la **Fase I** del pipeline (Knowledge Discovery in Data). Su objetivo es generar, cada 15 minutos, un **JSON enriquecido** con el estado del sistema (clima, incidentes, camiones) y enviarlo a Kafka y HDFS para que el procesamiento Spark lo consuma.
@@ -147,6 +176,68 @@ El botón **“Paso Siguiente (15 min)”** ejecuta la ingesta y el procesamient
 
 ---
 
+## Consultas en Hive (ejemplos)
+
+Hive guarda el **histórico** en la base **`logistica_db`** (definida en `persistencia_hive.py`). Las tablas están particionadas por `anio_part` y `mes_part`. Puedes ejecutar HiveQL desde la consola `hive` o `beeline`, o desde Spark con `spark.sql()`.
+
+### Tablas de histórico (logistica_db)
+
+| Tabla | Contenido |
+|-------|-----------|
+| `eventos_historico` | Eventos por timestamp: tipo_evento, id_elemento, estado, motivo, pagerank, hub_asociado. |
+| `clima_historico` | Clima por ciudad y fecha: temperatura, humedad, descripcion, visibilidad. |
+| `tracking_camiones_historico` | Posiciones históricas de camiones: origen, destino, nodo_actual, progreso_pct. |
+| `rutas_alternativas_historico` | Rutas originales vs alternativas: distancia, motivo_bloqueo, ahorro_km. |
+| `agg_estadisticas_diarias` | Agregados diarios: tipo_evento, estado, motivo, contador, pct_total. |
+
+### Cómo ejecutar consultas
+
+**Consola Hive:**
+
+```bash
+hive
+```
+
+Dentro de Hive:
+
+```sql
+USE logistica_db;
+SHOW TABLES;
+
+-- Eventos por mes y estado
+SELECT anio, mes, estado, COUNT(*) AS total
+FROM eventos_historico
+WHERE anio_part = 2025 AND mes_part = 3
+GROUP BY anio, mes, estado
+ORDER BY total DESC;
+
+-- Clima histórico por ciudad
+SELECT ciudad, anio, mes, AVG(temperatura) AS temp_media
+FROM clima_historico
+WHERE anio_part = 2025
+GROUP BY ciudad, anio, mes;
+
+-- Meses con más incidentes bloqueados
+SELECT anio, mes, COUNT(*) AS eventos_bloqueados
+FROM eventos_historico
+WHERE estado = 'Bloqueado'
+GROUP BY anio, mes
+ORDER BY eventos_bloqueados DESC
+LIMIT 10;
+```
+
+**Desde Spark (PySpark):**
+
+```python
+spark = SparkSession.builder.appName("HiveQuery").enableHiveSupport().getOrCreate()
+spark.sql("USE logistica_db")
+spark.sql("SELECT anio, mes, estado, COUNT(*) FROM eventos_historico GROUP BY anio, mes, estado").show()
+```
+
+Si las tablas no tienen datos, ejecuta antes el flujo que escribe en Hive (procesamiento Spark o `persistencia_hive.py`).
+
+---
+
 ## Requisitos y arranque rápido
 
 - **Python 3** con `venv` recomendado.
@@ -200,7 +291,19 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 
 ## Documentación adicional
 
-- **README_GEMELO_DIGITAL.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting (Kafka KRaft, timeouts de Cassandra con 4 GB RAM), uso del DAG y del dashboard.
+- **README_GEMELO_DIGITAL.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
+- **docs/FLUJO_DATOS_Y_REQUISITOS.md**: ejemplos GPS/clima/rutas, qué guarda Spark dónde, calidad de datos, consultas Hive.
+- **docs/REQUIREMENTS_CHECKLIST.md**: cotejo con el PDF *Proyecto Big Data.pdf* (Fases I–IV, rúbrica).
+- **docs/YARN_Y_SPARK.md**: cómo ejecutar Spark en YARN (`SPARK_MASTER=yarn`, `spark-submit --master yarn`).
+
+### Cambios alineados al PDF (sin NiFi)
+
+- **Kafka**: temas `transporte_raw` (crudos) y `transporte_filtered` (filtrados). Crear con `bash sql/crear_temas_kafka.sh`.
+- **Structured Streaming**: `python procesamiento/streaming_ventanas_15min.py` (ventanas 15 min sobre `transporte_filtered`).
+- **Enriquecimiento Hive**: tabla `nodos_maestro`; el procesamiento enriquece nodos con `hub` desde Hive.
+- **DAG mensual**: `orquestacion/dag_mensual_retrain_limpieza.py` (re-entrenamiento + limpieza HDFS). Retención de backup: `DIAS_RETENCION_BACKUP` (por defecto 30); ruta: `HDFS_BACKUP_PATH`.
+- **YARN**: `SPARK_MASTER=yarn` o `spark-submit --master yarn`.
+- **HDFS**: La ingesta escribe el JSON raw en **`HDFS_BACKUP_PATH`** (misma ruta que lee Spark), así el procesamiento encuentra los ficheros sin configurar dos rutas.
 
 ---
 

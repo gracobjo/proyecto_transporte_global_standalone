@@ -12,13 +12,18 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
 from config_nodos import RED, HUBS, get_nodos, get_aristas
+from config import HDFS_BACKUP_PATH as HDFS_BACKUP_PATH_CONFIG
 
 API_KEY = "735df735c4780d78a550d6bb6b52dfd7"
 WEATHER_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
-KAFKA_TOPIC = "transporte_status"
-HDFS_PATH = "/user/hadoop/transporte/ingesta"
+# Dos temas según PDF: raw (crudos) y filtered (filtrados)
+KAFKA_TOPIC_RAW = "transporte_raw"
+KAFKA_TOPIC_FILTERED = "transporte_filtered"
+KAFKA_TOPIC = KAFKA_TOPIC_FILTERED  # Por defecto publicar en filtrado
+# Escribir en HDFS_BACKUP_PATH para que Spark (procesamiento_grafos) pueda leer los JSON
+HDFS_PATH = HDFS_BACKUP_PATH_CONFIG
 
 
 def obtener_clima_hub(hub_name: str, lat: float, lon: float) -> Dict:
@@ -223,7 +228,7 @@ def crear_json_enriquecido(
     estados_aristas: Dict,
     camiones: List[Dict]
 ) -> Dict:
-    """Crea el JSON enriquecido con todos los datos."""
+    """Crea el JSON enriquecido con todos los datos (raw)."""
     return {
         "timestamp": datetime.now().isoformat(),
         "clima": climas,
@@ -234,8 +239,61 @@ def crear_json_enriquecido(
     }
 
 
+def filtrar_payload_para_kafka(raw_data: Dict) -> Dict:
+    """
+    Filtra el payload crudo para el tema 'Datos Filtrados':
+    - Excluye nodos/aristas sin estado válido.
+    - Excluye camiones con lat/lon nulos o fuera de España (lat 35-44, lon -10-5).
+    - Excluye entradas de clima con error (temperatura None).
+    """
+    ts = raw_data.get("timestamp", datetime.now().isoformat())
+    climas = raw_data.get("clima", [])
+    estados_nodos = raw_data.get("estados_nodos", {})
+    estados_aristas = raw_data.get("estados_aristas", {})
+    camiones = raw_data.get("camiones", [])
+
+    climas_ok = [c for c in climas if c.get("temperatura") is not None and c.get("ciudad")]
+    nodos_ok = {k: v for k, v in estados_nodos.items() if k and v.get("estado")}
+    aristas_ok = {k: v for k, v in estados_aristas.items() if k and "|" in k and v.get("estado")}
+
+    def lat_lon_validos(c):
+        lat = c.get("posicion_actual", {}).get("lat") if isinstance(c.get("posicion_actual"), dict) else c.get("lat")
+        lon = c.get("posicion_actual", {}).get("lon") if isinstance(c.get("posicion_actual"), dict) else c.get("lon")
+        if lat is None or lon is None:
+            return False
+        try:
+            lat, lon = float(lat), float(lon)
+            return 35 <= lat <= 44 and -10 <= lon <= 5
+        except (TypeError, ValueError):
+            return False
+
+    camiones_ok = [c for c in camiones if (c.get("id") or c.get("id_camion")) and lat_lon_validos(c)]
+
+    return {
+        "timestamp": ts,
+        "clima": climas_ok,
+        "estados_nodos": nodos_ok,
+        "estados_aristas": aristas_ok,
+        "camiones": camiones_ok,
+        "intervalo_minutos": 15
+    }
+
+
+def _ensure_hdfs_path():
+    """Crea el directorio HDFS_BACKUP_PATH si no existe (para que Spark pueda leer después)."""
+    try:
+        import subprocess
+        subprocess.run(
+            ["hdfs", "dfs", "-mkdir", "-p", HDFS_PATH],
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
 def guardar_en_hdfs(json_data: Dict, hdfs_path: str = HDFS_PATH) -> bool:
-    """Guarda el JSON en HDFS como backup."""
+    """Guarda el JSON en HDFS como backup (ruta = HDFS_BACKUP_PATH para que Spark lo lea)."""
     try:
         import subprocess
         from datetime import datetime
@@ -316,9 +374,13 @@ def ejecutar_ingesta() -> Dict:
         climas, estados_nodos, estados_aristas, camiones
     )
     
-    print("\n[5/5] Persistiendo datos...")
+    print("\n[5/5] Persistiendo datos (raw + filtrado)...")
+    # HDFS: copia raw en HDFS_BACKUP_PATH para auditoría y para que Spark lea desde ahí
+    _ensure_hdfs_path()
     guardar_en_hdfs(json_enriquecido)
-    publicar_en_kafka(json_enriquecido)
+    publicar_en_kafka(json_enriquecido, topic=KAFKA_TOPIC_RAW)
+    json_filtrado = filtrar_payload_para_kafka(json_enriquecido)
+    publicar_en_kafka(json_filtrado, topic=KAFKA_TOPIC_FILTERED)
     
     print("\n" + "=" * 60)
     print("INGESTA COMPLETADA")

@@ -35,6 +35,9 @@ graphframes-*.jar*
 almacenamiento/
 reporte_*.csv
 
+# Cassandra datos y cachés (no versionar)
+cassandra/data/
+
 # IDE y sistema
 .idea/
 .vscode/
