@@ -106,6 +106,7 @@ El script está pensado para ejecutarse de forma periódica (p. ej. cada 15 min 
 | `persistencia_hive.py` | Creación de tablas Hive y escritura del histórico (eventos, clima, rutas, agregados). |
 | `app_visualizacion.py` | Dashboard Streamlit + Folium (mapa, nodos, aristas, camiones, rutas alternativas, PageRank). |
 | `orquestacion/dag_maestro.py` | DAG Airflow: comprobación de servicios y ejecución Ingesta → Procesamiento. |
+| `orquestacion/dag_arranque_servicios.py` | DAG para **levantar** HDFS, Cassandra y Kafka (ejecución manual). |
 | `cassandra/` | Configuración y esquema CQL (`esquema_logistica.cql`) para nodos, aristas, tracking, PageRank. |
 | `sql/` | Consultas SQL/HQL auxiliares. |
 | `setup_hive.hql` | Script de inicialización de Hive. |
@@ -244,6 +245,8 @@ Si las tablas no tienen datos, ejecuta antes el flujo que escribe en Hive (proce
 - **Servicios**: HDFS, Kafka (KRaft), Cassandra, Hive (opcional para histórico).
 - **Spark 3.5** y JARs: GraphFrames, conector Spark-Cassandra, Kafka (según uso).
 
+**Arranque de servicios con Airflow**: si tienes Airflow activo, puedes usar el DAG `dag_arranque_servicios` (ejecución manual) para levantar HDFS, Cassandra y Kafka antes de lanzar el pipeline. Configura `HADOOP_HOME` y `KAFKA_HOME` si no están en `/opt/hadoop` y `/opt/kafka`.
+
 ### 1. Entorno e ingesta
 
 ```bash
@@ -292,6 +295,7 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 ## Documentación adicional
 
 - **README_GEMELO_DIGITAL.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
+- **docs/AIRFLOW.md**: cómo arrancar Airflow (api-server + scheduler), qué hace cada DAG del proyecto y los que puedas tener en `~/airflow/dags`.
 - **docs/FLUJO_DATOS_Y_REQUISITOS.md**: ejemplos GPS/clima/rutas, qué guarda Spark dónde, calidad de datos, consultas Hive.
 - **docs/REQUIREMENTS_CHECKLIST.md**: cotejo con el PDF *Proyecto Big Data.pdf* (Fases I–IV, rúbrica).
 - **docs/YARN_Y_SPARK.md**: cómo ejecutar Spark en YARN (`SPARK_MASTER=yarn`, `spark-submit --master yarn`).
