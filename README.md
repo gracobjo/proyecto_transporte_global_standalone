@@ -170,3 +170,4 @@ chmod +x subir_github.sh
 ## Licencia y uso
 
 Proyecto de referencia para gemelo digital logístico. Ajustar `config.py` y `config_nodos.py` según entorno y topología deseada. No incluir API keys en el repositorio; usar variables de entorno o secretos en producción.
+# proyecto_transporte_global_standalone
