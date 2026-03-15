@@ -1,0 +1,48 @@
+# Entorno virtual
+venv_transporte/
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Logs y bases locales
+logs/
+*.log
+derby.log
+metastore_db/
+spark-warehouse/
+
+# Binarios y datos pesados (no subir al repo)
+*.jar
+*.jar.1
+*.tar.gz
+*.zip
+apache-hive-*
+nifi-*/
+graphframes-*.jar*
+
+# Datos locales y almacenamiento temporal
+almacenamiento/
+reporte_*.csv
+
+# IDE y sistema
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Secretos (usar variables de entorno en producción)
+.env
+.env.local
+*.pem

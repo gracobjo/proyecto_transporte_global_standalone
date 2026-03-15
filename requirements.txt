@@ -1,0 +1,23 @@
+# Sistema de Gemelo Digital Logístico - España
+# Stack Apache 2026
+
+# API y HTTP
+requests>=2.28.0
+
+# Kafka
+kafka-python>=2.0.2
+
+# Cassandra (driver para app Streamlit)
+cassandra-driver>=3.25.0
+
+# Dashboard
+streamlit>=1.28.0
+streamlit-folium>=0.15.0
+folium>=0.14.0
+
+# Airflow (si se instala en el mismo entorno)
+apache-airflow>=2.6.0
+
+# PySpark 3.5 (debe coincidir con Spark en /opt/spark y JAR GraphFrames 3.5)
+pyspark>=3.5.0,<4.0
+graphframes
