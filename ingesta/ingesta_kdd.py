@@ -203,20 +203,31 @@ def publicar_kafka(payload: dict) -> bool:
         return False
 
 
+def _hdfs_cmd():
+    """Ruta al ejecutable hdfs (HADOOP_HOME/bin/hdfs o 'hdfs' del PATH)."""
+    hadoop_home = os.environ.get("HADOOP_HOME")
+    if hadoop_home:
+        path = os.path.join(hadoop_home, "bin", "hdfs")
+        if os.path.isfile(path) or os.path.isfile(path + ".cmd"):
+            return path
+    return "hdfs"
+
+
 def guardar_hdfs(payload: dict) -> bool:
     """Guardar backup en HDFS."""
     try:
         import subprocess
+        hdfs_bin = _hdfs_cmd()
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         archivo = f"/tmp/transporte_{ts}.json"
         with open(archivo, "w") as f:
             json.dump(payload, f, default=str, indent=2)
         path_hdfs = f"{HDFS_BACKUP_PATH}/transporte_{ts}.json"
         subprocess.run(
-            ["hdfs", "dfs", "-mkdir", "-p", HDFS_BACKUP_PATH],
+            [hdfs_bin, "dfs", "-mkdir", "-p", HDFS_BACKUP_PATH],
             capture_output=True,
         )
-        subprocess.run(["hdfs", "dfs", "-put", "-f", archivo, path_hdfs], capture_output=True)
+        subprocess.run([hdfs_bin, "dfs", "-put", "-f", archivo, path_hdfs], capture_output=True)
         os.remove(archivo)
         return True
     except Exception as e:
