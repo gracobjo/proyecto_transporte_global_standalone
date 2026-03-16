@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    container_name: airflow_local
+    restart: unless-stopped
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW_HOME: /opt/airflow
+    volumes:
+      # Metadatos y logs de Airflow dentro de la máquina
+      - ./docker/airflow/airflow_home:/opt/airflow
+      - ./docker/airflow/logs:/opt/airflow/logs
+      # Código del proyecto montado dentro del contenedor
+      - ./:/opt/proyecto_transporte_global
+      # DAGs de orquestación expuestos a Airflow
+      - ./orquestacion:/opt/airflow/dags
+    ports:
+      - "8080:8080"  # UI y API de Airflow
+    command: >
+      bash -c "\
+      airflow db upgrade && \
+      airflow users create --role Admin --username admin --email admin@localhost --firstname Admin --lastname User --password admin || true && \
+      airflow scheduler & \
+      airflow api-server -H 0.0.0.0 -p 8080\
+      "

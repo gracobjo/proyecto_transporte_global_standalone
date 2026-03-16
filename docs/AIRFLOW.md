@@ -139,6 +139,31 @@ Si en tu máquina la carpeta de DAGs es `~/airflow/dags`, pueden existir DAGs ad
   3. Desde el proyecto, con el entorno virtual activado, vuelve a serializar los DAGs en la base de datos:
 
      ```bash
+n### Arranque de Airflow con Docker (opcional)
+
+En máquinas justas de recursos se puede levantar solo Airflow en Docker, manteniendo HDFS/Kafka/Cassandra en el host o en otros contenedores.
+
+1. Construir y arrancar el servicio de Airflow:
+
+   ```bash
+   cd ~/proyecto_transporte_global
+   docker compose -f docker-compose.airflow.yml up --build
+   ```
+
+2. Acceder a la interfaz web/API:
+
+   - URL: http://localhost:8080
+   - Usuario: `admin`
+   - Contraseña: `admin` (creada automáticamente si no existe).
+
+3. Detener el contenedor cuando no sea necesario:
+
+   ```bash
+   docker compose -f docker-compose.airflow.yml down
+   ```
+
+Los DAGs se leen desde la carpeta `orquestacion/` del proyecto, montada dentro del contenedor en `/opt/airflow/dags`.
+
      cd ~/proyecto_transporte_global
      source venv_transporte/bin/activate
      export AIRFLOW_HOME=~/airflow
