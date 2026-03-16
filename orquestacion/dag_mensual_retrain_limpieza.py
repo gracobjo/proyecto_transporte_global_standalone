@@ -79,7 +79,7 @@ with DAG(
     dag_id="dag_mensual_retrain_limpieza",
     default_args=default_args,
     description="Re-entrenamiento mensual del modelo de grafos y limpieza HDFS",
-    schedule_interval="0 0 1 * *",  # Día 1 de cada mes a las 00:00
+    schedule="0 0 1 * *",  # Día 1 de cada mes a las 00:00
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,

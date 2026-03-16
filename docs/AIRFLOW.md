@@ -131,6 +131,31 @@ Si en tu máquina la carpeta de DAGs es `~/airflow/dags`, pueden existir DAGs ad
 
 - **Propósito:** Similar al `dag_maestro_transporte` del repo: verificación de HDFS, Kafka, Cassandra y Hive, luego ingesta y procesamiento de grafos cada 15 minutos.
 
+## Problemas típicos y solución rápida
+
+- **No aparecen todos los DAGs en la UI o en `airflow dags list`**:
+  1. Verifica que `AIRFLOW_HOME` apunta a `~/airflow` y que los ficheros `dag_*.py` están en `~/airflow/dags`.
+  2. Asegúrate de que **no hay enlaces simbólicos recursivos** (por ejemplo `orquestacion -> /home/hadoop/proyecto_transporte_global/orquestacion` dentro de esa misma carpeta).
+  3. Desde el proyecto, con el entorno virtual activado, vuelve a serializar los DAGs en la base de datos:
+
+     ```bash
+     cd ~/proyecto_transporte_global
+     source venv_transporte/bin/activate
+     export AIRFLOW_HOME=~/airflow
+     airflow dags reserialize
+     ```
+
+  4. Espera unos segundos, ejecuta `airflow dags list` y refresca la web de Airflow (F5).
+
+- **Quiero ver los logs del api-server en la terminal**:
+  - Lanza el servidor **sin `-D`** para que no vaya a segundo plano:
+
+    ```bash
+    airflow api-server -H 0.0.0.0 -p 8080
+    ```
+
+    Esa terminal quedará ocupada mostrando los logs hasta que pulses `Ctrl+C`.
+
 ---
 
 ## Enlaces rápidos

@@ -97,7 +97,7 @@ with DAG(
     dag_id="dag_arranque_servicios",
     default_args=default_args,
     description="Arrancar HDFS, Cassandra y Kafka antes del pipeline",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["logistica", "servicios", "arranque"],

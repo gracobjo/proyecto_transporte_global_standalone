@@ -91,7 +91,7 @@ with DAG(
     dag_id="dag_maestro_transporte",
     default_args=default_args,
     description="Gemelo Digital Logístico - Ingesta y Procesamiento cada 15 min",
-    schedule_interval=timedelta(minutes=15),
+    schedule=timedelta(minutes=15),
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
