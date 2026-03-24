@@ -40,7 +40,11 @@ from servicios.estado_y_datos import (
     cargar_pagerank_cassandra,
 )
 from servicios.kdd_fases import FaseKDD, FASES_KDD
-from servicios.ejecucion_pipeline import ejecutar_ingesta, ejecutar_procesamiento
+from servicios.ejecucion_pipeline import (
+    ejecutar_ingesta,
+    ejecutar_procesamiento,
+    ejecutar_fase_kdd,
+)
 from servicios.cuadro_mando_ui import render_cuadro_mando_tab
 from servicios.ui_gestion_servicios import render_panel_gestion_servicios
 from servicios.ui_servicios_web import render_sidebar_enlaces_ui
@@ -143,6 +147,59 @@ def crear_mapa(
         ).add_to(m)
 
     return m
+
+
+def _render_kdd_paginator() -> int:
+    """Controles ◀ / selector / ▶ para una fase a la vez. Devuelve índice 0..n-1."""
+    n = len(FASES_KDD)
+    if "kdd_fase_idx" not in st.session_state:
+        st.session_state.kdd_fase_idx = 0
+    # Solo aquí se ajusta el índice manualmente (antes de instanciar el selectbox con key kdd_fase_idx)
+    st.session_state.kdd_fase_idx = max(
+        0, min(n - 1, int(st.session_state.kdd_fase_idx))
+    )
+    k = int(st.session_state.kdd_fase_idx)
+
+    labels = [f"{f.orden}. {f.titulo}" for f in FASES_KDD]
+
+    def _kdd_prev() -> None:
+        st.session_state.kdd_fase_idx = max(0, int(st.session_state.kdd_fase_idx) - 1)
+
+    def _kdd_next() -> None:
+        st.session_state.kdd_fase_idx = min(n - 1, int(st.session_state.kdd_fase_idx) + 1)
+
+    c_prev, c_mid, c_next = st.columns([1, 6, 1])
+    with c_prev:
+        st.button(
+            "◀ Anterior",
+            disabled=k <= 0,
+            key="kdd_pag_prev",
+            use_container_width=True,
+            help="Fase anterior del ciclo KDD",
+            on_click=_kdd_prev,
+        )
+    with c_mid:
+        st.selectbox(
+            "Ir a fase",
+            options=list(range(n)),
+            format_func=lambda i: labels[i],
+            key="kdd_fase_idx",
+            label_visibility="visible",
+        )
+    with c_next:
+        st.button(
+            "Siguiente ▶",
+            disabled=k >= n - 1,
+            key="kdd_pag_next",
+            use_container_width=True,
+            help="Siguiente fase del ciclo KDD",
+            on_click=_kdd_next,
+        )
+
+    # Tras el selectbox: no asignar a st.session_state.kdd_fase_idx (Streamlit lo reserva al widget)
+    k = max(0, min(n - 1, int(st.session_state.kdd_fase_idx)))
+    st.caption(f"**Fase {k + 1} de {n}** — {labels[k]}")
+    return k
 
 
 def _render_fase_kdd_card(f: FaseKDD) -> None:
@@ -302,8 +359,54 @@ def main() -> None:
             "Las fases **1–2** se realizan en `ingesta/ingesta_kdd.py`. "
             "Las fases **3–5** se concentran en `procesamiento/procesamiento_grafos.py` (Spark)."
         )
-        for f in FASES_KDD:
-            _render_fase_kdd_card(f)
+
+        st.markdown("##### Navegación por fases")
+        idx = _render_kdd_paginator()
+        fase_actual = FASES_KDD[idx]
+
+        paso = int(st.session_state.paso_15min)
+        st.caption(
+            f"Paso temporal (sidebar): **{paso}** · Script: `{fase_actual.script or '—'}`"
+        )
+
+        if fase_actual.orden in (1, 2):
+            st.warning(
+                "Las fases **1** y **2** comparten el mismo script de ingesta; "
+                "**Ejecutar esta fase** lanza la ingesta completa (selección + preprocesamiento)."
+            )
+        elif fase_actual.orden in (3, 4):
+            st.info(
+                "Fases **3** y **4** ejecutan solo la parte Spark indicada (`fase_kdd_spark`). "
+                "Para persistir en Cassandra y ver el mapa actualizado, usa la **fase 5** o el botón de procesamiento completo en la barra lateral."
+            )
+
+        c_run, c_spacer = st.columns([2, 3])
+        with c_run:
+            if st.button(
+                f"Ejecutar fase {fase_actual.orden}: {fase_actual.titulo}",
+                type="primary",
+                key=f"kdd_run_fase_{fase_actual.orden}",
+                use_container_width=True,
+            ):
+                with st.spinner(f"Ejecutando fase {fase_actual.orden}…"):
+                    code, out, err = ejecutar_fase_kdd(fase_actual.orden, paso)
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+                if code == 0:
+                    st.session_state.timeline.append(
+                        f"{ts} — Fase {fase_actual.orden} ({fase_actual.codigo}) OK"
+                    )
+                    st.success("Ejecución terminada correctamente.")
+                else:
+                    st.error(f"Código de salida {code}")
+                    st.code(err[-4000:] or out[-4000:])
+                st.session_state.last_fase_kdd_out = out
+                st.session_state.last_fase_kdd_err = err
+
+        _render_fase_kdd_card(fase_actual)
+
+        with st.expander("Ver todas las fases (lista completa)", expanded=False):
+            for f in FASES_KDD:
+                _render_fase_kdd_card(f)
 
         with st.expander("Diagrama resumido"):
             st.code(
