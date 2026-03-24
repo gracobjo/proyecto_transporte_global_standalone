@@ -27,6 +27,7 @@ from config import (
     TOPIC_TRANSPORTE,
     HDFS_BACKUP_PATH,
 )
+from ingesta.trigger_paso import resolver_paso_ingesta, semilla_simulacion
 
 # Estados posibles
 ESTADOS = ["OK", "Congestionado", "Bloqueado"]
@@ -236,6 +237,9 @@ def guardar_hdfs(payload: dict) -> bool:
 
 
 def main(paso_15min=0):
+    # Misma ventana temporal → misma semilla (reproducible); ventana distinta → incidentes/rutas distintos
+    random.seed(semilla_simulacion(paso_15min))
+
     clima = consulta_clima_hubs()
     estados_nodos = simular_incidentes_nodos()
     estados_aristas = simular_incidentes_aristas()
@@ -257,10 +261,31 @@ def main(paso_15min=0):
     ok_kafka = publicar_kafka(payload)
     ok_hdfs = guardar_hdfs(payload)
 
+    # Copia local para el dashboard (Spark / fase_kdd_spark leen `ultimo_payload.json`)
+    work = BASE / "reports" / "kdd" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        (work / "ultimo_payload.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        meta = {
+            "timestamp": payload["timestamp"],
+            "paso_15min": paso_15min,
+            "ok_kafka": ok_kafka,
+            "ok_hdfs": ok_hdfs,
+        }
+        (work / "ultima_ingesta_meta.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        print(f"[INGESTA] Aviso: no se pudo escribir reports/kdd/work: {e}")
+
     print(f"[INGESTA] Paso {paso_15min} | Kafka: {ok_kafka} | HDFS: {ok_hdfs}")
     return payload
 
 
 if __name__ == "__main__":
-    paso = int(os.environ.get("PASO_15MIN", "0"))
-    main(paso)
+    # Sin PASO_15MIN en el entorno → índice automático según reloj e intervalo (ver trigger_paso.py)
+    main(resolver_paso_ingesta())

@@ -75,9 +75,10 @@ def render_acciones_rapidas() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Ejecutar ingesta (fases 1–2)", key="cm_ingesta", use_container_width=True):
-            paso = int(st.session_state.get("paso_15min", 0))
+            auto = bool(st.session_state.get("ingesta_paso_automatico", False))
+            paso_arg = None if auto else int(st.session_state.get("paso_15min", 0))
             with st.spinner("Ingesta…"):
-                code, out, err = ejecutar_ingesta(paso)
+                code, out, err = ejecutar_ingesta(paso_arg)
             if code == 0:
                 st.success("Ingesta OK.")
                 st.session_state.timeline = st.session_state.get("timeline", []) + [
@@ -150,6 +151,11 @@ def render_consultas_hive() -> None:
 
 def render_slides_clima_retrasos() -> None:
     st.subheader("Slides — Clima y anticipación de retrasos")
+    st.info(
+        "Esta vista resume **riesgo por hub**. Para la **planificación de transporte** en la red completa "
+        "(todas las conexiones hub/subnodo, formulario origen→destino, **pasos**, **mapa** con ruta "
+        "principal y **alternativas** en otro color), abre la pestaña **Rutas híbridas**."
+    )
     st.caption(
         "Cada **slide** corresponde a un hub. Se combinan variables OpenWeather (tormenta, nieve, "
         "lluvia, niebla, viento, visibilidad) con el **estado operativo** en Cassandra (atascos, "

@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -53,9 +53,16 @@ def _run_subprocess(
         return 124, out or "", msg
 
 
-def ejecutar_ingesta(paso_15min: int) -> Tuple[int, str, str]:
+def ejecutar_ingesta(paso_15min: Optional[int] = None) -> Tuple[int, str, str]:
+    """
+    Si `paso_15min` es None, no se define PASO_15MIN y la ingesta usa el paso automático
+    por reloj (`ingesta/trigger_paso.py`) — útil para alinearse con cron/trigger.
+    """
     env = os.environ.copy()
-    env["PASO_15MIN"] = str(paso_15min)
+    if paso_15min is not None:
+        env["PASO_15MIN"] = str(paso_15min)
+    else:
+        env.pop("PASO_15MIN", None)
     t = _timeout_ingesta()
     return _run_subprocess(
         [sys.executable, "-m", "ingesta.ingesta_kdd"],

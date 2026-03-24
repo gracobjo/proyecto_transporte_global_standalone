@@ -12,6 +12,9 @@ kafka-python>=2.0.2
 # Cassandra (driver para app Streamlit)
 cassandra-driver>=3.25.0
 
+# Config / YAML (catálogo de rutas)
+PyYAML>=6.0
+
 # Dashboard
 streamlit>=1.28.0
 streamlit-folium>=0.15.0

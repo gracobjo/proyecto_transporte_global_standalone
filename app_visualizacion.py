@@ -50,6 +50,8 @@ from servicios.ui_gestion_servicios import render_panel_gestion_servicios
 from servicios.ui_servicios_web import render_sidebar_enlaces_ui
 from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
+from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
+from servicios.mapa_rutas_hibridas import crear_mapa_planificacion_rutas
 
 COLORES_ESTADO = {
     "ok": "green",
@@ -150,54 +152,59 @@ def crear_mapa(
 
 
 def _render_kdd_paginator() -> int:
-    """Controles ◀ / selector / ▶ para una fase a la vez. Devuelve índice 0..n-1."""
+    """Controles ◀ / selector / ▶ para una fase a la vez. Devuelve índice 0..n-1.
+
+    `kdd_fase_idx` es el estado lógico (no se usa como `key` de ningún widget).
+    El desplegable usa `key="kdd_select_widget"` para no chocar con Streamlit.
+    Los botones van **antes** del selectbox en el orden de columnas para poder
+    mutar `kdd_fase_idx` sin conflicto con el widget.
+    """
     n = len(FASES_KDD)
     if "kdd_fase_idx" not in st.session_state:
         st.session_state.kdd_fase_idx = 0
-    # Solo aquí se ajusta el índice manualmente (antes de instanciar el selectbox con key kdd_fase_idx)
-    st.session_state.kdd_fase_idx = max(
-        0, min(n - 1, int(st.session_state.kdd_fase_idx))
-    )
-    k = int(st.session_state.kdd_fase_idx)
+    idx = max(0, min(n - 1, int(st.session_state.kdd_fase_idx)))
+    st.session_state.kdd_fase_idx = idx
 
     labels = [f"{f.orden}. {f.titulo}" for f in FASES_KDD]
 
-    def _kdd_prev() -> None:
-        st.session_state.kdd_fase_idx = max(0, int(st.session_state.kdd_fase_idx) - 1)
-
-    def _kdd_next() -> None:
-        st.session_state.kdd_fase_idx = min(n - 1, int(st.session_state.kdd_fase_idx) + 1)
-
-    c_prev, c_mid, c_next = st.columns([1, 6, 1])
-    with c_prev:
-        st.button(
+    n1, n2, n3 = st.columns([1, 1, 6])
+    with n1:
+        if st.button(
             "◀ Anterior",
-            disabled=k <= 0,
+            disabled=idx <= 0,
             key="kdd_pag_prev",
-            use_container_width=True,
+            width="stretch",
             help="Fase anterior del ciclo KDD",
-            on_click=_kdd_prev,
-        )
-    with c_mid:
-        st.selectbox(
+        ):
+            st.session_state.kdd_fase_idx = idx - 1
+            st.session_state.pop("kdd_select_widget", None)
+            st.rerun()
+    with n2:
+        if st.button(
+            "Siguiente ▶",
+            disabled=idx >= n - 1,
+            key="kdd_pag_next",
+            width="stretch",
+            help="Siguiente fase del ciclo KDD",
+        ):
+            st.session_state.kdd_fase_idx = idx + 1
+            st.session_state.pop("kdd_select_widget", None)
+            st.rerun()
+    with n3:
+        sel = st.selectbox(
             "Ir a fase",
             options=list(range(n)),
             format_func=lambda i: labels[i],
-            key="kdd_fase_idx",
+            index=idx,
+            key="kdd_select_widget",
             label_visibility="visible",
         )
-    with c_next:
-        st.button(
-            "Siguiente ▶",
-            disabled=k >= n - 1,
-            key="kdd_pag_next",
-            use_container_width=True,
-            help="Siguiente fase del ciclo KDD",
-            on_click=_kdd_next,
-        )
 
-    # Tras el selectbox: no asignar a st.session_state.kdd_fase_idx (Streamlit lo reserva al widget)
-    k = max(0, min(n - 1, int(st.session_state.kdd_fase_idx)))
+    if sel != st.session_state.kdd_fase_idx:
+        st.session_state.kdd_fase_idx = sel
+        st.rerun()
+
+    k = int(st.session_state.kdd_fase_idx)
     st.caption(f"**Fase {k + 1} de {n}** — {labels[k]}")
     return k
 
@@ -286,21 +293,33 @@ def main() -> None:
 
         st.divider()
         st.subheader("Línea temporal (simulación 15 min)")
+        st.checkbox(
+            "Paso automático (reloj, alineado con SIMLOG_INGESTA_INTERVAL_MINUTES)",
+            help="Sin PASO_15MIN fijo: la simulación usa la ventana de tiempo actual (como cron/Airflow).",
+            key="ingesta_paso_automatico",
+        )
         st.session_state.paso_15min = st.number_input(
-            "Paso actual (15 min)",
+            "Paso actual (ventana)",
             min_value=0,
             max_value=96,
             value=int(st.session_state.paso_15min),
             step=1,
-            help="Se envía a la ingesta como PASO_15MIN.",
+            disabled=st.session_state.ingesta_paso_automatico,
+            help="Manual: se envía como PASO_15MIN. Desactivado si usas paso automático.",
         )
 
         if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", use_container_width=True):
             with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
-                code, out, err = ejecutar_ingesta(int(st.session_state.paso_15min))
+                if st.session_state.ingesta_paso_automatico:
+                    code, out, err = ejecutar_ingesta(None)
+                else:
+                    code, out, err = ejecutar_ingesta(int(st.session_state.paso_15min))
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if code == 0:
-                st.session_state.timeline.append(f"{ts} — Ingesta OK (paso {st.session_state.paso_15min})")
+                if st.session_state.ingesta_paso_automatico:
+                    st.session_state.timeline.append(f"{ts} — Ingesta OK (paso automático)")
+                else:
+                    st.session_state.timeline.append(f"{ts} — Ingesta OK (paso {st.session_state.paso_15min})")
                 st.success("Ingesta terminada.")
             else:
                 st.error(f"Código {code}")
@@ -342,9 +361,10 @@ def main() -> None:
             for ev in reversed(st.session_state.timeline[-8:]):
                 st.caption(ev)
 
-    tab_kdd, tab_cuadro, tab_rutas, tab_servicios, tab_mapa, tab_verif = st.tabs(
+    tab_kdd, tab_resultados, tab_cuadro, tab_rutas, tab_servicios, tab_mapa, tab_verif = st.tabs(
         [
             "Ciclo KDD",
+            "Resultados pipeline",
             "Cuadro de mando",
             "Rutas híbridas",
             "Servicios",
@@ -420,6 +440,9 @@ def main() -> None:
                 language="text",
             )
 
+    with tab_resultados:
+        render_pipeline_resultados_tab()
+
     with tab_cuadro:
         render_cuadro_mando_tab()
 
@@ -430,34 +453,93 @@ def main() -> None:
         render_panel_gestion_servicios()
 
     with tab_mapa:
+        modo_mapa = st.radio(
+            "Vista del mapa",
+            options=["operativo", "planificacion"],
+            format_func=lambda x: (
+                "Operativo — Cassandra (nodos, aristas, tracking)"
+                if x == "operativo"
+                else "Planificación — última ruta (Rutas híbridas)"
+            ),
+            horizontal=True,
+            key="tab_mapa_modo",
+            help="El modo planificación reutiliza el último cálculo de la pestaña «Rutas híbridas».",
+        )
+
         col_m1, col_m2 = st.columns([2, 1])
         with col_m1:
-            st.subheader("Mapa operativo")
-            nodos_c = cargar_nodos_cassandra()
-            aristas_c = cargar_aristas_cassandra()
-            track_c = cargar_tracking_cassandra()
-            if not nodos_c:
-                st.warning(
-                    "No hay datos en `nodos_estado` (o Cassandra no responde). "
-                    "Ejecuta el procesamiento tras la ingesta."
-                )
-            mapa = crear_mapa(nodos_c, aristas_c, track_c)
-            st_folium(mapa, width=None, height=480, returned_objects=[])
-        with col_m2:
-            st.subheader("PageRank (muestra)")
-            pr = cargar_pagerank_cassandra()
-            if pr:
-                pr_sorted = sorted(pr, key=lambda x: float(x.get("pagerank") or 0), reverse=True)[:12]
-                for row in pr_sorted:
-                    st.metric(
-                        label=str(row.get("id_nodo", "")),
-                        value=f"{float(row.get('pagerank') or 0):.6f}",
+            if modo_mapa == "operativo":
+                st.subheader("Mapa operativo")
+                nodos_c = cargar_nodos_cassandra()
+                aristas_c = cargar_aristas_cassandra()
+                track_c = cargar_tracking_cassandra()
+                if not nodos_c:
+                    st.warning(
+                        "No hay datos en `nodos_estado` (o Cassandra no responde). "
+                        "Ejecuta el procesamiento tras la ingesta."
                     )
+                mapa = crear_mapa(nodos_c, aristas_c, track_c)
+                st_folium(mapa, width=None, height=480, returned_objects=[], key="folium_operativo")
             else:
-                st.caption("Sin datos de PageRank. Ejecuta procesamiento Spark.")
+                st.subheader("Mapa de planificación (red + ruta principal + alternativas)")
+                rh = st.session_state.get("rh_resultado")
+                if rh and rh.get("ok"):
+                    ruta = rh["ruta"]
+                    alts = rh.get("alternativas") or []
+                    mostrar_red = st.checkbox(
+                        "Mostrar toda la red de fondo (conexiones grises)",
+                        value=bool(st.session_state.get("rh_mapa_red", True)),
+                        key="tab_mapa_mostrar_red_completa",
+                        help="Misma opción que en Rutas híbridas; aquí puedes cambiarla sin cambiar de pestaña.",
+                    )
+                    st.caption(
+                        f"**Ruta actual:** `{' → '.join(ruta)}` · **{rh.get('num_saltos', 0)}** salto(s) · "
+                        f"{len(alts)} alternativa(s) listada(s)."
+                    )
+                    mapa_plan = crear_mapa_planificacion_rutas(
+                        ruta,
+                        alts,
+                        mostrar_red_completa=mostrar_red,
+                        max_alternativas=6,
+                    )
+                    st_folium(mapa_plan, width=None, height=480, returned_objects=[], key="folium_planif")
+                else:
+                    st.info(
+                        "Aún no hay una ruta calculada. Ve a la pestaña **Rutas híbridas**, "
+                        "elige **origen** y **destino** y pulsa **Calcular ruta y mostrar en mapa**; "
+                        "luego vuelve aquí para ver el mismo trazado en grande."
+                    )
+                    st.caption("Puedes seguir viendo el **mapa operativo** cambiando la vista de arriba.")
 
-            st.divider()
-            st.caption("Leyenda aristas: verde OK · naranja congestión · rojo bloqueo")
+        with col_m2:
+            if modo_mapa == "operativo":
+                st.subheader("PageRank (muestra)")
+                pr = cargar_pagerank_cassandra()
+                if pr:
+                    pr_sorted = sorted(pr, key=lambda x: float(x.get("pagerank") or 0), reverse=True)[:12]
+                    for row in pr_sorted:
+                        st.metric(
+                            label=str(row.get("id_nodo", "")),
+                            value=f"{float(row.get('pagerank') or 0):.6f}",
+                        )
+                else:
+                    st.caption("Sin datos de PageRank. Ejecuta procesamiento Spark.")
+
+                st.divider()
+                st.caption("Leyenda aristas: verde OK · naranja congestión · rojo bloqueo")
+            else:
+                st.subheader("Resumen de la última ruta")
+                rh = st.session_state.get("rh_resultado")
+                if rh and rh.get("ok"):
+                    st.metric("Saltos", f"{rh.get('num_saltos', 0)}")
+                    st.metric("Min. retraso estimados (total)", f"{rh.get('minutos_totales_estimados', '—')}")
+                    st.metric("Coste estimado (€)", f"{rh.get('coste_total_eur', '—')}")
+                    alts = rh.get("alternativas") or []
+                    st.caption(f"Alternativas calculadas: **{len(alts)}**")
+                    with st.expander("Secuencia de nodos", expanded=False):
+                        st.code(" → ".join(rh["ruta"]), language="text")
+                else:
+                    st.caption("Sin datos hasta calcular una ruta en **Rutas híbridas**.")
 
     with tab_verif:
         st.subheader("Comprobaciones rápidas")

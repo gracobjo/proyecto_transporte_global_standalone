@@ -1,5 +1,8 @@
 # Apache NiFi — Ingesta alternativa (SIMLOG España)
 
+> **Documentación detallada (process group, procesadores, relaciones y criterio):**  
+> **[`PROCESADORES_Y_RELACIONES.md`](PROCESADORES_Y_RELACIONES.md)** — incluye el **flujo compacto recomendado (v2)** y el **flujo granular (v1)**.
+
 Este directorio describe el **grupo de procesadores** y el flujo de datos alineado con el PDF / práctica: **GPS sintético**, **OpenWeather (InvokeHTTP)**, **Kafka**, **HDFS (cliente Hadoop; cluster con YARN)**, **Spark** (job batch vía `spark-submit`), **Cassandra**, **Hive** (histórico analítico).
 
 > **Nota:** NiFi no sustituye a Spark en memoria: orquesta **ingesta y disparo de jobs**. El procesamiento masivo (GraphFrames) sigue siendo `procesamiento/procesamiento_grafos.py` o un JAR equivalente.

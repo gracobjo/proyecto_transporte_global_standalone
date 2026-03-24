@@ -5,7 +5,8 @@ Preferir el flujo por fases KDD: `dag_simlog_kdd_fases.py` (un DAG por fase, inf
 
 Este DAG sigue siendo válido para ejecución periódica cada 15 min (ingesta + procesamiento en un solo grafo).
 """
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from airflow import DAG
@@ -49,16 +50,21 @@ def verificar_cassandra(**context):
 
 def ejecutar_ingesta(**context):
     import subprocess
-    import os
-    ds = context.get("data_interval_start") or datetime.utcnow()
-    paso_val = ds.hour * 4 + ds.minute // 15
+    interval_min = int(os.environ.get("SIMLOG_INGESTA_INTERVAL_MINUTES", "15"))
+    ds = context.get("data_interval_start")
+    if ds is None:
+        ds = datetime.now(timezone.utc)
+    elif getattr(ds, "tzinfo", None) is None:
+        ds = ds.replace(tzinfo=timezone.utc)
+    # Paso alineado con la ventana del DAG (cada intervalo, datos distintos)
+    paso_val = int(ds.timestamp() // (max(1, interval_min) * 60))
     r = subprocess.run(
-        [f"{BASE}/venv_transporte/bin/python", str(BASE / "ingesta_kdd.py")],
+        [f"{BASE}/venv_transporte/bin/python", "-m", "ingesta.ingesta_kdd"],
         env={**os.environ, "PASO_15MIN": str(paso_val)},
         capture_output=True,
         text=True,
         cwd=str(BASE),
-        timeout=60,
+        timeout=180,
     )
     if r.returncode != 0:
         raise RuntimeError(f"Ingesta falló: {r.stderr or r.stdout}")
@@ -78,6 +84,9 @@ def ejecutar_procesamiento(**context):
     if r.returncode != 0:
         raise RuntimeError(f"Procesamiento falló: {r.stderr or r.stdout}")
 
+_INGESTA_INTERVAL_MIN = int(os.environ.get("SIMLOG_INGESTA_INTERVAL_MINUTES", "15"))
+_INGESTA_INTERVAL_MIN = max(1, _INGESTA_INTERVAL_MIN)
+
 default_args = {
     "owner": "logistica",
     "depends_on_past": False,
@@ -90,8 +99,8 @@ default_args = {
 with DAG(
     dag_id="simlog_pipeline_maestro",
     default_args=default_args,
-    description="SIMLOG España — Ingesta y procesamiento Spark cada 15 min",
-    schedule=timedelta(minutes=15),
+    description="SIMLOG España — Ingesta y procesamiento Spark (intervalo vía SIMLOG_INGESTA_INTERVAL_MINUTES)",
+    schedule=timedelta(minutes=_INGESTA_INTERVAL_MIN),
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,

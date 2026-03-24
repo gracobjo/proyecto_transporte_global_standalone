@@ -1,0 +1,89 @@
+# =============================================================================
+# SIMLOG España — catálogo de rutas y conexiones de la red híbrida
+# =============================================================================
+# Este fichero describe todas las aristas lógicas (hub↔hub, hub↔subnodo,
+# subnodo↔subnodo) alineadas con `config_nodos.py`. Sirve para la UI de
+# planificación y para documentación. Las distancias se recalculan por Haversine
+# en tiempo de ejecución a partir de las coordenadas de los nodos.
+#
+# version: versión del esquema del fichero
+# malla_hubs: conexiones entre los 5 hubs principales (malla completa K5)
+# hub_a_secundario: cada ciudad secundaria conectada a su hub (estrella)
+# secundario_secundario: refuerzos entre subnodos del mismo área (≥2 caminos)
+# =============================================================================
+
+version: 1
+proyecto: SIMLOG España
+descripcion: >
+  Red híbrida: malla nacional entre hubs, enlace hub–ciudad satélite y malla
+  local entre subnodos para evitar puntos únicos de fallo y permitir rutas
+  alternativas ante incidencias (clima, obras, congestión).
+
+malla_hubs:
+  - [Madrid, Barcelona]
+  - [Madrid, Bilbao]
+  - [Madrid, Vigo]
+  - [Madrid, Sevilla]
+  - [Barcelona, Bilbao]
+  - [Barcelona, Vigo]
+  - [Barcelona, Sevilla]
+  - [Bilbao, Vigo]
+  - [Bilbao, Sevilla]
+  - [Vigo, Sevilla]
+
+hub_a_secundario:
+  # Madrid
+  - [Toledo, Madrid]
+  - [Segovia, Madrid]
+  - [Guadalajara, Madrid]
+  - [Cuenca, Madrid]
+  - [Ávila, Madrid]
+  # Barcelona
+  - [Tarragona, Barcelona]
+  - [Girona, Barcelona]
+  - [Lleida, Barcelona]
+  - [Manresa, Barcelona]
+  - [Sabadell, Barcelona]
+  # Bilbao
+  - [Santander, Bilbao]
+  - [Vitoria, Bilbao]
+  - [San Sebastián, Bilbao]
+  - [Pamplona, Bilbao]
+  - [Logroño, Bilbao]
+  # Vigo
+  - [A Coruña, Vigo]
+  - [Santiago, Vigo]
+  - [Pontevedra, Vigo]
+  - [Ourense, Vigo]
+  - [Lugo, Vigo]
+  # Sevilla
+  - [Córdoba, Sevilla]
+  - [Málaga, Sevilla]
+  - [Cádiz, Sevilla]
+  - [Huelva, Sevilla]
+  - [Jerez, Sevilla]
+
+secundario_secundario:
+  # Madrid
+  - [Toledo, Cuenca]
+  - [Segovia, Ávila]
+  - [Guadalajara, Cuenca]
+  # Barcelona
+  - [Tarragona, Lleida]
+  - [Girona, Sabadell]
+  - [Manresa, Lleida]
+  # Bilbao
+  - [Santander, San Sebastián]
+  - [Vitoria, Pamplona]
+  - [San Sebastián, Pamplona]
+  - [Logroño, Vitoria]
+  # Vigo
+  - [A Coruña, Santiago]
+  - [Santiago, Pontevedra]
+  - [Pontevedra, Ourense]
+  - [Ourense, Lugo]
+  # Sevilla
+  - [Córdoba, Málaga]
+  - [Málaga, Cádiz]
+  - [Huelva, Jerez]
+  - [Jerez, Cádiz]

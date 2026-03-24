@@ -67,3 +67,7 @@ NIFI_URL = os.environ.get("NIFI_URL", "http://127.0.0.1:8080/nifi")
 
 # Coste orientativo de retrasos (€/min) — rutas híbridas / dashboard
 COSTE_EURO_MINUTO_RETASO = float(os.environ.get("SIMLOG_COSTE_RETASO_EUR_MIN", "2.5"))
+
+# Ingesta periódica (cron / Airflow / systemd): ventana en minutos entre ejecuciones.
+# 15 = producción; 2–5 para demos más rápidas. Usado con `ingesta/trigger_paso.py`.
+SIMLOG_INGESTA_INTERVAL_MINUTES = int(os.environ.get("SIMLOG_INGESTA_INTERVAL_MINUTES", "15"))

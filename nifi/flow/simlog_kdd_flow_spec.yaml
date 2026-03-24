@@ -1,141 +1,96 @@
 # Especificación del flujo NiFi — SIMLOG España
-# Referencia para montar el Process Group en la UI (compatible con idea del PDF)
-# Versión: 1.1
+# v2: flujo compacto (ingesta funcional con un ExecuteScript Groovy completo)
+# v1: flujo granular (Timer + GPS + InvokeHTTP + Merge) — ver PROCESADORES_Y_RELACIONES.md
 
-process_group:
-  name: PG_SIMLOG_KDD
+meta:
+  process_group: PG_SIMLOG_KDD
+  version: "2.0"
   description: >
-    Ingesta alternativa (KDD): GPS sintético + OpenWeather + Kafka + HDFS + disparo Spark (YARN)
-    + persistencia Cassandra/Hive vía Spark.
+    Ingesta KDD alineada con ingesta/ingesta_kdd.py y config.py:
+    JSON → Kafka (raw + filtered) + HDFS; Spark opcional vía ExecuteProcess.
 
-parameters:
-  - KAFKA_BOOTSTRAP
-  - TOPIC_RAW
-  - TOPIC_FILTERED
-  - OWM_API_KEY
-  - HDFS_RAW_BASE
-  - SPARK_HOME
-  - SPARK_MASTER
-  - PROJECT_PROCESAMIENTO
-  - HIVE_JDBC_URL
-
-processors:
-  - id: P01
+# --- v2 · RECOMENDADO (un FlowFile = un snapshot) ---
+processors_v2:
+  - id: V01
     type: GenerateFlowFile
     name: Timer_Ingesta_15min
-    scheduling:
-      scheduling_strategy: TIMER_DRIVEN
-      scheduling_period: "15 min"
+    scheduling_period: "15 min"
     properties:
       Batch Size: "1"
       Data Format: Text
-      Unique FlowFiles: "false"
 
-  - id: P02
+  - id: V02
+    type: UpdateAttribute
+    name: Set_OWM_Key_y_Paso
+    properties:
+      paso_15min: "0"
+      owm.api.key: "${OWM_API_KEY}"
+
+  - id: V03
     type: ExecuteScript
-    name: Synthetic_GPS_and_Envelope
+    name: Build_JSON_Ingesta_KDD
     properties:
       Script Engine: Groovy
-      Script Body: "<pegar contenido de nifi/groovy/GenerateSyntheticPayload.groovy>"
-    note: "NiFi no siempre referencia archivos externos; pegar el Groovy en el cuadro de texto."
+      Script Body: "<pegar nifi/groovy/GenerateFullPayloadSimlog.groovy>"
 
-  - id: P03
-    type: UpdateAttribute
-    name: Set_OWM_URL_Madrid
-    properties:
-      hub: Madrid
-      lat: "40.4168"
-      lon: "-3.7038"
-      owm_url: "https://api.openweathermap.org/data/2.5/weather?lat=40.4168&lon=-3.7038&appid=${OWM_API_KEY}&units=metric"
-
-  - id: P04
-    type: InvokeHTTP
-    name: OpenWeather_HTTP
-    properties:
-      HTTP Method: GET
-      Remote URL: "${owm_url}"
-      Put Response Body in Attribute: owm_json
-      Connection Timeout: 30 sec
-      Read Timeout: 60 sec
-
-  - id: P05
-    type: MergeContent
-    name: Merge_Synthetic_and_Weather
-    properties:
-      Merge Strategy: Bin-Packer Algorithm
-      Merge Format: Binary Concatenation
-      Delimiter: "\\n---\\n"
-      Minimum Number of Entries: "2"
-
-  - id: P06
-    type: InvokeHTTP
-    name: Optional_Normalize_REST
-    auto_terminated: true
-    note: "Opcional: microservicio interno que normaliza al schema del JSON de ingesta"
-    enabled: false
-
-  - id: P07
+  - id: V04
     type: PublishKafka
-    name: Kafka_Raw
+    name: Kafka_Topic_RAW
     properties:
       Kafka Brokers: "${KAFKA_BOOTSTRAP}"
       Topic Name: "${TOPIC_RAW}"
-      Request Timeout: 30 sec
 
-  - id: P08
+  - id: V05
+    type: PublishKafka
+    name: Kafka_Topic_FILTERED
+    properties:
+      Kafka Brokers: "${KAFKA_BOOTSTRAP}"
+      Topic Name: "${TOPIC_FILTERED}"
+
+  - id: V06
     type: PutHDFS
-    name: HDFS_Raw_JSON
+    name: HDFS_Backup_JSON
     properties:
       Hadoop Configuration Resources: "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml"
-      Directory: "${HDFS_RAW_BASE}/${now():format('yyyy/MM/dd/HH')}"
+      Directory: "${HDFS_BACKUP_PATH}"
       Conflict Resolution: replace
 
-  - id: P09
+  - id: V07
     type: ExecuteProcess
-    name: Spark_Submit_YARN
-    properties:
-      Command: "/bin/bash"
-      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/spark_submit_yarn.sh"
-      Working Directory: "${PROJECT_ROOT}"
-    note: >
-      Tras Kafka/HDFS, dispara job Spark en YARN que escribe Cassandra + Hive.
-      Ajustar ruta a tu instalación.
-
-  - id: P10
-    type: PutHiveQL
-    name: Hive_Insert_Clima_Optional
+    name: Spark_Submit_Opcional
     enabled: false
-    properties:
-      hive-connection-url: "${HIVE_JDBC_URL}"
-      sql: "INSERT INTO logistica_analytics.clima_hist PARTITION (dia) SELECT ..."
+    note: "Mismo rol que nifi/scripts/spark_submit_yarn.sh si no usas Airflow/dashboard"
 
-connections:
-  - from: P01
-    to: P02
-  - from: P02
-    to: P03
-  - from: P03
-    to: P04
-  - from: P02
-    to: P05
-    relationship: success
-  - from: P04
-    to: P05
-    relationship: Response
-  - from: P05
-    to: P07
-    relationship: merged
-  - from: P05
-    to: P08
-    relationship: merged
-  - from: P08
-    to: P09
-    relationship: success
-  - from: P07
-    to: P09
-    relationship: success
+connections_v2:
+  - { from: V01, to: V02, relationship: success }
+  - { from: V02, to: V03, relationship: success }
+  - { from: V03, to: V04, relationship: success }
+  - { from: V03, to: V05, relationship: success }
+  - { from: V03, to: V06, relationship: success }
+  - { from: V03, to: _DLQ, relationship: failure, note: "LogAttribute / PutFile opcional" }
+  - { from: V06, to: V07, relationship: success, optional: true }
 
-notes:
-  - "Duplicar ramas P03+P04 para Barcelona, Bilbao, Vigo, Sevilla o usar RouteOnAttribute"
-  - "MergeContent debe recibir 2+ FlowFiles por ciclo; ajustar a 6 si 5 hubs + 1 sintético"
-  - "Spark (P09) es el punto único recomendado para Cassandra + Hive pesados"
+# --- v1 · LEGACY (granular; revisar MergeContent antes de producción) ---
+processors_v1_legacy:
+  - id: P01
+    type: GenerateFlowFile
+    name: Timer_Ingesta_15min
+  - id: P02
+    type: ExecuteScript
+    name: Synthetic_GPS_only
+    note: "nifi/groovy/GenerateSyntheticPayload.groovy — sin clima real"
+  - id: P03
+    type: UpdateAttribute
+    name: Set_OWM_URL_Madrid
+  - id: P04
+    type: InvokeHTTP
+    name: OpenWeather_HTTP
+  - id: P05
+    type: MergeContent
+    name: Merge_Synthetic_and_Weather
+    warning: "Debe recibir exactamente N FlowFiles por ciclo; fácil desincronizar"
+
+notes_v1:
+  - "Preferir v2 para ingesta estable."
+  - "Duplicar P03+P04 para 5 hubs o usar RouteOnAttribute + fork."
+  - "Tras Kafka/HDFS, Spark escribe Cassandra/Hive (no NiFi fila a fila)."
