@@ -1,248 +1,384 @@
 #!/usr/bin/env python3
 """
-Sistema de Gemelo Digital Logístico - Fase IV: Dashboard Interactivo
-- Mapa España (Folium): nodos, aristas coloreados por estado, camiones en tiempo real
-- Botón "Paso Siguiente (15 min)": ejecuta ingesta + procesamiento
-- Leyenda: motivo retraso, Ruta Alternativa (línea azul)
-- Métricas: PageRank nodos críticos
-- st.session_state para línea de tiempo de simulación
+Dashboard Streamlit — SIMLOG España
+Organización por fases del ciclo KDD y ejecución alineada con el código real:
+  ingesta/ingesta_kdd.py  →  procesamiento/procesamiento_grafos.py
 """
+from __future__ import annotations
+
 import os
 import sys
-import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List
+
+import folium
+import streamlit as st
+from streamlit_folium import st_folium
 
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
-import streamlit as st
-import folium
-from folium import PolyLine, CircleMarker
-from streamlit_folium import st_folium
-from cassandra.cluster import Cluster
-from cassandra.auth import PlainTextAuthProvider
+from config_nodos import get_nodos, get_aristas
+from config import (
+    CASSANDRA_HOST,
+    HDFS_BACKUP_PATH,
+    TOPIC_TRANSPORTE,
+    PROJECT_DISPLAY_NAME,
+    PROJECT_TAGLINE,
+    PROJECT_DESCRIPTION,
+)
 
-from config_nodos import RED, get_aristas, get_nodos
-from config import CASSANDRA_HOST, KEYSPACE
+from servicios.estado_y_datos import (
+    estado_servicios,
+    verificar_hdfs_ruta,
+    verificar_kafka_topic,
+    verificar_cassandra,
+    cargar_nodos_cassandra,
+    cargar_aristas_cassandra,
+    cargar_tracking_cassandra,
+    cargar_pagerank_cassandra,
+)
+from servicios.kdd_fases import FaseKDD, FASES_KDD
+from servicios.ejecucion_pipeline import ejecutar_ingesta, ejecutar_procesamiento
+from servicios.cuadro_mando_ui import render_cuadro_mando_tab
+from servicios.ui_gestion_servicios import render_panel_gestion_servicios
+from servicios.ui_servicios_web import render_sidebar_enlaces_ui
+from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
+from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 
-# Colores por estado
-COLORES_ESTADO = {"OK": "green", "Congestionado": "orange", "Bloqueado": "red"}
-COLOR_RUTA_ALTERNATIVA = "blue"
-
-
-def get_cassandra_session():
-    """Conexión a Cassandra."""
-    try:
-        cluster = Cluster([CASSANDRA_HOST])
-        return cluster.connect(KEYSPACE)
-    except Exception as e:
-        st.error(f"No se pudo conectar a Cassandra: {e}")
-        return None
-
-
-def cargar_nodos_estado(session):
-    """Cargar estado actual de nodos desde Cassandra."""
-    if not session:
-        return {}
-    try:
-        rows = session.execute("SELECT id_nodo, lat, lon, estado, motivo_retraso, clima_actual FROM nodos_estado")
-        return {r.id_nodo: {"lat": r.lat, "lon": r.lon, "estado": r.estado or "OK", "motivo": r.motivo_retraso, "clima": r.clima_actual} for r in rows}
-    except Exception as e:
-        st.warning(f"nodos_estado no disponible: {e}")
-        return {}
-
-
-def cargar_tracking_camiones(session):
-    """Cargar posición GPS de camiones desde Cassandra."""
-    if not session:
-        return []
-    try:
-        rows = session.execute(
-            "SELECT id_camion, lat, lon, ruta_origen, ruta_destino, ruta_sugerida, estado_ruta, motivo_retraso FROM tracking_camiones"
-        )
-        return [
-            {
-                "id": r.id_camion,
-                "lat": r.lat,
-                "lon": r.lon,
-                "origen": r.ruta_origen,
-                "destino": r.ruta_destino,
-                "ruta_sugerida": list(r.ruta_sugerida) if r.ruta_sugerida else [],
-                "estado": r.estado_ruta or "En ruta",
-                "motivo": r.motivo_retraso,
-            }
-            for r in rows
-        ]
-    except Exception as e:
-        st.warning(f"tracking_camiones no disponible: {e}")
-        return []
+COLORES_ESTADO = {
+    "ok": "green",
+    "OK": "green",
+    "congestionado": "orange",
+    "Congestionado": "orange",
+    "bloqueado": "red",
+    "Bloqueado": "red",
+    "BLOQUEADO": "red",
+}
 
 
-def cargar_pagerank(session):
-    """Cargar PageRank de nodos."""
-    if not session:
-        return {}
-    try:
-        rows = session.execute("SELECT id_nodo, pagerank FROM pagerank_nodos")
-        return {r.id_nodo: r.pagerank for r in rows}
-    except Exception:
-        return {}
-
-
-def cargar_aristas_estado(session):
-    """Cargar estado de aristas desde Cassandra."""
-    if not session:
-        return {}
-    try:
-        rows = session.execute("SELECT src, dst, estado FROM aristas_estado")
-        return {f"{r.src}|{r.dst}": {"estado": r.estado or "OK"} for r in rows}
-    except Exception:
-        return {}
-
-
-def crear_mapa(nodos_estado, camiones, aristas_estado, pagerank):
-    """Crear mapa Folium de España con nodos, aristas y camiones."""
+def crear_mapa(
+    nodos_cassandra: List[Dict],
+    aristas_cassandra: List[Dict],
+    tracking: List[Dict],
+) -> folium.Map:
+    """Mapa Folium: nodos y aristas desde Cassandra; fallback a topología estática si no hay datos."""
+    nodos_static = get_nodos()
     m = folium.Map(location=[40.4, -3.7], zoom_start=6, tiles="OpenStreetMap")
 
-    nodos = get_nodos()
-    aristas = get_aristas()
+    # Mapa id -> posición y estado
+    pos: Dict[str, Dict[str, Any]] = {}
+    for row in nodos_cassandra:
+        nid = row.get("id_nodo")
+        if nid:
+            pos[nid] = {
+                "lat": row.get("lat"),
+                "lon": row.get("lon"),
+                "tipo": row.get("tipo") or nodos_static.get(nid, {}).get("tipo", "secundario"),
+                "estado": (row.get("estado") or "OK"),
+            }
+    for nid, info in nodos_static.items():
+        if nid not in pos:
+            pos[nid] = {
+                "lat": info["lat"],
+                "lon": info["lon"],
+                "tipo": info.get("tipo", "secundario"),
+                "estado": "OK",
+            }
 
-    # Dibujar aristas
-    for src, dst, dist in aristas:
-        est_src = (nodos_estado.get(src) or {}).get("estado", "OK")
-        est_dst = (nodos_estado.get(dst) or {}).get("estado", "OK")
-        key = f"{src}|{dst}"
-        est_arista = (aristas_estado or {}).get(key, {}).get("estado", "OK")
-        color = COLORES_ESTADO.get(est_arista, "gray")
-        es_alternativa = False
-        if src in nodos and dst in nodos:
-            points = [[nodos[src]["lat"], nodos[src]["lon"]], [nodos[dst]["lat"], nodos[dst]["lon"]]]
-            folium.PolyLine(points, color=color, weight=3, opacity=0.7, tooltip=f"{src}-{dst} ({est_arista})").add_to(m)
+    # Aristas
+    if aristas_cassandra:
+        for r in aristas_cassandra:
+            src, dst = r.get("src"), r.get("dst")
+            if not src or not dst or src not in pos or dst not in pos:
+                continue
+            est = (r.get("estado") or "OK").lower()
+            if "bloque" in est:
+                color = "red"
+            elif "congest" in est or "congestion" in est:
+                color = "orange"
+            else:
+                color = "green"
+            folium.PolyLine(
+                [[pos[src]["lat"], pos[src]["lon"]], [pos[dst]["lat"], pos[dst]["lon"]]],
+                color=color,
+                weight=2,
+                opacity=0.65,
+                tooltip=f"{src} → {dst}",
+            ).add_to(m)
+    else:
+        for src, dst, _ in get_aristas():
+            if src in pos and dst in pos:
+                folium.PolyLine(
+                    [[pos[src]["lat"], pos[src]["lon"]], [pos[dst]["lat"], pos[dst]["lon"]]],
+                    color="gray",
+                    weight=1,
+                    opacity=0.35,
+                ).add_to(m)
 
     # Nodos
-    for nid, datos in nodos.items():
-        est = (nodos_estado.get(nid) or {}).get("estado", "OK")
-        motivo = (nodos_estado.get(nid) or {}).get("motivo", "")
-        pr = pagerank.get(nid, 0)
-        color = COLORES_ESTADO.get(est, "gray")
-        CircleMarker(
-            location=[datos["lat"], datos["lon"]],
-            radius=10 if datos["tipo"] == "hub" else 6,
+    for nid, p in pos.items():
+        est = p.get("estado", "OK")
+        color = COLORES_ESTADO.get(est, COLORES_ESTADO.get(str(est).lower(), "blue"))
+        folium.CircleMarker(
+            location=[p["lat"], p["lon"]],
+            radius=10 if p.get("tipo") == "hub" else 6,
             color=color,
             fill=True,
-            fill_opacity=0.8,
-            popup=f"<b>{nid}</b><br>Estado: {est}<br>Motivo: {motivo or '-'}<br>PageRank: {round(pr,4)}",
+            fill_opacity=0.85,
+            popup=f"<b>{nid}</b><br>{p.get('tipo')}<br>Estado: {est}",
         ).add_to(m)
 
     # Camiones
-    for c in camiones:
+    for t in tracking:
+        lat, lon = t.get("lat"), t.get("lon")
+        if lat is None or lon is None:
+            continue
+        cid = t.get("id_camion", "?")
         folium.Marker(
-            [c["lat"], c["lon"]],
+            [lat, lon],
             icon=folium.Icon(color="blue", icon="info-sign"),
-            popup=f"<b>{c['id']}</b><br>Ruta: {c.get('origen','')} → {c.get('destino','')}<br>Motivo retraso: {c.get('motivo','-') or '-'}",
+            popup=f"Camión {cid}<br>{t.get('estado_ruta', '')}",
         ).add_to(m)
-
-        # Ruta alternativa (línea azul)
-        ruta_sug = c.get("ruta_sugerida") or []
-        if len(ruta_sug) >= 2:
-            pts = [[nodos.get(n, {}).get("lat", 40), nodos.get(n, {}).get("lon", -3)] for n in ruta_sug if n in nodos]
-            if len(pts) >= 2:
-                folium.PolyLine(pts, color=COLOR_RUTA_ALTERNATIVA, weight=2, dash_array="5,5").add_to(m)
 
     return m
 
 
-def ejecutar_paso_siguiente():
-    """Ejecutar ingesta + procesamiento para avanzar 15 min."""
-    paso = st.session_state.get("paso_15min", 0)
-    env = os.environ.copy()
-    env["PASO_15MIN"] = str(paso)
-
-    with st.spinner("Ejecutando ingesta..."):
-        r1 = subprocess.run(
-            [sys.executable, str(BASE / "ingesta" / "ingesta_kdd.py")],
-            env=env,
-            capture_output=True,
-            text=True,
-            cwd=str(BASE),
-        )
-    if r1.returncode != 0:
-        st.error(f"Ingesta: {r1.stderr or r1.stdout}")
-        return False
-
-    with st.spinner("Procesando grafos (Spark)..."):
-        r2 = subprocess.run(
-            [sys.executable, str(BASE / "procesamiento" / "procesamiento_grafos.py")],
-            env=env,
-            capture_output=True,
-            text=True,
-            cwd=str(BASE),
-            timeout=120,
-        )
-    if r2.returncode != 0:
-        st.error(f"Procesamiento: {r2.stderr or r2.stdout}")
-        return False
-
-    st.session_state["paso_15min"] = paso + 1
-    st.success("Paso completado. Actualizando vista...")
-    try:
-        st.rerun()
-    except Exception:
-        st.experimental_rerun()
-    return True
+def _render_fase_kdd_card(f: FaseKDD) -> None:
+    with st.container(border=True):
+        st.markdown(f"### {f.orden}. {f.titulo}")
+        st.caption(f.resumen)
+        st.markdown("**Actividades**")
+        for a in f.actividades:
+            st.markdown(f"- {a}")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Entradas**")
+            for x in f.datos_entrada:
+                st.markdown(f"- `{x}`")
+        with c2:
+            st.markdown("**Salidas**")
+            for x in f.datos_salida:
+                st.markdown(f"- `{x}`")
+        st.markdown("**Stack / script**")
+        st.caption(", ".join(f.stack) + (f" → `{f.script}`" if f.script else ""))
 
 
-def main():
-    st.set_page_config(page_title="Gemelo Digital Logístico España", layout="wide")
-    st.title("Sistema de Gemelo Digital Logístico - España")
+def main() -> None:
+    st.set_page_config(
+        page_title=f"{PROJECT_DISPLAY_NAME} — KDD",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
+    # --- session state ---
     if "paso_15min" not in st.session_state:
-        st.session_state["paso_15min"] = 0
+        st.session_state.paso_15min = 0
+    if "timeline" not in st.session_state:
+        st.session_state.timeline = []
 
-    session = get_cassandra_session()
+    st.title(PROJECT_DISPLAY_NAME)
+    st.caption(PROJECT_TAGLINE)
+    st.markdown(
+        f"{PROJECT_DESCRIPTION} Ciclo **KDD** con stack Apache: **ingesta**, "
+        "**Spark + GraphFrames**, **interpretación** (Cassandra + este dashboard)."
+    )
 
-    # Botón Paso Siguiente
-    col1, col2, _ = st.columns([1, 1, 4])
-    with col1:
-        if st.button("Paso Siguiente (15 min)", use_container_width=True):
-            ejecutar_paso_siguiente()
-    with col2:
-        st.metric("Paso simulación", st.session_state["paso_15min"])
+    # --- Sidebar: servicios + paso temporal + acciones ---
+    with st.sidebar:
+        st.subheader("Estado de servicios")
+        for nombre, etiqueta in estado_servicios().items():
+            # Misma línea visual: ✅ Activo / ❌ Inactivo + nombre en negrita
+            st.markdown(f"{etiqueta} **{nombre}**")
 
-    nodos_estado = cargar_nodos_estado(session)
-    camiones = cargar_tracking_camiones(session)
-    pagerank = cargar_pagerank(session)
-    aristas_estado = cargar_aristas_estado(session)
+        st.caption(
+            f"Puertos: NameNode **9870**, Kafka **9092**, Cassandra **9042** (host: `{CASSANDRA_HOST}`)."
+        )
 
-    # Si no hay datos en Cassandra, usar datos por defecto del config
-    if not nodos_estado:
-        nodos = get_nodos()
-        nodos_estado = {n: {"lat": d["lat"], "lon": d["lon"], "estado": "OK", "motivo": None, "clima": ""} for n, d in nodos.items()}
-    if not camiones:
-        nodos = get_nodos()
-        hubs = list(nodos.keys())[:5]
-        camiones = [
-            {"id": f"camion_{i}", "lat": 40.4 + i * 0.2, "lon": -3.7 + i * 0.1, "origen": hubs[0], "destino": hubs[-1], "ruta_sugerida": hubs[:3], "estado": "En ruta", "motivo": None}
-            for i in range(1, 6)
+        if st.button(
+            "▶ Arrancar HDFS + Cassandra + Kafka",
+            help="Ejecuta el arranque en orden. Luego pulsa «Actualizar estado».",
+            use_container_width=True,
+            type="primary",
+            key="btn_arrancar_stack_basico",
+        ):
+            with st.spinner("Arrancando HDFS, Cassandra y Kafka…"):
+                msgs = arrancar_stack_basico()
+            st.session_state["last_arranque_msgs"] = msgs
+            st.rerun()
+
+        if st.button("🔄 Actualizar estado", use_container_width=True, key="btn_refresh_estado"):
+            st.rerun()
+
+        with st.expander("Arrancar stack completo (7 servicios)", expanded=False):
+            st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
+            if st.button("Ejecutar arranque completo", key="btn_arrancar_todos"):
+                with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
+                    msgs = arrancar_todos_servicios()
+                st.session_state["last_arranque_msgs"] = msgs
+                st.rerun()
+
+        if st.session_state.get("last_arranque_msgs"):
+            with st.expander("Último resultado de arranque", expanded=True):
+                for line in st.session_state["last_arranque_msgs"]:
+                    st.caption(line)
+                st.caption("Espera **30–90 s** (sobre todo Cassandra) y pulsa **Actualizar estado**.")
+
+        render_sidebar_enlaces_ui()
+
+        st.divider()
+        st.subheader("Línea temporal (simulación 15 min)")
+        st.session_state.paso_15min = st.number_input(
+            "Paso actual (15 min)",
+            min_value=0,
+            max_value=96,
+            value=int(st.session_state.paso_15min),
+            step=1,
+            help="Se envía a la ingesta como PASO_15MIN.",
+        )
+
+        if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", use_container_width=True):
+            with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
+                code, out, err = ejecutar_ingesta(int(st.session_state.paso_15min))
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+            if code == 0:
+                st.session_state.timeline.append(f"{ts} — Ingesta OK (paso {st.session_state.paso_15min})")
+                st.success("Ingesta terminada.")
+            else:
+                st.error(f"Código {code}")
+                st.code(err[-2000:] or out[-2000:])
+            st.session_state.last_ingesta_out = out
+            st.session_state.last_ingesta_err = err
+
+        if st.button("Ejecutar procesamiento Spark (fases 3–5 KDD)", use_container_width=True):
+            with st.spinner("Spark: grafo, PageRank, Cassandra…"):
+                code, out, err = ejecutar_procesamiento()
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+            if code == 0:
+                st.session_state.timeline.append(f"{ts} — Procesamiento OK")
+                st.success("Procesamiento terminado.")
+            else:
+                st.error(f"Código {code}")
+                st.code(err[-2000:] or out[-2000:])
+            st.session_state.last_proc_out = out
+            st.session_state.last_proc_err = err
+
+        if st.button("Avanzar paso + ingesta + procesamiento", use_container_width=True):
+            p = int(st.session_state.paso_15min)
+            with st.spinner("Pipeline completo…"):
+                c1, o1, e1 = ejecutar_ingesta(p)
+                c2, o2, e2 = ejecutar_procesamiento()
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+            if c1 == 0 and c2 == 0:
+                st.session_state.paso_15min = p + 1
+                st.session_state.timeline.append(f"{ts} — Pipeline completo (ingesta paso {p})")
+                st.success("Pipeline OK.")
+            else:
+                st.error(f"Ingesta {c1} | Procesamiento {c2}")
+                st.code((e1 or o1) + "\n---\n" + (e2 or o2))
+            st.rerun()
+
+        if st.session_state.timeline:
+            st.divider()
+            st.caption("Últimos eventos")
+            for ev in reversed(st.session_state.timeline[-8:]):
+                st.caption(ev)
+
+    tab_kdd, tab_cuadro, tab_rutas, tab_servicios, tab_mapa, tab_verif = st.tabs(
+        [
+            "Ciclo KDD",
+            "Cuadro de mando",
+            "Rutas híbridas",
+            "Servicios",
+            "Mapa y métricas",
+            "Verificación técnica",
         ]
+    )
 
-    m = crear_mapa(nodos_estado, camiones, aristas_estado, pagerank)
-    st_folium(m, width=None, height=500)
+    with tab_kdd:
+        st.subheader("Fases del ciclo KDD en este proyecto")
+        st.info(
+            "Las fases **1–2** se realizan en `ingesta/ingesta_kdd.py`. "
+            "Las fases **3–5** se concentran en `procesamiento/procesamiento_grafos.py` (Spark)."
+        )
+        for f in FASES_KDD:
+            _render_fase_kdd_card(f)
 
-    # Leyenda y análisis de negocio
-    st.subheader("Leyenda")
-    c1, c2, c3 = st.columns(3)
-    c1.markdown("- **Verde**: OK")
-    c2.markdown("- **Amarillo/Naranja**: Congestionado (Niebla/Tráfico/Lluvia)")
-    c3.markdown("- **Rojo**: Bloqueado (Incendio/Nieve/Accidente)")
-    st.markdown("- **Línea azul discontinua**: Ruta alternativa cuando el camino original está cortado")
+        with st.expander("Diagrama resumido"):
+            st.code(
+                """
+┌──────────────────────────────────────────────────────────────────┐
+│ 1–2 INGESTA          API clima + simulación + GPS → Kafka + HDFS │
+│ 3–5 SPARK            GraphFrames → autosanación → PageRank →     │
+│                      Cassandra (+ Hive opcional)                  │
+└──────────────────────────────────────────────────────────────────┘
+""",
+                language="text",
+            )
 
-    st.subheader("PageRank - Nodos más críticos")
-    if pagerank:
-        sorted_pr = sorted(pagerank.items(), key=lambda x: -x[1])[:10]
-        st.dataframe([{"Nodo": n, "PageRank": round(v, 4)} for n, v in sorted_pr], use_container_width=True)
-    else:
-        st.info("Ejecuta al menos un paso para ver PageRank desde Cassandra.")
+    with tab_cuadro:
+        render_cuadro_mando_tab()
+
+    with tab_rutas:
+        render_rutas_hibridas_tab()
+
+    with tab_servicios:
+        render_panel_gestion_servicios()
+
+    with tab_mapa:
+        col_m1, col_m2 = st.columns([2, 1])
+        with col_m1:
+            st.subheader("Mapa operativo")
+            nodos_c = cargar_nodos_cassandra()
+            aristas_c = cargar_aristas_cassandra()
+            track_c = cargar_tracking_cassandra()
+            if not nodos_c:
+                st.warning(
+                    "No hay datos en `nodos_estado` (o Cassandra no responde). "
+                    "Ejecuta el procesamiento tras la ingesta."
+                )
+            mapa = crear_mapa(nodos_c, aristas_c, track_c)
+            st_folium(mapa, width=None, height=480, returned_objects=[])
+        with col_m2:
+            st.subheader("PageRank (muestra)")
+            pr = cargar_pagerank_cassandra()
+            if pr:
+                pr_sorted = sorted(pr, key=lambda x: float(x.get("pagerank") or 0), reverse=True)[:12]
+                for row in pr_sorted:
+                    st.metric(
+                        label=str(row.get("id_nodo", "")),
+                        value=f"{float(row.get('pagerank') or 0):.6f}",
+                    )
+            else:
+                st.caption("Sin datos de PageRank. Ejecuta procesamiento Spark.")
+
+            st.divider()
+            st.caption("Leyenda aristas: verde OK · naranja congestión · rojo bloqueo")
+
+    with tab_verif:
+        st.subheader("Comprobaciones rápidas")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**HDFS** (backup ingesta)")
+            st.info(verificar_hdfs_ruta(HDFS_BACKUP_PATH))
+        with c2:
+            st.markdown("**Kafka**")
+            st.info(verificar_kafka_topic(TOPIC_TRANSPORTE))
+
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("**Cassandra — nodos**")
+            st.info(verificar_cassandra("SELECT id_nodo FROM nodos_estado LIMIT 100", "nodos_estado"))
+        with c4:
+            st.markdown("**Cassandra — tracking**")
+            st.info(verificar_cassandra("SELECT id_camion FROM tracking_camiones LIMIT 20", "tracking"))
+
+        st.markdown("**Hive**")
+        st.caption(
+            "Si ves `spark.sql.catalogImplementation` o errores de metastore, el histórico Hive es opcional; "
+            "el núcleo del proyecto valida con Cassandra."
+        )
 
 
 if __name__ == "__main__":

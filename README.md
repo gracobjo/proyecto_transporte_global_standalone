@@ -1,6 +1,14 @@
-# Sistema de Gemelo Digital Logístico - España
+# SIMLOG España
 
-Sistema de **gemelo digital** para logística y transporte en España. Utiliza un stack Apache (HDFS, Kafka, Spark 3.5 con GraphFrames, Hive, Cassandra) para ingesta, procesamiento con grafos, persistencia y visualización en tiempo cuasi real.
+**SIMLOG** (*Sistema Integrado de Monitorización y Simulación Logística*) — plataforma de **simulación y monitorización** de red de transporte en España. Stack Apache (HDFS, Kafka, Spark 3.5 con GraphFrames, Hive, Cassandra) para ingesta, procesamiento con grafos, persistencia y visualización en tiempo cuasi real.
+
+> Nombre y constantes de marca: [`BRANDING.md`](BRANDING.md). Despliegue operativo: [`README_SIMLOG.md`](README_SIMLOG.md).
+
+### Referencia de funcionalidades (Sentinel360) — modo standalone
+
+Las capacidades del sistema se alinean conceptualmente con el proyecto de referencia **[Sentinel360](https://github.com/gracobjo/Proyecto-Big-Data-Sentinel-360)** (ciclo KDD, ingesta, Spark, Hive, orquestación, dashboards), pero **SIMLOG** está pensado para despliegue **standalone** (una máquina: Spark `local[*]`, servicios locales, sin YARN obligatorio). Ver el mapa detallado en:
+
+- **[`docs/ALINEACION_SENTINEL360_STANDALONE.md`](docs/ALINEACION_SENTINEL360_STANDALONE.md)**
 
 ---
 
@@ -10,7 +18,7 @@ Sistema de **gemelo digital** para logística y transporte en España. Utiliza u
 |--------|-------------|
 | **Ingesta (KDD)** | Obtención de clima por API, simulación de incidentes en nodos/aristas, simulación de camiones con posiciones GPS cada 15 min, y publicación a Kafka + backup en HDFS. |
 | **Procesamiento (grafos)** | Construcción del grafo con GraphFrames, autosanación (eliminar rutas bloqueadas, penalizar congestión/niebla/lluvia), rutas alternativas (ShortestPath), PageRank de nodos críticos, persistencia en Cassandra y Hive. |
-| **Persistencia** | **Cassandra**: estado actual de nodos, aristas, tracking de camiones y PageRank. **Hive**: histórico particionado (eventos, clima, rutas alternativas, agregados diarios) para análisis. |
+| **Persistencia** | **Cassandra** (única base operativa en tiempo casi real; **no se usa MongoDB**): nodos, aristas, tracking de camiones y PageRank. **Hive**: histórico particionado para análisis. |
 | **Dashboard** | Aplicación Streamlit + Folium: mapa de España con nodos/aristas coloreados por estado, camiones en ruta, rutas alternativas (línea azul), métricas PageRank y botón "Paso Siguiente (15 min)" que ejecuta ingesta + procesamiento. |
 | **Orquestación** | DAG de Airflow que cada 15 minutos verifica HDFS/Kafka/Cassandra y ejecuta Ingesta → Procesamiento (sin solapamiento, pensado para entornos con ~4 GB RAM). |
 
@@ -26,7 +34,7 @@ Cada pieza del sistema tiene una función concreta. Ningún componente “le pas
 | **Kafka** | Cola de mensajes: recibe el JSON de la ingesta y lo deja disponible para el consumidor (Spark u otro). | Mensajes publicados por la ingesta. | Lectura por el procesamiento (o por cualquier consumidor del topic). |
 | **HDFS** | Almacén de respaldo: guardar copias del JSON de ingesta por si Kafka no está o para reprocesar. | JSON escrito por la ingesta. | Archivos JSON que el procesamiento Spark puede leer como fuente alternativa. |
 | **Procesamiento Spark** (`procesamiento_grafos.py`) | Construir el grafo, autosanación, rutas alternativas, PageRank, y persistir resultados. | JSON de ingesta desde HDFS (o datos simulados). Topología `config_nodos`. | Escritura en **Cassandra** (nodos, aristas, camiones, PageRank) y opcional en **Hive** (histórico). |
-| **Cassandra** | Guardar **solo el estado actual** del gemelo digital para consultas rápidas y dashboard. | Datos escritos por Spark. | Lecturas por el dashboard y por `cqlsh` / aplicaciones. |
+| **Cassandra** | Guardar **solo el estado actual** de la simulación (nodos, camiones, métricas) para consultas rápidas y dashboard. | Datos escritos por Spark. | Lecturas por el dashboard y por `cqlsh` / aplicaciones. |
 | **Hive** | Guardar **histórico** para análisis en el tiempo (eventos, clima, rutas, agregados). No alimenta a Cassandra. | Datos escritos por Spark o por `persistencia_hive.py`. | Consultas SQL (HiveQL) para reportes y tendencias. |
 | **Dashboard** (`app_visualizacion.py`) | Mostrar en mapa el estado actual (nodos, aristas, camiones, PageRank). Puede lanzar “Paso Siguiente”. | Solo **Cassandra** (lectura). No lee de Hive. | Interfaz web (Streamlit + Folium). |
 | **Airflow** (DAG) | Orquestar cada 15 min: comprobar servicios y ejecutar Ingesta → Procesamiento. | Configuración del DAG. | Ejecución programada de los scripts. |
@@ -116,7 +124,7 @@ El script está pensado para ejecutarse de forma periódica (p. ej. cada 15 min 
 
 ## Visualización de datos en Cassandra
 
-Los datos del gemelo digital se almacenan en el keyspace **`logistica_espana`**. Se pueden consultar por **línea de comandos** con `cqlsh` o visualizarlos en el **dashboard** Streamlit.
+Los datos de **SIMLOG** se almacenan en el keyspace **`logistica_espana`**. Se pueden consultar por **línea de comandos** con `cqlsh` o visualizarlos en el **dashboard** Streamlit.
 
 ### Tablas y contenido
 
@@ -294,7 +302,7 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 
 ## Documentación adicional
 
-- **README_GEMELO_DIGITAL.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
+- **README_SIMLOG.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
 - **docs/AIRFLOW.md**: cómo arrancar Airflow (api-server + scheduler), qué hace cada DAG del proyecto y los que puedas tener en `~/airflow/dags`.
 - **docs/FLUJO_DATOS_Y_REQUISITOS.md**: ejemplos GPS/clima/rutas, qué guarda Spark dónde, calidad de datos, consultas Hive.
 - **docs/REQUIREMENTS_CHECKLIST.md**: cotejo con el PDF *Proyecto Big Data.pdf* (Fases I–IV, rúbrica).
@@ -320,7 +328,7 @@ Con **Git** instalado (`sudo apt install git`), desde la raíz del proyecto:
 ```bash
 git init
 git add .
-git commit -m "Documentación y código: gemelo digital logístico España"
+git commit -m "Documentación y código: SIMLOG España"
 git branch -M main
 git remote add origin https://github.com/gracobjo/proyecto_transporte_global_standalone.git
 git push -u origin main
@@ -339,4 +347,4 @@ chmod +x subir_github.sh
 
 ## Licencia y uso
 
-Proyecto de referencia para gemelo digital logístico. Ajustar `config.py` y `config_nodos.py` según entorno y topología deseada. No incluir API keys en el repositorio; usar variables de entorno o secretos en producción.
+Proyecto de referencia **SIMLOG**. Ajustar `config.py` y `config_nodos.py` según entorno y topología deseada. No incluir API keys en el repositorio; usar variables de entorno o secretos en producción.

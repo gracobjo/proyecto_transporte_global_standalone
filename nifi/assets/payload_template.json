@@ -1,0 +1,17 @@
+{
+  "origen": "simlog_template",
+  "timestamp": "2026-01-01T12:00:00Z",
+  "paso_15min": 0,
+  "clima_hubs": {},
+  "nodos_estado": {},
+  "aristas_estado": [],
+  "camiones": [
+    {
+      "id_camion": "CAM-1",
+      "lat": 40.45,
+      "lon": -3.72,
+      "ruta_origen": "Madrid",
+      "ruta_destino": "Toledo"
+    }
+  ]
+}

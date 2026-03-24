@@ -1,9 +1,9 @@
 """
-Sistema de Gemelo Digital Logístico - Orquestación Airflow
-DAG que cada 15 minutos:
-- Verifica disponibilidad de HDFS, Kafka, Cassandra
-- Ejecuta Ingesta -> Spark Processing
-- Evita solapamiento de procesos (no agotar RAM 4GB)
+SIMLOG España — orquestación Airflow (pipeline compacto, legacy)
+
+Preferir el flujo por fases KDD: `dag_simlog_kdd_fases.py` (un DAG por fase, informes y cadena TriggerDagRun).
+
+Este DAG sigue siendo válido para ejecución periódica cada 15 min (ingesta + procesamiento en un solo grafo).
 """
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -88,14 +88,14 @@ default_args = {
 }
 
 with DAG(
-    dag_id="dag_maestro_transporte",
+    dag_id="simlog_pipeline_maestro",
     default_args=default_args,
-    description="Gemelo Digital Logístico - Ingesta y Procesamiento cada 15 min",
+    description="SIMLOG España — Ingesta y procesamiento Spark cada 15 min",
     schedule=timedelta(minutes=15),
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
-    tags=["logistica", "transport", "spain"],
+    tags=["simlog", "logistica", "transporte", "spain"],
 ) as dag:
 
     check_hdfs = PythonOperator(

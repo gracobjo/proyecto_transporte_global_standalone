@@ -32,8 +32,10 @@ nifi-*/
 graphframes-*.jar*
 
 # Datos locales y almacenamiento temporal
+datos_kdd_temp.json
 almacenamiento/
 reporte_*.csv
+reports/kdd/
 
 # Cassandra datos y cachés (no versionar)
 cassandra/data/

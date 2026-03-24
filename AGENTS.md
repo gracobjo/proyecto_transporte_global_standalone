@@ -12,7 +12,7 @@ Cada agente debería priorizar **solo** los archivos/carpetas de su ámbito. Si 
 |--------|---------------------|-----------------|
 | **Ingesta** | `ingesta_kdd.py`, `ingesta/`, Kafka/HDFS en `config.py` | Clima, simulación, publicación a Kafka y HDFS. |
 | **Procesamiento** | `procesamiento/`, `persistencia_hive.py`, JARs en `config.py` | Grafos, autosanación, Cassandra, Hive. |
-| **Dashboard y docs** | `app_visualizacion.py`, `README.md`, `README_GEMELO_DIGITAL.md`, `AGENTS.md` | Mapa, métricas, documentación. |
+| **Dashboard y docs** | `app_visualizacion.py`, `README.md`, `README_SIMLOG.md`, `AGENTS.md` | Mapa, métricas, documentación. |
 | **Infra y orquestación** | `config_nodos.py`, `config.py`, `orquestacion/`, `cassandra/`, `setup_hive.hql` | Topología, configuración global, DAG, esquemas. |
 
 ---

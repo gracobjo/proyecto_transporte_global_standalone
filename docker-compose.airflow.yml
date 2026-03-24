@@ -36,7 +36,7 @@ services:
       "
 
   ###########################################################################
-  # Cassandra (estado actual del gemelo digital)
+  # Cassandra (estado actual SIMLOG / simulación)
   ###########################################################################
   cassandra:
     image: cassandra:4.1

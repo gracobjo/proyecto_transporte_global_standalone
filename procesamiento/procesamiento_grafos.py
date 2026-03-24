@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sistema de Gemelo Digital Logístico - Fase II/III: Minería de Grafos
+SIMLOG España — Fase II/III: Minería de grafos
 - Construcción de grafo con GraphFrames
 - Autosanación: eliminar rutas Bloqueadas, penalizar Niebla/Lluvia
 - ShortestPath dinámico
@@ -68,7 +68,7 @@ def crear_spark():
     master = os.environ.get("SPARK_MASTER", "local")
     return (
         SparkSession.builder
-        .appName("MineriaTransporteEspaña")
+        .appName("SIMLOG_TransporteEspaña")
         .master(master)
         .config("spark.driver.memory", "512m")
         .config("spark.driver.host", "127.0.0.1")

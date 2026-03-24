@@ -82,7 +82,7 @@ Estos DAGs están en la carpeta **`orquestacion/`** del proyecto. Para que Airfl
   - **arrancar_kafka:** Si el puerto 9092 no está en uso, arranca el broker Kafka (usa `KAFKA_HOME`, por defecto `/opt/kafka`).
 - Las tres tareas se ejecutan en paralelo. Si un servicio ya está activo, la tarea no hace nada.
 
-### 2. `dag_maestro_transporte` (`dag_maestro.py`)
+### 2. `simlog_pipeline_maestro` (`dag_maestro.py`)
 
 - **Propósito:** Pipeline principal cada 15 minutos: verificar servicios y ejecutar Ingesta → Procesamiento.
 - **Schedule:** Cada 15 minutos (`timedelta(minutes=15)`).
@@ -122,14 +122,14 @@ Si en tu máquina la carpeta de DAGs es `~/airflow/dags`, pueden existir DAGs ad
   - **generar_reporte_inteligente:** Exporta datos desde Cassandra a CSV y añade nivel de riesgo.
 - **Dependencias:** [verificar_hdfs, verificar_yarn, verificar_kafka, verificar_cassandra] → ejecutar_mineria_grafos → generar_reporte_inteligente.
 
-### `gemelo_digital_setup` (ej. `dag_setup_gemelo.py`)
+### `simlog_setup` (ej. `dag_setup_simlog.py` si existe en tu `~/airflow/dags`)
 
 - **Propósito:** Setup inicial (ejecutar una vez o bajo demanda): crear esquema Cassandra, esquema Hive y topic Kafka.
 - **Tareas:** setup_cassandra → setup_hive y setup_kafka_topic (en paralelo).
 
-### `dag_maestro_gemelo` (ej. `dag_maestro_gemelo.py`)
+### `simlog_pipeline_maestro` (`orquestacion/dag_maestro.py`)
 
-- **Propósito:** Similar al `dag_maestro_transporte` del repo: verificación de HDFS, Kafka, Cassandra y Hive, luego ingesta y procesamiento de grafos cada 15 minutos.
+- **Propósito:** Verificación de HDFS, Kafka y Cassandra, luego ingesta y procesamiento de grafos cada 15 minutos (nombre de DAG alineado con SIMLOG).
 
 ## Problemas típicos y solución rápida
 

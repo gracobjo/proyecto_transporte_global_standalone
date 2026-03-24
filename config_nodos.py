@@ -1,5 +1,5 @@
 """
-Sistema de Gemelo Digital Logístico - España
+SIMLOG España — topología de red
 Configuración de la topología de red (nodos y aristas)
 Ruta base: ~/proyecto_transporte_global/
 """
