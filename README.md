@@ -316,7 +316,7 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 ## Documentación adicional
 
 - **README_SIMLOG.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
-- **docs/AIRFLOW.md**: cómo arrancar Airflow (api-server + scheduler), qué hace cada DAG del proyecto y los que puedas tener en `~/airflow/dags`.
+- **docs/AIRFLOW.md**: ejecucion del pipeline sin Streamlit con DAGs de servicios + DAGs por fases KDD + pipeline maestro cada 15 min.
 - **docs/FLUJO_DATOS_Y_REQUISITOS.md**: ejemplos GPS/clima/rutas, qué guarda Spark dónde, calidad de datos, consultas Hive.
 - **docs/REQUIREMENTS_CHECKLIST.md**: cotejo con el PDF *Proyecto Big Data.pdf* (Fases I–IV, rúbrica).
 - **docs/YARN_Y_SPARK.md**: cómo ejecutar Spark en YARN (`SPARK_MASTER=yarn`, `spark-submit --master yarn`).

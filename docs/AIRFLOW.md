@@ -1,45 +1,17 @@
-# Airflow: arranque y DAGs
+# Airflow: ejecucion del pipeline sin Streamlit
 
-Documentación de cómo arrancar Apache Airflow en este proyecto y qué hace cada DAG.
+Esta guia deja documentada la operativa para ejecutar SIMLOG solo con Airflow, sin depender del front de Streamlit.
 
----
+## Arranque de Airflow
 
-## Cómo arrancar Airflow
-
-En este proyecto Airflow está instalado en el **entorno virtual** del proyecto. Hay que levantar **dos procesos**: el servidor de API (interfaz web + API para los workers) y el scheduler.
-
-### Requisitos previos
-
-- Variable de entorno `AIRFLOW_HOME` (por defecto suele ser `~/airflow`).
-- Carpeta de DAGs configurada en `AIRFLOW_HOME/dags` o enlazada al proyecto (ver más abajo).
-
-### 1. Activar entorno y variables
+En dos terminales separadas:
 
 ```bash
 cd ~/proyecto_transporte_global
 source venv_transporte/bin/activate
 export AIRFLOW_HOME=~/airflow
+airflow api-server -H 0.0.0.0 -p 8088
 ```
-
-### 2. Arrancar el servidor de API (interfaz web + API)
-
-En versiones recientes de Airflow el comando `webserver` fue sustituido por **`api-server`**:
-
-```bash
-airflow api-server -p 8080
-```
-
-O escuchando en todas las interfaces:
-
-```bash
-airflow api-server -H 0.0.0.0 -p 8080
-```
-
-**Importante:** Este proceso debe estar en marcha para que el **scheduler** pueda ejecutar tareas. Los workers del LocalExecutor se conectan al API en `http://localhost:8080`; si el api-server no está levantado, las tareas fallan con *Connection refused*.
-
-### 3. Arrancar el scheduler (en otra terminal)
-
-En una **segunda terminal**:
 
 ```bash
 cd ~/proyecto_transporte_global
@@ -48,144 +20,53 @@ export AIRFLOW_HOME=~/airflow
 airflow scheduler
 ```
 
-### 4. Acceder a la interfaz
+URL: `http://localhost:8088`
 
-- **URL:** http://localhost:8080  
-- **Usuario:** el configurado al crear el usuario (por ejemplo `admin`).  
-- Si es la primera vez: `airflow users create --role Admin --username admin --email admin@localhost --firstname Admin --lastname User --password <contraseña>`.
+## DAGs operativos (pipeline backend)
 
-### Resumen de comandos
+Los DAGs de operacion viven en `~/airflow/dags` y se apoyan en codigo del repo (`servicios/gestion_servicios.py` y `orquestacion/kdd_ejecucion.py`).
 
-| Proceso      | Comando                      | Puerto |
-|-------------|------------------------------|--------|
-| API/Web     | `airflow api-server -p 8080` | 8080   |
-| Scheduler   | `airflow scheduler`          | —      |
+### Gestion de servicios
 
-Ambos deben estar en ejecución para que los DAGs se ejecuten correctamente.
+- `dag_arranque_servicios_smart_grid`: arranca HDFS, Cassandra, Kafka, Spark, Hive, Airflow y NiFi.
+- `dag_comprobar_servicios_smart_grid`: comprueba estado de todos los servicios y falla si alguno no responde.
+- `dag_parar_servicios_smart_grid`: detiene el stack de forma ordenada.
 
----
+### Fases KDD (un DAG por fase)
 
-## DAGs en el repositorio (`orquestacion/`)
+- `simlog_kdd_00_infra`
+- `simlog_kdd_01_seleccion`
+- `simlog_kdd_02_preprocesamiento`
+- `simlog_kdd_03_transformacion`
+- `simlog_kdd_04_mineria`
+- `simlog_kdd_05_interpretacion`
+- `simlog_kdd_99_consulta_final`
 
-Estos DAGs están en la carpeta **`orquestacion/`** del proyecto. Para que Airflow los cargue puedes:
+La cadena se dispara desde `simlog_kdd_00_infra` mediante `TriggerDagRunOperator`.
 
-- Enlazar cada DAG en `~/airflow/dags/`, o  
-- Configurar en `~/airflow/airflow.cfg`: `dags_folder = /home/hadoop/proyecto_transporte_global/orquestacion`
+### Pipeline periodico
 
-### 1. `dag_arranque_servicios` (`dag_arranque_servicios.py`)
+- `dag_maestro_smart_grid`: cada 15 minutos verifica servicios base y ejecuta `ingesta_kdd.py` -> `procesamiento/procesamiento_grafos.py`.
 
-- **Propósito:** Levantar los servicios necesarios antes del pipeline (HDFS, Cassandra, Kafka).
-- **Ejecución:** Manual (Trigger DAG). No tiene schedule.
-- **Tareas:**
-  - **arrancar_hdfs:** Si el NameNode (puerto 9870) no responde, ejecuta `start-dfs.sh` (usa `HADOOP_HOME` si está definido).
-  - **arrancar_cassandra:** Si el puerto 9042 no está en uso, lanza `cassandra/bin/cassandra` del proyecto en segundo plano.
-  - **arrancar_kafka:** Si el puerto 9092 no está en uso, arranca el broker Kafka (usa `KAFKA_HOME`, por defecto `/opt/kafka`).
-- Las tres tareas se ejecutan en paralelo. Si un servicio ya está activo, la tarea no hace nada.
+## Flujo recomendado sin Streamlit
 
-### 2. `simlog_pipeline_maestro` (`dag_maestro.py`)
+1. Trigger manual de `dag_arranque_servicios_smart_grid`.
+2. Trigger manual de `simlog_kdd_00_infra` para ejecutar todo el ciclo KDD por fases.
+3. Opcionalmente, despausar `dag_maestro_smart_grid` para ciclo continuo cada 15 minutos.
+4. Al terminar una demo, trigger de `dag_parar_servicios_smart_grid`.
 
-- **Propósito:** Pipeline principal cada 15 minutos: verificar servicios y ejecutar Ingesta → Procesamiento.
-- **Schedule:** Cada 15 minutos (`timedelta(minutes=15)`).
-- **Tareas:**
-  - **verificar_hdfs:** Comprueba que HDFS responda (`hdfs dfs -ls /`).
-  - **verificar_kafka:** Comprueba que Kafka esté escuchando en `localhost:9092`.
-  - **verificar_cassandra:** Comprueba que Cassandra esté escuchando en `127.0.0.1:9042`.
-  - **ejecutar_ingesta:** Ejecuta `ingesta_kdd.py` con `PASO_15MIN` según la hora.
-  - **ejecutar_procesamiento:** Ejecuta `procesamiento_grafos.py` (Spark + GraphFrames).
-- **Dependencias:** Las tres verificaciones en paralelo → ingesta → procesamiento. `max_active_runs=1` para no saturar RAM.
+## Comandos utiles
 
-### 3. `dag_mensual_retrain_limpieza` (`dag_mensual_retrain_limpieza.py`)
+```bash
+airflow dags list
+airflow dags list-import-errors
+airflow dags reserialize
+airflow dags trigger simlog_kdd_00_infra
+airflow dags trigger dag_arranque_servicios_smart_grid
+```
 
-- **Propósito:** Mantenimiento mensual: limpieza de HDFS y re-entrenamiento del modelo de grafos (alineado con requisitos del proyecto).
-- **Schedule:** El día 1 de cada mes a las 00:00.
-- **Tareas:**
-  - **limpiar_hdfs_temporales:** Elimina en HDFS los JSON de backup en `HDFS_BACKUP_PATH` más antiguos que `DIAS_RETENCION_BACKUP` (por defecto 30 días).
-  - **reentrenar_grafos:** Ejecuta `procesamiento/procesamiento_grafos.py` como batch completo (re-entrenamiento).
-- **Configuración:** `DIAS_RETENCION_BACKUP` y `HDFS_BACKUP_PATH` por variable de entorno o en el DAG.
+## Troubleshooting rapido
 
----
-
-## DAGs en la instalación local (`~/airflow/dags`)
-
-Si en tu máquina la carpeta de DAGs es `~/airflow/dags`, pueden existir DAGs adicionales (copias o variantes) que no están en el repositorio. Ejemplos típicos:
-
-### `pipeline_transporte_global` (ej. `dag_transporte.py`)
-
-- **Propósito:** Pipeline modular KDD: verificación de infraestructura (HDFS, YARN, Kafka, Cassandra), minería de grafos y generación de reporte.
-- **Schedule:** Manual (`schedule=None`).
-- **Tareas típicas:**
-  - **verificar_hdfs:** Arranca HDFS si el puerto 9000 no responde.
-  - **verificar_yarn:** Arranca YARN si el ResourceManager (8032) no está activo.
-  - **verificar_kafka:** Comprueba Kafka en 9092 (falla si no está activo).
-  - **verificar_cassandra:** Arranca Cassandra del proyecto si no está en marcha y espera al puerto 9042.
-  - **ejecutar_mineria_grafos:** `spark-submit` con YARN del script de análisis de grafos (GraphFrames, Cassandra).
-  - **generar_reporte_inteligente:** Exporta datos desde Cassandra a CSV y añade nivel de riesgo.
-- **Dependencias:** [verificar_hdfs, verificar_yarn, verificar_kafka, verificar_cassandra] → ejecutar_mineria_grafos → generar_reporte_inteligente.
-
-### `simlog_setup` (ej. `dag_setup_simlog.py` si existe en tu `~/airflow/dags`)
-
-- **Propósito:** Setup inicial (ejecutar una vez o bajo demanda): crear esquema Cassandra, esquema Hive y topic Kafka.
-- **Tareas:** setup_cassandra → setup_hive y setup_kafka_topic (en paralelo).
-
-### `simlog_pipeline_maestro` (`orquestacion/dag_maestro.py`)
-
-- **Propósito:** Verificación de HDFS, Kafka y Cassandra, luego ingesta y procesamiento de grafos cada 15 minutos (nombre de DAG alineado con SIMLOG).
-
-## Problemas típicos y solución rápida
-
-- **No aparecen todos los DAGs en la UI o en `airflow dags list`**:
-  1. Verifica que `AIRFLOW_HOME` apunta a `~/airflow` y que los ficheros `dag_*.py` están en `~/airflow/dags`.
-  2. Asegúrate de que **no hay enlaces simbólicos recursivos** (por ejemplo `orquestacion -> /home/hadoop/proyecto_transporte_global/orquestacion` dentro de esa misma carpeta).
-  3. Desde el proyecto, con el entorno virtual activado, vuelve a serializar los DAGs en la base de datos:
-
-     ```bash
-n### Arranque de Airflow con Docker (opcional)
-
-En máquinas justas de recursos se puede levantar solo Airflow en Docker, manteniendo HDFS/Kafka/Cassandra en el host o en otros contenedores.
-
-1. Construir y arrancar el servicio de Airflow:
-
-   ```bash
-   cd ~/proyecto_transporte_global
-   docker compose -f docker-compose.airflow.yml up --build
-   ```
-
-2. Acceder a la interfaz web/API:
-
-   - URL: http://localhost:8080
-   - Usuario: `admin`
-   - Contraseña: `admin` (creada automáticamente si no existe).
-
-3. Detener el contenedor cuando no sea necesario:
-
-   ```bash
-   docker compose -f docker-compose.airflow.yml down
-   ```
-
-Los DAGs se leen desde la carpeta `orquestacion/` del proyecto, montada dentro del contenedor en `/opt/airflow/dags`.
-
-     cd ~/proyecto_transporte_global
-     source venv_transporte/bin/activate
-     export AIRFLOW_HOME=~/airflow
-     airflow dags reserialize
-     ```
-
-  4. Espera unos segundos, ejecuta `airflow dags list` y refresca la web de Airflow (F5).
-
-- **Quiero ver los logs del api-server en la terminal**:
-  - Lanza el servidor **sin `-D`** para que no vaya a segundo plano:
-
-    ```bash
-    airflow api-server -H 0.0.0.0 -p 8080
-    ```
-
-    Esa terminal quedará ocupada mostrando los logs hasta que pulses `Ctrl+C`.
-
----
-
-## Enlaces rápidos
-
-- Interfaz web: http://localhost:8080  
-- DAGs del proyecto: `orquestacion/dag_*.py`  
-- Configuración Airflow: `$AIRFLOW_HOME/airflow.cfg`  
-- Logs: `$AIRFLOW_HOME/logs/`
+- Si no ves DAGs nuevos: ejecuta `airflow dags reserialize` y refresca la UI.
+- Si un DAG falla por rutas/entorno: verifica `AIRFLOW_HOME`, `HADOOP_HOME`, `KAFKA_HOME`, `SPARK_HOME`, `HIVE_HOME`, `NIFI_HOME`.
+- Si `dag_comprobar_servicios_smart_grid` falla: revisa puertos (`9870`, `9092`, `9042`, `7077`, `10000`, `8088`, `8443`/`8080`) y levanta con el DAG de arranque.
