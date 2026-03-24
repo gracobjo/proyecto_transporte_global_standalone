@@ -27,7 +27,8 @@ if not os.path.exists(JAR_GRAPHFRAMES):
         JAR_GRAPHFRAMES = alt
 
 # API Weather
-API_WEATHER_KEY = "735df735c4780d78a550d6bb6b52dfd7"
+# Se recomienda definir API_WEATHER_KEY como variable de entorno y no en código.
+API_WEATHER_KEY = os.environ.get("API_WEATHER_KEY", "")
 API_WEATHER_BASE = "https://api.openweathermap.org/data/2.5/weather"
 
 # Kafka - Dos temas según PDF: Datos Crudos y Datos Filtrados
@@ -40,8 +41,14 @@ TOPIC_TRANSPORTE = TOPIC_FILTERED      # Compatibilidad: consumidores usan filtr
 CASSANDRA_HOST = os.environ.get("CASSANDRA_HOST", "127.0.0.1")
 KEYSPACE = "logistica_espana"
 
-# HDFS
-HDFS_BACKUP_PATH = "/user/hadoop/transporte_backup"
+# HDFS (en Docker usar HDFS_NAMENODE=namenode:9000 para conectar al servicio)
+HDFS_NAMENODE = os.environ.get("HDFS_NAMENODE", "127.0.0.1:9000")
+HDFS_BACKUP_PATH = os.environ.get("HDFS_BACKUP_PATH", "/user/hadoop/transporte_backup")
 
-# Hive (para histórico)
-HIVE_DB = "logistica_espana"
+# Hive (para histórico; en Docker usar HIVE_METASTORE_URIS si aplica)
+HIVE_DB = os.environ.get("HIVE_DB", "logistica_espana")
+HIVE_METASTORE_URIS = os.environ.get("HIVE_METASTORE_URIS", "")  # ej: thrift://hive-metastore:9083
+HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 para JDBC/beeline
+
+# NiFi (opcional; URL de la UI para documentación o integración)
+NIFI_URL = os.environ.get("NIFI_URL", "http://127.0.0.1:8080/nifi")

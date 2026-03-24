@@ -239,7 +239,20 @@ Si las tablas no tienen datos, ejecuta antes el flujo que escribe en Hive (proce
 
 ---
 
-## Requisitos y arranque rápido
+## Ejecución con Docker (stack completo)
+
+Para levantar **HDFS, YARN, Cassandra, NiFi, Spark, Kafka y Hive** en Windows 11 con Docker:
+
+```powershell
+docker-compose build app
+docker-compose up -d
+```
+
+Luego abre el dashboard en http://localhost:8501. **[DOCKER.md](DOCKER.md)** describe cómo **construir la imagen**, inicializar Cassandra/Kafka y **subir el proyecto a GitHub**. **[GUIA_PRACTICA_DOCKER.md](GUIA_PRACTICA_DOCKER.md)** enlaza los pasos con la práctica del **Proyecto Big Data.pdf**.
+
+---
+
+## Requisitos y arranque rápido (sin Docker)
 
 - **Python 3** con `venv` recomendado.
 - **Servicios**: HDFS, Kafka (KRaft), Cassandra, Hive (opcional para histórico).
@@ -315,25 +328,29 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 
 Repositorio remoto: **https://github.com/gracobjo/proyecto_transporte_global_standalone.git**
 
-Con **Git** instalado (`sudo apt install git`), desde la raíz del proyecto:
+Desde la raíz del proyecto (PowerShell en Windows o bash en Linux/Mac):
 
-```bash
-git init
+```powershell
+git status
 git add .
-git commit -m "Documentación y código: gemelo digital logístico España"
+git commit -m "Docker: stack completo, construcción de imagen app, guía práctica y documentación"
+git push origin main
+```
+
+Si es la primera vez en el repo:
+
+```powershell
+git init
 git branch -M main
 git remote add origin https://github.com/gracobjo/proyecto_transporte_global_standalone.git
+git add .
+git commit -m "Docker: stack completo (HDFS, YARN, Kafka, Cassandra, NiFi, Spark, Hive), guía práctica PDF"
 git push -u origin main
 ```
 
-También puedes ejecutar el script incluido:
+Detalle de **construcción de la imagen** y **pasos Docker** (Cassandra, Kafka, ingesta, etc.): ver **[DOCKER.md](DOCKER.md)**.
 
-```bash
-chmod +x subir_github.sh
-./subir_github.sh
-```
-
-**Nota:** El `.gitignore` excluye `venv_transporte/`, logs, JARs, archivos `.tar.gz`/`.zip` y datos locales. Antes del primer push en producción, considera usar variables de entorno para la API key de OpenWeatherMap en lugar de dejarla en `config.py` o `ingesta_kdd.py`.
+**Nota:** El `.gitignore` excluye `venv_transporte/`, logs, JARs y datos locales. No subas API keys; usa variables de entorno (p. ej. `API_WEATHER_KEY` en `.env` o en el compose).
 
 ---
 

@@ -1,0 +1,2 @@
+# Evitar CRLF en scripts que se ejecutan dentro de contenedores Linux
+*.sh text eol=lf
