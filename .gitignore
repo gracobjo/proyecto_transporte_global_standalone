@@ -51,3 +51,10 @@ cassandra/data/
 .env
 .env.local
 *.pem
+
+# NiFi local (archivos generados en instalación Windows)
+nifi/local/.env.nifi.local
+nifi/local/*.tmp
+
+# Artefactos locales sueltos
+simlog.png
