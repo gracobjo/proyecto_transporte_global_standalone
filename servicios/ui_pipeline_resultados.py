@@ -89,7 +89,7 @@ def render_pipeline_resultados_tab() -> None:
             ult = h.get("ultimos") or []
             if ult:
                 df = pd.DataFrame(ult)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
             else:
                 st.caption("No se encontraron ficheros `.json` en esa ruta (¿primera ingesta?)")
         else:
@@ -110,7 +110,7 @@ def render_pipeline_resultados_tab() -> None:
                 else:
                     rows.append({"tabla": nombre, "filas": "—", "estado": f"⚠️ {info.get('error', '')}"})
             if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
             st.success("Lectura Cassandra OK.")
         else:
             st.error(cas.get("error", "No se pudo conectar a Cassandra."))

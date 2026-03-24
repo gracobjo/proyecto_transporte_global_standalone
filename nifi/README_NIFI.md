@@ -7,6 +7,15 @@ Este directorio describe el **grupo de procesadores** y el flujo de datos alinea
 
 > **Nota:** NiFi no sustituye a Spark en memoria: orquesta **ingesta y disparo de jobs**. El procesamiento masivo (GraphFrames) sigue siendo `procesamiento/procesamiento_grafos.py` o un JAR equivalente.
 
+## Ejecucion local en Windows (sin Docker)
+
+Guia y scripts listos en:
+
+- `nifi/local/README_LOCAL_WINDOWS.md`
+- `nifi/local/install_nifi_local_windows.ps1`
+- `nifi/local/start_nifi_local_windows.ps1`
+- `nifi/local/stop_nifi_local_windows.ps1`
+
 ## Resumen de arquitectura
 
 ```text
@@ -136,6 +145,7 @@ En nodos con poca RAM, **priorizar** que Spark inserte en Hive en el mismo job q
 | Archivo | Descripción |
 |---------|-------------|
 | `flow/simlog_kdd_flow_spec.yaml` | Especificación legible de procesadores y conexiones |
+| `flow/FLUJO_MINIMO_CLIMA.md` | Montaje mínimo operativo (OpenWeather -> Kafka + HDFS) |
 | `groovy/GenerateSyntheticPayload.groovy` | GPS sintético + envelope JSON |
 | `scripts/spark_submit_yarn.sh` | Ejemplo `spark-submit` con YARN |
 | `assets/payload_template.json` | Plantilla JSON de referencia |

@@ -6,6 +6,31 @@ import os
 
 BASE_PATH = os.path.expanduser("~/proyecto_transporte_global")
 
+
+def _load_local_env() -> None:
+    """Carga un `.env` local de forma simple, sin dependencias externas."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                # Respeta variables ya definidas en el entorno.
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        # Si falla la lectura, la app sigue usando variables del entorno del sistema.
+        pass
+
+
+_load_local_env()
+
 # --- Marca del proyecto (UI, documentación, NiFi, tags) ---
 PROJECT_DISPLAY_NAME = os.environ.get("PROJECT_DISPLAY_NAME", "SIMLOG España")
 PROJECT_SLUG = "simlog_es"
@@ -37,8 +62,13 @@ if not os.path.exists(JAR_GRAPHFRAMES):
         JAR_GRAPHFRAMES = alt
 
 # API Weather
-# Se recomienda definir API_WEATHER_KEY como variable de entorno y no en código.
-API_WEATHER_KEY = os.environ.get("API_WEATHER_KEY", "")
+# Soporta alias usados en NiFi/documentación y en la app principal.
+API_WEATHER_KEY = (
+    os.environ.get("API_WEATHER_KEY")
+    or os.environ.get("OWM_API_KEY")
+    or os.environ.get("OPENWEATHER_API_KEY")
+    or ""
+)
 API_WEATHER_BASE = "https://api.openweathermap.org/data/2.5/weather"
 
 # Kafka - Dos temas según PDF: Datos Crudos y Datos Filtrados

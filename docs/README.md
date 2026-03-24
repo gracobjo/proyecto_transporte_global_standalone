@@ -7,6 +7,8 @@
 | Documento | Descripción |
 |-----------|-------------|
 | [ALINEACION_SENTINEL360_STANDALONE.md](ALINEACION_SENTINEL360_STANDALONE.md) | **Equivalencias** con el proyecto de referencia [Sentinel360](https://github.com/gracobjo/Proyecto-Big-Data-Sentinel-360) y principios standalone |
+| [DISENO_ARQUITECTURA.md](DISENO_ARQUITECTURA.md) | Arquitectura del sistema, componentes y decisiones de diseño |
+| [CASOS_DE_USO.md](CASOS_DE_USO.md) | Catálogo de casos de uso funcionales del proyecto |
 | [FLUJO_DATOS_Y_REQUISITOS.md](FLUJO_DATOS_Y_REQUISITOS.md) | Flujo de datos, ejemplos JSON, Hive/Cassandra |
 | [REQUIREMENTS_CHECKLIST.md](REQUIREMENTS_CHECKLIST.md) | Checklist frente al PDF del enunciado |
 | [AIRFLOW.md](AIRFLOW.md) | Arranque de Airflow (api-server + scheduler) |

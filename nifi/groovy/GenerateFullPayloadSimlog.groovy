@@ -92,15 +92,24 @@ def camiones = (1..5).collect { i ->
     def dest = hubs[rnd.nextInt(hubs.size())]
     def j1 = (rnd.nextDouble() - 0.5d) * 0.15d
     def j2 = (rnd.nextDouble() - 0.5d) * 0.15d
+    def lat = h.lat + j1
+    def lon = h.lon + j2
+    def cid = "camion_${i}"
+    def ruta = [h.id, dest.id]
     [
-        id: "camion_${i}",
-        lat: h.lat + j1,
-        lon: h.lon + j2,
-        ruta: [h.id, dest.id],
-        posicion_actual: [lat: h.lat + j1, lon: h.lon + j2],
+        id_camion: cid,
+        lat: lat,
+        lon: lon,
+        ruta: ruta,
+        ruta_origen: h.id,
+        ruta_destino: dest.id,
+        ruta_sugerida: ruta,
+        posicion_actual: [lat: lat, lon: lon],
         progreso_pct: 25 * (i % 4),
         estado_ruta: "En ruta",
-        motivo_retraso: null
+        motivo_retraso: null,
+        # Compatibilidad con consumidores antiguos
+        id: cid
     ]
 }
 

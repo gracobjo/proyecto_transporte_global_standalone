@@ -1,0 +1,298 @@
+{
+  "flow_name": "PG_SIMLOG_KDD",
+  "version": "3.0",
+  "description": "Especificacion JSON para montar/importar el canvas de NiFi con buenas practicas: raw/curated en HDFS, Kafka raw/filtered y trigger de Spark para persistencia en Cassandra/Hive.",
+  "nifi_compatibility_note": "Formato JSON orientado a NiFi 2.6.x. Si tu build concreta no expone import directo en UI, usa este archivo como blueprint exacto para crear el Process Group en canvas.",
+  "parameter_context": {
+    "name": "PC_SIMLOG_KDD",
+    "sensitive_parameters": [
+      {
+        "name": "OWM_API_KEY",
+        "value": "REEMPLAZAR_CON_CLAVE_OPENWEATHER"
+      }
+    ],
+    "parameters": [
+      {
+        "name": "KAFKA_BOOTSTRAP",
+        "value": "localhost:9092"
+      },
+      {
+        "name": "TOPIC_RAW",
+        "value": "transporte_raw"
+      },
+      {
+        "name": "TOPIC_FILTERED",
+        "value": "transporte_filtered"
+      },
+      {
+        "name": "HDFS_RAW_BASE",
+        "value": "/user/hadoop/transporte_backup/nifi_raw"
+      },
+      {
+        "name": "HDFS_CURATED_BASE",
+        "value": "/user/hadoop/transporte_backup/nifi_curated"
+      },
+      {
+        "name": "HADOOP_CONF_RESOURCES",
+        "value": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml"
+      },
+      {
+        "name": "SPARK_SUBMIT",
+        "value": "/opt/spark/bin/spark-submit"
+      },
+      {
+        "name": "SPARK_MASTER",
+        "value": "yarn"
+      },
+      {
+        "name": "DEPLOY_MODE",
+        "value": "client"
+      },
+      {
+        "name": "PROJECT_ROOT",
+        "value": "/home/hadoop/proyecto_transporte_global"
+      },
+      {
+        "name": "CASSANDRA_HOST",
+        "value": "127.0.0.1"
+      }
+    ]
+  },
+  "controller_services": [
+    {
+      "id": "CS_JSON_READER",
+      "type": "JsonTreeReader",
+      "name": "JsonTreeReader_SIMLOG",
+      "properties": {
+        "Schema Access Strategy": "Infer Schema"
+      }
+    },
+    {
+      "id": "CS_JSON_WRITER",
+      "type": "JsonRecordSetWriter",
+      "name": "JsonRecordSetWriter_SIMLOG",
+      "properties": {
+        "Schema Access Strategy": "Inherit Record Schema"
+      }
+    }
+  ],
+  "processors": [
+    {
+      "id": "P01",
+      "type": "GenerateFlowFile",
+      "name": "Timer_Ingesta_15min",
+      "scheduling_strategy": "TIMER_DRIVEN",
+      "scheduling_period": "15 min",
+      "properties": {
+        "Batch Size": "1",
+        "Data Format": "Text"
+      },
+      "auto_terminated_relationships": []
+    },
+    {
+      "id": "P02",
+      "type": "UpdateAttribute",
+      "name": "Set_Parametros_y_Particionado",
+      "properties": {
+        "owm.api.key": "${OWM_API_KEY}",
+        "paso_15min": "0",
+        "ingest.ts": "${now():format(\"yyyyMMdd_HHmmss\")}",
+        "hdfs.date.path": "${now():format(\"yyyy/MM/dd/HH\")}",
+        "hdfs.raw.dir": "${HDFS_RAW_BASE}/${hdfs.date.path}",
+        "hdfs.curated.dir": "${HDFS_CURATED_BASE}/${hdfs.date.path}",
+        "filename": "simlog_${ingest.ts}.json"
+      },
+      "auto_terminated_relationships": []
+    },
+    {
+      "id": "P03",
+      "type": "ExecuteScript",
+      "name": "Build_JSON_Ingesta_KDD",
+      "properties": {
+        "Script Engine": "Groovy",
+        "Script Body": "PEGA_AQUI_nifi/groovy/GenerateFullPayloadSimlog.groovy"
+      },
+      "auto_terminated_relationships": []
+    },
+    {
+      "id": "P04",
+      "type": "ValidateRecord",
+      "name": "Validate_JSON_Contrato",
+      "properties": {
+        "Record Reader": "CS_JSON_READER",
+        "Record Writer": "CS_JSON_WRITER",
+        "Allow Extra Fields": "true",
+        "Schema Access Strategy": "Infer Schema"
+      },
+      "auto_terminated_relationships": []
+    },
+    {
+      "id": "P05",
+      "type": "PublishKafka",
+      "name": "Kafka_Topic_RAW",
+      "properties": {
+        "Kafka Brokers": "${KAFKA_BOOTSTRAP}",
+        "Topic Name": "${TOPIC_RAW}"
+      },
+      "auto_terminated_relationships": [
+        "success"
+      ]
+    },
+    {
+      "id": "P06",
+      "type": "PutHDFS",
+      "name": "HDFS_Raw_Backup",
+      "properties": {
+        "Hadoop Configuration Resources": "${HADOOP_CONF_RESOURCES}",
+        "Directory": "${hdfs.raw.dir}",
+        "Conflict Resolution Strategy": "replace"
+      },
+      "auto_terminated_relationships": []
+    },
+    {
+      "id": "P07",
+      "type": "PublishKafka",
+      "name": "Kafka_Topic_FILTERED",
+      "properties": {
+        "Kafka Brokers": "${KAFKA_BOOTSTRAP}",
+        "Topic Name": "${TOPIC_FILTERED}"
+      },
+      "auto_terminated_relationships": [
+        "success"
+      ]
+    },
+    {
+      "id": "P08",
+      "type": "PutHDFS",
+      "name": "HDFS_Curated_Validated",
+      "properties": {
+        "Hadoop Configuration Resources": "${HADOOP_CONF_RESOURCES}",
+        "Directory": "${hdfs.curated.dir}",
+        "Conflict Resolution Strategy": "replace"
+      },
+      "auto_terminated_relationships": []
+    },
+    {
+      "id": "P09",
+      "type": "ExecuteProcess",
+      "name": "Spark_Submit_Procesamiento",
+      "properties": {
+        "Command": "bash",
+        "Command Arguments Strategy": "Command Arguments Property",
+        "Command Arguments": "-lc \"${PROJECT_ROOT}/nifi/scripts/spark_submit_yarn.sh\""
+      },
+      "auto_terminated_relationships": [
+        "success"
+      ]
+    },
+    {
+      "id": "P10",
+      "type": "LogAttribute",
+      "name": "DLQ_Log",
+      "auto_terminated_relationships": [
+        "success"
+      ]
+    },
+    {
+      "id": "P11",
+      "type": "PutFile",
+      "name": "DLQ_Persist",
+      "properties": {
+        "Directory": "./dlq/simlog"
+      },
+      "auto_terminated_relationships": [
+        "success"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "P01",
+      "to": "P02",
+      "relationship": "success"
+    },
+    {
+      "from": "P02",
+      "to": "P03",
+      "relationship": "success"
+    },
+    {
+      "from": "P03",
+      "to": "P04",
+      "relationship": "success"
+    },
+    {
+      "from": "P03",
+      "to": "P10",
+      "relationship": "failure"
+    },
+    {
+      "from": "P04",
+      "to": "P05",
+      "relationship": "valid"
+    },
+    {
+      "from": "P04",
+      "to": "P06",
+      "relationship": "valid"
+    },
+    {
+      "from": "P04",
+      "to": "P07",
+      "relationship": "valid"
+    },
+    {
+      "from": "P04",
+      "to": "P08",
+      "relationship": "valid"
+    },
+    {
+      "from": "P04",
+      "to": "P10",
+      "relationship": "invalid"
+    },
+    {
+      "from": "P04",
+      "to": "P10",
+      "relationship": "failure"
+    },
+    {
+      "from": "P06",
+      "to": "P09",
+      "relationship": "success"
+    },
+    {
+      "from": "P08",
+      "to": "P09",
+      "relationship": "success"
+    },
+    {
+      "from": "P06",
+      "to": "P10",
+      "relationship": "failure"
+    },
+    {
+      "from": "P07",
+      "to": "P10",
+      "relationship": "failure"
+    },
+    {
+      "from": "P08",
+      "to": "P10",
+      "relationship": "failure"
+    },
+    {
+      "from": "P10",
+      "to": "P11",
+      "relationship": "success"
+    }
+  ],
+  "operational_best_practices": [
+    "Mantener OWM_API_KEY como parametro sensible en NiFi.",
+    "Persistir raw y curated en rutas HDFS distintas y particionadas por hora.",
+    "No insertar directamente Cassandra/Hive desde NiFi fila a fila; delegar a Spark.",
+    "Usar DLQ (LogAttribute + PutFile) para failures e invalid.",
+    "Separar topic raw y topic filtered para auditoria y consumo.",
+    "Agregar back pressure por cola (objetos y tamano) segun capacidad del cluster."
+  ]
+}

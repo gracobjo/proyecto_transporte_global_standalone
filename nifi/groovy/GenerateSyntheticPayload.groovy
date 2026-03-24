@@ -25,14 +25,26 @@ def paso = (pasoStr != null && !pasoStr.isEmpty()) ? pasoStr.toInteger() : 0
 
 def camiones = (1..5).collect { i ->
     def h = hubs[rnd.nextInt(hubs.size())]
+    def d = hubs[rnd.nextInt(hubs.size())]
     def j1 = (rnd.nextDouble() - 0.5d) * 0.12d
     def j2 = (rnd.nextDouble() - 0.5d) * 0.12d
+    def lat = h.lat + j1
+    def lon = h.lon + j2
+    def cid = "camion_${i}"
+    def ruta = [h.id, d.id]
     [
-        id_camion: "CAM-${i}",
-        lat: h.lat + j1,
-        lon: h.lon + j2,
+        id_camion: cid,
+        lat: lat,
+        lon: lon,
+        ruta: ruta,
         ruta_origen: h.id,
-        ruta_destino: hubs[rnd.nextInt(hubs.size())].id
+        ruta_destino: d.id,
+        ruta_sugerida: ruta,
+        estado_ruta: "En ruta",
+        motivo_retraso: null,
+        # Compatibilidad con consumidores antiguos
+        id: cid,
+        posicion_actual: [lat: lat, lon: lon]
     ]
 }
 

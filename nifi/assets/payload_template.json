@@ -7,11 +7,15 @@
   "aristas_estado": [],
   "camiones": [
     {
-      "id_camion": "CAM-1",
+      "id_camion": "camion_1",
       "lat": 40.45,
       "lon": -3.72,
+      "ruta": ["Madrid", "Toledo"],
       "ruta_origen": "Madrid",
-      "ruta_destino": "Toledo"
+      "ruta_destino": "Toledo",
+      "ruta_sugerida": ["Madrid", "Toledo"],
+      "estado_ruta": "En ruta",
+      "motivo_retraso": null
     }
   ]
 }

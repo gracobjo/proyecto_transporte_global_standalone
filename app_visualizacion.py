@@ -263,7 +263,7 @@ def main() -> None:
         if st.button(
             "▶ Arrancar HDFS + Cassandra + Kafka",
             help="Ejecuta el arranque en orden. Luego pulsa «Actualizar estado».",
-            use_container_width=True,
+            width="stretch",
             type="primary",
             key="btn_arrancar_stack_basico",
         ):
@@ -272,7 +272,7 @@ def main() -> None:
             st.session_state["last_arranque_msgs"] = msgs
             st.rerun()
 
-        if st.button("🔄 Actualizar estado", use_container_width=True, key="btn_refresh_estado"):
+        if st.button("🔄 Actualizar estado", width="stretch", key="btn_refresh_estado"):
             st.rerun()
 
         with st.expander("Arrancar stack completo (7 servicios)", expanded=False):
@@ -308,7 +308,7 @@ def main() -> None:
             help="Manual: se envía como PASO_15MIN. Desactivado si usas paso automático.",
         )
 
-        if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", use_container_width=True):
+        if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", width="stretch"):
             with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
                 if st.session_state.ingesta_paso_automatico:
                     code, out, err = ejecutar_ingesta(None)
@@ -327,7 +327,7 @@ def main() -> None:
             st.session_state.last_ingesta_out = out
             st.session_state.last_ingesta_err = err
 
-        if st.button("Ejecutar procesamiento Spark (fases 3–5 KDD)", use_container_width=True):
+        if st.button("Ejecutar procesamiento Spark (fases 3–5 KDD)", width="stretch"):
             with st.spinner("Spark: grafo, PageRank, Cassandra…"):
                 code, out, err = ejecutar_procesamiento()
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
@@ -340,7 +340,7 @@ def main() -> None:
             st.session_state.last_proc_out = out
             st.session_state.last_proc_err = err
 
-        if st.button("Avanzar paso + ingesta + procesamiento", use_container_width=True):
+        if st.button("Avanzar paso + ingesta + procesamiento", width="stretch"):
             p = int(st.session_state.paso_15min)
             with st.spinner("Pipeline completo…"):
                 c1, o1, e1 = ejecutar_ingesta(p)
@@ -406,7 +406,7 @@ def main() -> None:
                 f"Ejecutar fase {fase_actual.orden}: {fase_actual.titulo}",
                 type="primary",
                 key=f"kdd_run_fase_{fase_actual.orden}",
-                use_container_width=True,
+                width="stretch",
             ):
                 with st.spinner(f"Ejecutando fase {fase_actual.orden}…"):
                     code, out, err = ejecutar_fase_kdd(fase_actual.orden, paso)

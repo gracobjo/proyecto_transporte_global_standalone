@@ -29,23 +29,25 @@ La **ingesta** produce un único JSON que contiene tres bloques de datos: **clim
 }
 ```
 
-**Ejemplo – GPS de camiones (posición y ruta):**
+**Ejemplo – GPS de camiones (contrato canónico actual):**
 
 ```json
 "camiones": [
   {
-    "id": "CAM-001",
+    "id_camion": "camion_1",
+    "lat": 41.12,
+    "lon": 1.85,
     "ruta": ["Madrid", "Toledo", "Cuenca", "Barcelona"],
-    "distancia_total_km": 620.3,
-    "posicion_actual": { "lat": 41.12, "lon": 1.85 },
-    "nodo_actual": "Barcelona",
-    "progreso_pct": 78.2,
-    "timestamp": "2025-03-15T12:00:00"
+    "ruta_origen": "Madrid",
+    "ruta_destino": "Barcelona",
+    "ruta_sugerida": ["Madrid", "Toledo", "Cuenca", "Barcelona"],
+    "estado_ruta": "En ruta",
+    "motivo_retraso": null
   }
 ]
 ```
 
-- **GPS**: `posicion_actual` (lat/lon), `nodo_actual`, `progreso_pct`, `ruta`.
+- **GPS**: `id_camion`, `lat`, `lon`, `ruta`, `ruta_origen`, `ruta_destino`, `estado_ruta`.
 - **Tiempo**: `clima` (temperatura, humedad, descripción, visibilidad por ciudad).
 - **Rutas**: `estados_nodos` y `estados_aristas` (estado y motivo por nodo y por enlace).
 
@@ -169,7 +171,7 @@ Todo lo que se escribe en Cassandra (y en Hive si aplica) pasa por esta capa ant
 | **Procesamiento con motor Big Data (Spark)** | Sí: Spark (GraphFrames) para grafo, autosanación, PageRank, escritura a Cassandra y Hive. |
 | **Almacenamiento NoSQL (Cassandra)** | Sí: keyspace `logistica_espana`, tablas nodos, aristas, camiones, PageRank. |
 | **Almacenamiento SQL / data warehouse (Hive)** | Sí: base `logistica_db` (y/o `logistica_espana` en Hive), tablas históricas particionadas. |
-| **Cola de mensajes (Kafka)** | Sí: topic `transporte_status`, ingesta publica, Spark puede consumir (actualmente se usa más HDFS como fuente). |
+| **Cola de mensajes (Kafka)** | Sí: temas `transporte_raw` y `transporte_filtered`; Spark puede consumir y también leer backup en HDFS. |
 | **Limpieza / calidad de datos** | Parcial: lógica actual no tiene paso explícito; se puede cumplir añadiendo el paso de la sección 3 antes de escribir en Cassandra. |
 | **Visualización o dashboard** | Sí: Streamlit + Folium leyendo de Cassandra. |
 | **Orquestación (Airflow u otro)** | Sí: DAG que lanza Ingesta → Procesamiento. |

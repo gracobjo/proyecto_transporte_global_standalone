@@ -26,7 +26,7 @@ def render_panel_gestion_servicios() -> None:
         key="svc_confirm_stop",
     )
 
-    if st.button("Comprobar todos los servicios", type="secondary", use_container_width=True):
+    if st.button("Comprobar todos los servicios", type="secondary", width="stretch"):
         for sid in ORDEN_SERVICIOS:
             r = ejecutar_comprobar(sid)
             estado = "✅" if r.get("activo") else "❌"
@@ -51,18 +51,18 @@ def render_panel_gestion_servicios() -> None:
                     st.error("Inactivo / no responde")
                 st.caption(detalle[:280] + ("…" if len(detalle) > 280 else ""))
             with c2:
-                if st.button("Iniciar", key=f"svc_start_{sid}", use_container_width=True):
+                if st.button("Iniciar", key=f"svc_start_{sid}", width="stretch"):
                     msg = ejecutar_iniciar(sid)
                     st.info(msg)
             with c3:
-                if st.button("Comprobar", key=f"svc_check_{sid}", use_container_width=True):
+                if st.button("Comprobar", key=f"svc_check_{sid}", width="stretch"):
                     r = ejecutar_comprobar(sid)
                     st.info(f"{r.get('nombre')}: {'OK' if r.get('activo') else 'no responde'} — {r.get('detalle', '')}")
             with c4:
                 if st.button(
                     "Parar",
                     key=f"svc_stop_{sid}",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=not confirm,
                     type="secondary",
                 ):

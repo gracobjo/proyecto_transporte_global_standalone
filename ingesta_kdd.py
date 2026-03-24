@@ -7,6 +7,7 @@ import json
 import math
 import random
 import time
+import os
 import requests
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
@@ -14,7 +15,12 @@ from typing import Dict, List, Tuple, Optional
 from config_nodos import RED, HUBS, get_nodos, get_aristas
 from config import HDFS_BACKUP_PATH as HDFS_BACKUP_PATH_CONFIG
 
-API_KEY = "735df735c4780d78a550d6bb6b52dfd7"
+API_KEY = (
+    os.environ.get("API_WEATHER_KEY")
+    or os.environ.get("OWM_API_KEY")
+    or os.environ.get("OPENWEATHER_API_KEY")
+    or ""
+)
 WEATHER_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
@@ -209,13 +215,25 @@ def simular_camiones(
         nodo_actual_idx = min(int(progress / (100 / (len(ruta)-1))), len(ruta)-2)
         nodo_actual = ruta[nodo_actual_idx]
         
+        cam_id = f"camion_{i+1}"
         camiones.append({
-            "id": f"CAM-{i+1:03d}",
+            # Contrato canónico compartido con ingesta/ingesta_kdd.py y NiFi
+            "id_camion": cam_id,
+            "lat": lat_actual,
+            "lon": lon_actual,
             "ruta": ruta,
-            "distancia_total_km": round(distancia_total, 2),
+            "ruta_origen": ruta[0] if ruta else "",
+            "ruta_destino": ruta[-1] if ruta else "",
+            "ruta_sugerida": ruta,
+            "estado_ruta": "En ruta",
+            "motivo_retraso": None,
+            "progreso": round(progress / 100, 4),
+            # Compatibilidad hacia atrás (consumidores legacy)
+            "id": cam_id,
             "posicion_actual": {"lat": lat_actual, "lon": lon_actual},
             "nodo_actual": nodo_actual,
             "progreso_pct": round(progress, 1),
+            "distancia_total_km": round(distancia_total, 2),
             "timestamp": datetime.now().isoformat()
         })
     
@@ -267,7 +285,31 @@ def filtrar_payload_para_kafka(raw_data: Dict) -> Dict:
         except (TypeError, ValueError):
             return False
 
-    camiones_ok = [c for c in camiones if (c.get("id") or c.get("id_camion")) and lat_lon_validos(c)]
+    camiones_ok = []
+    for c in camiones:
+        cid = c.get("id_camion") or c.get("id")
+        if not cid or not lat_lon_validos(c):
+            continue
+        lat = c.get("lat")
+        lon = c.get("lon")
+        if lat is None or lon is None:
+            pos = c.get("posicion_actual", {}) if isinstance(c.get("posicion_actual"), dict) else {}
+            lat = pos.get("lat")
+            lon = pos.get("lon")
+        ruta = c.get("ruta") or []
+        if not isinstance(ruta, list):
+            ruta = []
+        camiones_ok.append({
+            "id_camion": cid,
+            "lat": lat,
+            "lon": lon,
+            "ruta": ruta,
+            "ruta_origen": c.get("ruta_origen") or (ruta[0] if ruta else ""),
+            "ruta_destino": c.get("ruta_destino") or (ruta[-1] if ruta else ""),
+            "ruta_sugerida": c.get("ruta_sugerida") or ruta,
+            "estado_ruta": c.get("estado_ruta") or "En ruta",
+            "motivo_retraso": c.get("motivo_retraso"),
+        })
 
     return {
         "timestamp": ts,
@@ -367,7 +409,7 @@ def ejecutar_ingesta() -> Dict:
     print("\n[3/4] Simulando camiones con GPS...")
     camiones = simular_camiones(nodos, aristas, num_camiones=5, pasos_por_ciclo=4)
     for cam in camiones:
-        print(f"  - {cam['id']}: {cam['nodo_actual']} ({cam['progreso_pct']}%)")
+        print(f"  - {cam['id_camion']}: {cam.get('nodo_actual', cam.get('ruta_origen', 'N/A'))} ({cam.get('progreso_pct', 0)}%)")
     
     print("\n[4/4] Creando JSON enriquecido...")
     json_enriquecido = crear_json_enriquecido(

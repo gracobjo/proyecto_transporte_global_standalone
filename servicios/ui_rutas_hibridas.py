@@ -47,7 +47,7 @@ def render_rutas_hibridas_tab() -> None:
         if not df.empty:
             df_show = df[["origen", "destino", "tipo_etiqueta", "distancia_km"]].copy()
             df_show.columns = ["Origen", "Destino", "Tipo de conexión", "Distancia (km)"]
-            st.dataframe(df_show, use_container_width=True, hide_index=True)
+            st.dataframe(df_show, width="stretch", hide_index=True)
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Descargar tramos (CSV)",
@@ -99,7 +99,7 @@ def render_rutas_hibridas_tab() -> None:
 
     colb1, colb2 = st.columns([1, 2])
     with colb1:
-        calcular = st.button("Calcular ruta y mostrar en mapa", type="primary", use_container_width=True)
+        calcular = st.button("Calcular ruta y mostrar en mapa", type="primary", width="stretch")
     with colb2:
         st.caption(
             "Tras **Calcular**, verás los **pasos** (saltos), tiempos estimados si hay datos en Cassandra, "
@@ -169,7 +169,7 @@ def render_rutas_hibridas_tab() -> None:
                         for p in pasos
                     ]
                 )
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
                 if any((p.get("minutos") or 0) >= 1000 for p in pasos):
                     st.error(
                         "Hay al menos un **tramo bloqueado** (retraso infinito). "
@@ -187,7 +187,7 @@ def render_rutas_hibridas_tab() -> None:
             ve = res.get("vehiculos_afectados") or []
             st.markdown("##### Vehículos afectados (cruce con tracking)")
             if ve:
-                st.dataframe(pd.DataFrame(ve), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(ve), width="stretch", hide_index=True)
             else:
                 st.caption("Ningún camión con ruta que intersecte estos nodos (o sin datos en `tracking_camiones`).")
 

@@ -74,7 +74,7 @@ def render_acciones_rapidas() -> None:
     st.subheader("Acciones rápidas")
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("Ejecutar ingesta (fases 1–2)", key="cm_ingesta", use_container_width=True):
+        if st.button("Ejecutar ingesta (fases 1–2)", key="cm_ingesta", width="stretch"):
             auto = bool(st.session_state.get("ingesta_paso_automatico", False))
             paso_arg = None if auto else int(st.session_state.get("paso_15min", 0))
             with st.spinner("Ingesta…"):
@@ -88,7 +88,7 @@ def render_acciones_rapidas() -> None:
                 st.error(f"Código {code}")
                 st.code(err[-2500:] or out[-2500:])
     with c2:
-        if st.button("Ejecutar Spark (fases 3–5)", key="cm_spark", use_container_width=True):
+        if st.button("Ejecutar Spark (fases 3–5)", key="cm_spark", width="stretch"):
             with st.spinner("Spark…"):
                 code, out, err = ejecutar_procesamiento()
             if code == 0:
@@ -100,7 +100,7 @@ def render_acciones_rapidas() -> None:
                 st.error(f"Código {code}")
                 st.code(err[-2500:] or out[-2500:])
     with c3:
-        if st.button("Refrescar datos clima (API)", key="cm_clima", use_container_width=True):
+        if st.button("Refrescar datos clima (API)", key="cm_clima", width="stretch"):
             st.session_state["clima_refresh"] = datetime.now(timezone.utc).isoformat()
             st.rerun()
 
@@ -117,7 +117,7 @@ def render_consultas_cassandra() -> None:
     if st.button("Ejecutar consulta Cassandra", key="btn_cql", type="primary"):
         ok, err, rows = ejecutar_cassandra_consulta(sel)
         if ok and rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch")
             st.caption(f"{len(rows)} fila(s).")
         elif ok:
             st.info("Consulta vacía (sin filas o tablas sin datos).")

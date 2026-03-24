@@ -30,8 +30,8 @@ Cada pieza del sistema tiene una función concreta. Ningún componente “le pas
 
 | Componente | Responsabilidad única | Entrada | Salida |
 |------------|------------------------|---------|--------|
-| **Ingesta** (`ingesta_kdd.py`) | Generar el “snapshot” del sistema cada 15 min: clima real, estados simulados de nodos/aristas, posiciones de camiones. | API OpenWeatherMap, topología `config_nodos`. | Un JSON enriquecido → Kafka (topic `transporte_status`) y copia en HDFS. |
-| **Kafka** | Cola de mensajes: recibe el JSON de la ingesta y lo deja disponible para el consumidor (Spark u otro). | Mensajes publicados por la ingesta. | Lectura por el procesamiento (o por cualquier consumidor del topic). |
+| **Ingesta** (`ingesta_kdd.py`) | Generar el “snapshot” del sistema cada 15 min: clima real, estados simulados de nodos/aristas, posiciones de camiones. | API OpenWeatherMap, topología `config_nodos`. | Un JSON enriquecido → Kafka (temas `transporte_raw` y `transporte_filtered`) y copia en HDFS. |
+| **Kafka** | Cola de mensajes: recibe el JSON de la ingesta y lo deja disponible para el consumidor (Spark u otro). | Mensajes publicados por la ingesta. | Lectura por el procesamiento (o por cualquier consumidor de ambos temas). |
 | **HDFS** | Almacén de respaldo: guardar copias del JSON de ingesta por si Kafka no está o para reprocesar. | JSON escrito por la ingesta. | Archivos JSON que el procesamiento Spark puede leer como fuente alternativa. |
 | **Procesamiento Spark** (`procesamiento_grafos.py`) | Construir el grafo, autosanación, rutas alternativas, PageRank, y persistir resultados. | JSON de ingesta desde HDFS (o datos simulados). Topología `config_nodos`. | Escritura en **Cassandra** (nodos, aristas, camiones, PageRank) y opcional en **Hive** (histórico). |
 | **Cassandra** | Guardar **solo el estado actual** de la simulación (nodos, camiones, métricas) para consultas rápidas y dashboard. | Datos escritos por Spark. | Lecturas por el dashboard y por `cqlsh` / aplicaciones. |
@@ -73,7 +73,7 @@ La **ingesta** es la **Fase I** del pipeline (Knowledge Discovery in Data). Su o
    Simula **5 camiones** en rutas sobre la red (nodos definidos en `config_nodos.py`). Para cada camión:
    - Se construye una ruta (origen → varios saltos → destino).
    - Se calcula la posición GPS actual interpolando entre origen y destino en pasos de 15 min (4 pasos por ciclo = 1 h).
-   - Se guarda: `id`, `ruta`, `distancia_total_km`, `posicion_actual` (lat/lon), `nodo_actual`, `progreso_pct` y `timestamp`.
+   - Se guarda (contrato canónico): `id_camion`, `lat`, `lon`, `ruta`, `ruta_origen`, `ruta_destino`, `ruta_sugerida`, `estado_ruta`, `motivo_retraso`.
 
 4. **JSON enriquecido**  
    Se arma un único JSON con:
@@ -85,7 +85,7 @@ La **ingesta** es la **Fase I** del pipeline (Knowledge Discovery in Data). Su o
    - `intervalo_minutos`: 15
 
 5. **Persistencia inmediata**  
-   - **Kafka**: se publica el JSON en el topic `transporte_status` (configurable) para que Spark (o otro consumidor) lo procese.
+   - **Kafka**: se publica el JSON en `transporte_raw` y `transporte_filtered` para auditoría/consumo del pipeline.
    - **HDFS**: se guarda una copia en `/user/hadoop/transporte/ingesta/transporte_YYYYMMDD_HHMMSS.json` como respaldo.
 
 ### Qué incluye el script
@@ -195,7 +195,7 @@ Hive guarda el **histórico** en la base **`logistica_db`** (definida en `persis
 |-------|-----------|
 | `eventos_historico` | Eventos por timestamp: tipo_evento, id_elemento, estado, motivo, pagerank, hub_asociado. |
 | `clima_historico` | Clima por ciudad y fecha: temperatura, humedad, descripcion, visibilidad. |
-| `tracking_camiones_historico` | Posiciones históricas de camiones: origen, destino, nodo_actual, progreso_pct. |
+| `tracking_camiones_historico` | Posiciones históricas de camiones: origen, destino, estado de ruta y coordenadas. |
 | `rutas_alternativas_historico` | Rutas originales vs alternativas: distancia, motivo_bloqueo, ahorro_km. |
 | `agg_estadisticas_diarias` | Agregados diarios: tipo_evento, estado, motivo, contador, pct_total. |
 
@@ -282,7 +282,7 @@ Configurar (opcional) la API key de OpenWeatherMap en `config.py` o por variable
 ### 2. Topic Kafka
 
 ```bash
-kafka-topics.sh --create --topic transporte_status --bootstrap-server localhost:9092 --partitions 2 --replication-factor 1
+bash sql/crear_temas_kafka.sh
 ```
 
 ### 3. Cassandra
