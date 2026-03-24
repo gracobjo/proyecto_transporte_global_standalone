@@ -11,7 +11,7 @@ fi
 if [ ! -d .git ]; then
   git init
   git add .
-  git commit -m "Documentación y código: gemelo digital logístico España"
+  git commit -m "Documentación y código: SIMLOG España"
   git branch -M main
   git remote add origin "$REMOTE"
   git push -u origin main

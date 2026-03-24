@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sistema de Gemelo Digital Logístico - Fase I: Ingesta KDD
+SIMLOG España — Fase I: Ingesta KDD
 - Consulta climática API OpenWeather (5 Hubs)
 - Simulación de incidentes (OK/Congestionado/Bloqueado)
 - Interpolación GPS cada 15 min para 5 camiones

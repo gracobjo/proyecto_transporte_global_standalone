@@ -1,5 +1,5 @@
 """
-Sistema de Gemelo Digital Logístico - Fase I: Ingesta y Simulación (KDD)
+SIMLOG España — Fase I: Ingesta y simulación (KDD)
 Ruta base: ~/proyecto_transporte_global/
 """
 

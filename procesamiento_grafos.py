@@ -1,5 +1,5 @@
 """
-Sistema de Gemelo Digital Logístico - Fase II y III: Procesamiento de Grafos
+SIMLOG España — Fase II y III: Procesamiento de grafos
 Ruta base: ~/proyecto_transporte_global/
 """
 

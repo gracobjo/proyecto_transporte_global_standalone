@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Capa de Persistencia Relacional Histórica - Hive
--- Sistema de Gemelo Digital Logístico - España
+-- SIMLOG España — esquema Hive (referencia)
 -- Base de datos: logistica_analytics
 -- =============================================================================
 

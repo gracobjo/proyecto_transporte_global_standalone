@@ -82,7 +82,7 @@ Estos DAGs están en la carpeta **`orquestacion/`** del proyecto. Para que Airfl
   - **arrancar_kafka:** Si el puerto 9092 no está en uso, arranca el broker Kafka (usa `KAFKA_HOME`, por defecto `/opt/kafka`).
 - Las tres tareas se ejecutan en paralelo. Si un servicio ya está activo, la tarea no hace nada.
 
-### 2. `dag_maestro_transporte` (`dag_maestro.py`)
+### 2. `simlog_pipeline_maestro` (`dag_maestro.py`)
 
 - **Propósito:** Pipeline principal cada 15 minutos: verificar servicios y ejecutar Ingesta → Procesamiento.
 - **Schedule:** Cada 15 minutos (`timedelta(minutes=15)`).
@@ -122,14 +122,64 @@ Si en tu máquina la carpeta de DAGs es `~/airflow/dags`, pueden existir DAGs ad
   - **generar_reporte_inteligente:** Exporta datos desde Cassandra a CSV y añade nivel de riesgo.
 - **Dependencias:** [verificar_hdfs, verificar_yarn, verificar_kafka, verificar_cassandra] → ejecutar_mineria_grafos → generar_reporte_inteligente.
 
-### `gemelo_digital_setup` (ej. `dag_setup_gemelo.py`)
+### `simlog_setup` (ej. `dag_setup_simlog.py` si existe en tu `~/airflow/dags`)
 
 - **Propósito:** Setup inicial (ejecutar una vez o bajo demanda): crear esquema Cassandra, esquema Hive y topic Kafka.
 - **Tareas:** setup_cassandra → setup_hive y setup_kafka_topic (en paralelo).
 
-### `dag_maestro_gemelo` (ej. `dag_maestro_gemelo.py`)
+### `simlog_pipeline_maestro` (`orquestacion/dag_maestro.py`)
 
-- **Propósito:** Similar al `dag_maestro_transporte` del repo: verificación de HDFS, Kafka, Cassandra y Hive, luego ingesta y procesamiento de grafos cada 15 minutos.
+- **Propósito:** Verificación de HDFS, Kafka y Cassandra, luego ingesta y procesamiento de grafos cada 15 minutos (nombre de DAG alineado con SIMLOG).
+
+## Problemas típicos y solución rápida
+
+- **No aparecen todos los DAGs en la UI o en `airflow dags list`**:
+  1. Verifica que `AIRFLOW_HOME` apunta a `~/airflow` y que los ficheros `dag_*.py` están en `~/airflow/dags`.
+  2. Asegúrate de que **no hay enlaces simbólicos recursivos** (por ejemplo `orquestacion -> /home/hadoop/proyecto_transporte_global/orquestacion` dentro de esa misma carpeta).
+  3. Desde el proyecto, con el entorno virtual activado, vuelve a serializar los DAGs en la base de datos:
+
+     ```bash
+n### Arranque de Airflow con Docker (opcional)
+
+En máquinas justas de recursos se puede levantar solo Airflow en Docker, manteniendo HDFS/Kafka/Cassandra en el host o en otros contenedores.
+
+1. Construir y arrancar el servicio de Airflow:
+
+   ```bash
+   cd ~/proyecto_transporte_global
+   docker compose -f docker-compose.airflow.yml up --build
+   ```
+
+2. Acceder a la interfaz web/API:
+
+   - URL: http://localhost:8080
+   - Usuario: `admin`
+   - Contraseña: `admin` (creada automáticamente si no existe).
+
+3. Detener el contenedor cuando no sea necesario:
+
+   ```bash
+   docker compose -f docker-compose.airflow.yml down
+   ```
+
+Los DAGs se leen desde la carpeta `orquestacion/` del proyecto, montada dentro del contenedor en `/opt/airflow/dags`.
+
+     cd ~/proyecto_transporte_global
+     source venv_transporte/bin/activate
+     export AIRFLOW_HOME=~/airflow
+     airflow dags reserialize
+     ```
+
+  4. Espera unos segundos, ejecuta `airflow dags list` y refresca la web de Airflow (F5).
+
+- **Quiero ver los logs del api-server en la terminal**:
+  - Lanza el servidor **sin `-D`** para que no vaya a segundo plano:
+
+    ```bash
+    airflow api-server -H 0.0.0.0 -p 8080
+    ```
+
+    Esa terminal quedará ocupada mostrando los logs hasta que pulses `Ctrl+C`.
 
 ---
 

@@ -1,6 +1,6 @@
 """
 Capa de Persistencia Relacional Histórica - Hive
-Sistema de Gemelo Digital Logístico - España
+SIMLOG España — persistencia Hive
 
 Hive almacena el histórico completo cada 15 minutos.
 Permite análisis de tendencias futuro (ej. "¿En qué meses hay más incendios?")

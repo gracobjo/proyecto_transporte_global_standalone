@@ -1,10 +1,20 @@
 """
-Sistema de Gemelo Digital Logístico - Configuración central
+SIMLOG España — configuración central
 Paths de JARs y parámetros configurables
 """
 import os
 
 BASE_PATH = os.path.expanduser("~/proyecto_transporte_global")
+
+# --- Marca del proyecto (UI, documentación, NiFi, tags) ---
+PROJECT_DISPLAY_NAME = os.environ.get("PROJECT_DISPLAY_NAME", "SIMLOG España")
+PROJECT_SLUG = "simlog_es"
+PROJECT_TAGLINE = "Monitorización y simulación logística en red (España)"
+PROJECT_DESCRIPTION = (
+    "Sistema Integrado de Monitorización y Simulación Logística: ingesta, minería de "
+    "grafos, persistencia y visualización en el ciclo KDD."
+)
+NIFI_PROCESS_GROUP_NAME = "PG_SIMLOG_KDD"
 
 # JARs - Configurables según instalación
 JAR_GRAPHFRAMES = os.environ.get(
@@ -46,9 +56,14 @@ HDFS_NAMENODE = os.environ.get("HDFS_NAMENODE", "127.0.0.1:9000")
 HDFS_BACKUP_PATH = os.environ.get("HDFS_BACKUP_PATH", "/user/hadoop/transporte_backup")
 
 # Hive (para histórico; en Docker usar HIVE_METASTORE_URIS si aplica)
-HIVE_DB = os.environ.get("HIVE_DB", "logistica_espana")
+HIVE_DB = os.environ.get("HIVE_DB", "logistica_db")
 HIVE_METASTORE_URIS = os.environ.get("HIVE_METASTORE_URIS", "")  # ej: thrift://hive-metastore:9083
 HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 para JDBC/beeline
+# JDBC para beeline / clientes (cuadro de mando, integraciones)
+HIVE_JDBC_URL = os.environ.get("HIVE_JDBC_URL", "jdbc:hive2://localhost:10000")
 
 # NiFi (opcional; URL de la UI para documentación o integración)
 NIFI_URL = os.environ.get("NIFI_URL", "http://127.0.0.1:8080/nifi")
+
+# Coste orientativo de retrasos (€/min) — rutas híbridas / dashboard
+COSTE_EURO_MINUTO_RETASO = float(os.environ.get("SIMLOG_COSTE_RETASO_EUR_MIN", "2.5"))

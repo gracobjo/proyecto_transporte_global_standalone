@@ -1,5 +1,5 @@
 -- =============================================================================
--- Sistema de Gemelo Digital Logístico - España
+-- SIMLOG España — esquema Cassandra
 -- Esquema Cassandra para nodos_estado, tracking_camiones e histórico Hive-equivalent
 -- Ejecutar: cqlsh -f esquema_logistica.cql
 -- =============================================================================
