@@ -160,10 +160,11 @@ Todo lo que se escribe en Cassandra (y en Hive si aplica) pasa por esta capa ant
 
 ---
 
-## 6. ¿Se cumplen los requisitos de la práctica (Proyecto Big Data.pdf)?
+## 6. Cumplimiento de requisitos (estado actual)
 
-**No tengo acceso al archivo *Proyecto Big Data.pdf***, por lo que no puedo comprobar literalmente cada ítem. Lo que sigue es una **lista típica de requisitos** en prácticas de Big Data y cómo se cubren en **esta infraestructura (sin NiFi)**. Debes cotejarlo con tu PDF.
+En el estado actual del proyecto:
 
+<<<<<<< HEAD
 | Requisito típico | En este proyecto (sin NiFi) |
 |------------------|-----------------------------|
 | **Ingesta de datos** | Sí: script de ingesta (API clima + simulación) → Kafka + HDFS. |
@@ -176,7 +177,20 @@ Todo lo que se escribe en Cassandra (y en Hive si aplica) pasa por esta capa ant
 | **Visualización o dashboard** | Sí: Streamlit + Folium leyendo de Cassandra. |
 | **Orquestación (Airflow u otro)** | Sí: DAG que lanza Ingesta → Procesamiento. |
 | **NiFi** | No: no está en la infraestructura actual; si el PDF lo exige, habría que incorporarlo (p. ej. para ingesta o flujos adicionales). |
+=======
+| Requisito típico | Estado actual |
+|------------------|---------------|
+| **Ingesta de datos** | Sí: NiFi + script de ingesta (OpenWeather + simulación GPS). |
+| **Almacenamiento distribuido (HDFS)** | Sí: backup JSON por ventana temporal. |
+| **Procesamiento Big Data (Spark)** | Sí: GraphFrames, autosanación, métricas y persistencia. |
+| **Almacenamiento NoSQL (Cassandra)** | Sí: estado operativo de red y camiones. |
+| **Almacenamiento analítico (Hive)** | Sí: histórico y consultas supervisadas. |
+| **Cola de mensajes (Kafka)** | Sí: topics `transporte_raw` y `transporte_filtered`. |
+| **Calidad de datos** | Sí: limpieza previa a persistencia (nulos, duplicados, normalización). |
+| **Visualización** | Sí: Streamlit + mapa y paneles operativos. |
+| **Orquestación** | Sí: Airflow y trigger periódico en NiFi. |
+| **NiFi** | Sí: integrado y operativo en el pipeline e2e. |
+>>>>>>> 047e769 (feat: estabilizar stack y documentar arquitectura KDD completa)
 
-Conclusión: con esta infraestructura **se cubren** ingestion, HDFS, Spark, Cassandra, Hive, Kafka, visualización y orquestación. La parte de **calidad de datos (nulos, duplicados, normalización)** se cumple si se añade el paso descrito antes de escribir en Cassandra. Si el enunciado exige **NiFi** expresamente, ese requisito no se cumple hasta que se integre NiFi en el flujo.
-
-**Checklist detallado frente al PDF:** En **`docs/REQUIREMENTS_CHECKLIST.md`** se coteja cada requisito del enunciado (*Proyecto Big Data.pdf*, en la raíz del repo) con el estado actual del proyecto (Fases I–IV KDD, rúbrica y qué falta para cumplir al 100%, incluida la integración de NiFi).
+Conclusión: la arquitectura actual cubre el ciclo completo KDD con stack Apache en modo standalone.  
+Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMENTS_CHECKLIST.md`.

@@ -1,96 +1,159 @@
 # Especificación del flujo NiFi — SIMLOG España
-# v2: flujo compacto (ingesta funcional con un ExecuteScript Groovy completo)
-# v1: flujo granular (Timer + GPS + InvokeHTTP + Merge) — ver PROCESADORES_Y_RELACIONES.md
+# PG completo para este proyecto:
+# 1) Ingesta GPS + OpenWeather cada 15 min
+# 2) Publicación Kafka (raw + filtered)
+# 3) Persistencia HDFS desde Kafka
+# 4) Trigger de Spark para guardar en Cassandra + Hive
 
 meta:
   process_group: PG_SIMLOG_KDD
-  version: "2.0"
+  version: "3.0"
+  scope: "standalone"
   description: >
-    Ingesta KDD alineada con ingesta/ingesta_kdd.py y config.py:
-    JSON → Kafka (raw + filtered) + HDFS; Spark opcional vía ExecuteProcess.
+    Grupo único de procesadores y relaciones usado en SIMLOG.
+    La ingesta se ejecuta cada 15 minutos, construye un snapshot con GPS y OpenWeather,
+    publica a Kafka y persiste en HDFS. A partir del topic filtered se lanza Spark,
+    que persiste en Cassandra y Hive.
 
-# --- v2 · RECOMENDADO (un FlowFile = un snapshot) ---
-processors_v2:
-  - id: V01
+parameter_context_required:
+  - KAFKA_BOOTSTRAP
+  - TOPIC_RAW
+  - TOPIC_FILTERED
+  - OWM_API_KEY
+  - HDFS_BACKUP_PATH
+  - PROJECT_ROOT
+  - SPARK_HOME
+  - SPARK_MASTER
+  - DEPLOY_MODE
+
+processors:
+  # --- INGESTA ---
+  - id: N01
     type: GenerateFlowFile
     name: Timer_Ingesta_15min
+    scheduling_strategy: TIMER_DRIVEN
     scheduling_period: "15 min"
+    run_schedule_note: "Disparo principal del pipeline KDD."
     properties:
       Batch Size: "1"
       Data Format: Text
 
-  - id: V02
+  - id: N02
     type: UpdateAttribute
-    name: Set_OWM_Key_y_Paso
+    name: Set_Parametros_Ingesta
     properties:
-      paso_15min: "0"
       owm.api.key: "${OWM_API_KEY}"
+      simlog.interval.min: "15"
 
-  - id: V03
+  - id: N03
     type: ExecuteScript
-    name: Build_JSON_Ingesta_KDD
+    name: Build_JSON_GPS_OpenWeather
     properties:
       Script Engine: Groovy
-      Script Body: "<pegar nifi/groovy/GenerateFullPayloadSimlog.groovy>"
+      Script File: "${PROJECT_ROOT}/nifi/groovy/GenerateFullPayloadSimlog.groovy"
+    output_contract:
+      mime.type: application/json
+      payload_keys:
+        - timestamp
+        - clima
+        - estados_nodos
+        - estados_aristas
+        - camiones
 
-  - id: V04
+  - id: N04
     type: PublishKafka
-    name: Kafka_Topic_RAW
+    name: Kafka_Publish_RAW
     properties:
       Kafka Brokers: "${KAFKA_BOOTSTRAP}"
       Topic Name: "${TOPIC_RAW}"
+      Delivery Guarantee: "at_least_once"
 
-  - id: V05
+  - id: N05
     type: PublishKafka
-    name: Kafka_Topic_FILTERED
+    name: Kafka_Publish_FILTERED
     properties:
       Kafka Brokers: "${KAFKA_BOOTSTRAP}"
       Topic Name: "${TOPIC_FILTERED}"
+      Delivery Guarantee: "at_least_once"
 
-  - id: V06
+  # --- PERSISTENCIA HDFS DESDE KAFKA ---
+  - id: N06
+    type: ConsumeKafka
+    name: Kafka_Consume_Filtered_for_HDFS
+    scheduling_strategy: TIMER_DRIVEN
+    scheduling_period: "30 sec"
+    properties:
+      Kafka Brokers: "${KAFKA_BOOTSTRAP}"
+      Topic Name: "${TOPIC_FILTERED}"
+      Group ID: "nifi_hdfs_writer"
+
+  - id: N07
     type: PutHDFS
     name: HDFS_Backup_JSON
     properties:
       Hadoop Configuration Resources: "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml"
-      Directory: "${HDFS_BACKUP_PATH}"
+      Directory: "${HDFS_BACKUP_PATH}/${now():format('yyyy/MM/dd')}"
       Conflict Resolution: replace
 
-  - id: V07
+  # --- TRIGGER SPARK PARA CASSANDRA + HIVE ---
+  - id: N08
+    type: ConsumeKafka
+    name: Kafka_Consume_Filtered_for_Spark
+    scheduling_strategy: TIMER_DRIVEN
+    scheduling_period: "30 sec"
+    properties:
+      Kafka Brokers: "${KAFKA_BOOTSTRAP}"
+      Topic Name: "${TOPIC_FILTERED}"
+      Group ID: "nifi_spark_trigger"
+
+  - id: N09
     type: ExecuteProcess
-    name: Spark_Submit_Opcional
-    enabled: false
-    note: "Mismo rol que nifi/scripts/spark_submit_yarn.sh si no usas Airflow/dashboard"
+    name: Spark_Submit_Procesamiento
+    properties:
+      Command Path: /bin/bash
+      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/spark_submit_yarn.sh"
+    note: >
+      Este job ejecuta procesamiento/procesamiento_grafos.py y persiste en
+      Cassandra (tiempo real) + Hive (histórico).
 
-connections_v2:
-  - { from: V01, to: V02, relationship: success }
-  - { from: V02, to: V03, relationship: success }
-  - { from: V03, to: V04, relationship: success }
-  - { from: V03, to: V05, relationship: success }
-  - { from: V03, to: V06, relationship: success }
-  - { from: V03, to: _DLQ, relationship: failure, note: "LogAttribute / PutFile opcional" }
-  - { from: V06, to: V07, relationship: success, optional: true }
+  # --- OBSERVABILIDAD / ERRORES ---
+  - id: N10
+    type: LogAttribute
+    name: Log_Fallos
+    properties:
+      Log Level: error
 
-# --- v1 · LEGACY (granular; revisar MergeContent antes de producción) ---
-processors_v1_legacy:
-  - id: P01
-    type: GenerateFlowFile
-    name: Timer_Ingesta_15min
-  - id: P02
-    type: ExecuteScript
-    name: Synthetic_GPS_only
-    note: "nifi/groovy/GenerateSyntheticPayload.groovy — sin clima real"
-  - id: P03
-    type: UpdateAttribute
-    name: Set_OWM_URL_Madrid
-  - id: P04
-    type: InvokeHTTP
-    name: OpenWeather_HTTP
-  - id: P05
-    type: MergeContent
-    name: Merge_Synthetic_and_Weather
-    warning: "Debe recibir exactamente N FlowFiles por ciclo; fácil desincronizar"
+  - id: N11
+    type: PutFile
+    name: DLQ_Local
+    properties:
+      Directory: "${PROJECT_ROOT}/logs/nifi_dlq"
+      Conflict Resolution Strategy: replace
 
-notes_v1:
-  - "Preferir v2 para ingesta estable."
-  - "Duplicar P03+P04 para 5 hubs o usar RouteOnAttribute + fork."
-  - "Tras Kafka/HDFS, Spark escribe Cassandra/Hive (no NiFi fila a fila)."
+connections:
+  # Ingesta
+  - { from: N01, to: N02, relationship: success }
+  - { from: N02, to: N03, relationship: success }
+  - { from: N03, to: N04, relationship: success }
+  - { from: N03, to: N05, relationship: success }
+
+  # HDFS branch (consume filtered)
+  - { from: N06, to: N07, relationship: success }
+
+  # Spark branch (consume filtered)
+  - { from: N08, to: N09, relationship: success }
+
+  # Errores comunes
+  - { from: N03, to: N10, relationship: failure }
+  - { from: N04, to: N10, relationship: failure }
+  - { from: N05, to: N10, relationship: failure }
+  - { from: N06, to: N10, relationship: failure }
+  - { from: N07, to: N10, relationship: failure }
+  - { from: N08, to: N10, relationship: failure }
+  - { from: N09, to: N10, relationship: failure }
+  - { from: N10, to: N11, relationship: success }
+
+runtime_notes:
+  - "TOPIC_FILTERED actúa como punto de integración para HDFS y trigger Spark."
+  - "Evitar ejecutar en paralelo este trigger con Airflow para no duplicar procesamiento."
+  - "Si prefieres Spark solo por lotes, deja N08/N09 en stopped."

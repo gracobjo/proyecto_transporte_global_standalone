@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Casos de uso (SIMLOG España)
 
 Documento de casos de uso funcionales para la plataforma en modo standalone.
@@ -71,3 +72,61 @@ Documento de casos de uso funcionales para la plataforma en modo standalone.
 - **Entrada**: orden de operación (iniciar/comprobar/parar).
 - **Flujo**: comandos de servicio y chequeo por puertos.
 - **Salida**: estado técnico actualizado por componente.
+=======
+# Casos de uso — SIMLOG
+
+## Actores
+
+- **Operador de plataforma**: monitoriza y arranca/parada servicios.
+- **Analista logístico**: consulta estado de red, rutas y métricas.
+- **Planificador**: evalúa impacto operativo y alternativas.
+- **Sistema programador**: Airflow/NiFi ejecutan procesos automáticos.
+
+## Casos de uso principales
+
+### CU-01 — Ejecutar ciclo KDD completo
+
+- **Actor**: Sistema programador / Operador.
+- **Precondiciones**: Kafka, HDFS, Cassandra, Spark (y opcional Hive) activos.
+- **Flujo**:
+  1. Disparo cada 15 min.
+  2. Ingesta genera snapshot.
+  3. Publicación en Kafka y backup en HDFS.
+  4. Spark procesa y persiste en Cassandra/Hive.
+- **Postcondición**: estado operativo actualizado y histórico persistido.
+
+### CU-02 — Supervisar servicios del stack
+
+- **Actor**: Operador.
+- **Flujo**:
+  1. Consulta panel de servicios.
+  2. Inicia/parar/comprueba servicios.
+  3. Revalida puertos y estado.
+- **Postcondición**: stack en estado consistente para operación.
+
+### CU-03 — Visualizar estado de red y camiones
+
+- **Actor**: Analista logístico.
+- **Flujo**:
+  1. Abre dashboard Streamlit.
+  2. Consulta mapa operativo y métricas.
+  3. Revisa nodos/aristas/camiones/PageRank.
+- **Postcondición**: diagnóstico operativo de la red.
+
+### CU-04 — Consultar histórico analítico
+
+- **Actor**: Analista logístico.
+- **Flujo**:
+  1. Ejecuta consultas supervisadas en Hive.
+  2. Cruza resultados con estado actual de Cassandra.
+- **Postcondición**: análisis histórico y tendencias.
+
+### CU-05 — Evaluar rutas híbridas
+
+- **Actor**: Planificador.
+- **Flujo**:
+  1. Selecciona origen/destino.
+  2. Calcula ruta principal y alternativas.
+  3. Evalúa coste/retardo estimado.
+- **Postcondición**: decisión de ruta con soporte analítico.
+>>>>>>> 047e769 (feat: estabilizar stack y documentar arquitectura KDD completa)

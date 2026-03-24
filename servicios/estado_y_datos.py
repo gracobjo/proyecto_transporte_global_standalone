@@ -23,6 +23,10 @@ def _socket_ok(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def _socket_ok_hosts(hosts: List[str], port: int, timeout: float = 2.0) -> bool:
+    return any(_socket_ok(h, port, timeout=timeout) for h in hosts)
+
+
 def estado_servicios() -> Dict[str, str]:
     """
     Estado para la barra lateral: mismo orden y etiquetas que el usuario espera ver.
@@ -30,11 +34,11 @@ def estado_servicios() -> Dict[str, str]:
     Cassandra usa CASSANDRA_HOST de `config.py`.
     """
     checks = [
-        ("HDFS NameNode", "127.0.0.1", 9870),
-        ("Kafka", "127.0.0.1", 9092),
-        ("Cassandra", CASSANDRA_HOST, 9042),
+        ("HDFS NameNode", ["127.0.0.1", "localhost"], 9870),
+        ("Kafka", ["127.0.0.1", "localhost"], 9092),
+        ("Cassandra", [CASSANDRA_HOST, "127.0.0.1", "localhost"], 9042),
     ]
-    return {n: ("✅ Activo" if _socket_ok(h, p) else "❌ Inactivo") for n, h, p in checks}
+    return {n: ("✅ Activo" if _socket_ok_hosts(hosts, p) else "❌ Inactivo") for n, hosts, p in checks}
 
 
 def verificar_hdfs_ruta(ruta: str) -> str:

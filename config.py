@@ -3,6 +3,29 @@ SIMLOG España — configuración central
 Paths de JARs y parámetros configurables
 """
 import os
+from pathlib import Path
+
+
+def _cargar_env_local() -> None:
+    """
+    Carga variables desde `.env` en la raíz del proyecto si existen.
+    No sobreescribe variables ya definidas en el entorno.
+    """
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        key = k.strip()
+        val = v.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_cargar_env_local()
 
 BASE_PATH = os.path.expanduser("~/proyecto_transporte_global")
 
@@ -93,7 +116,8 @@ HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 p
 HIVE_JDBC_URL = os.environ.get("HIVE_JDBC_URL", "jdbc:hive2://localhost:10000")
 
 # NiFi (opcional; URL de la UI para documentación o integración)
-NIFI_URL = os.environ.get("NIFI_URL", "http://127.0.0.1:8080/nifi")
+# Importante: usar localhost por SNI/TLS del certificado por defecto de NiFi.
+NIFI_URL = os.environ.get("NIFI_URL", "https://localhost:8443/nifi")
 
 # Coste orientativo de retrasos (€/min) — rutas híbridas / dashboard
 COSTE_EURO_MINUTO_RETASO = float(os.environ.get("SIMLOG_COSTE_RETASO_EUR_MIN", "2.5"))

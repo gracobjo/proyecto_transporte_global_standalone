@@ -1,0 +1,34 @@
+@startuml
+skinparam componentStyle rectangle
+
+actor "Usuario" as User
+
+component "Streamlit\napp_visualizacion.py" as UI
+component "NiFi\nPG_SIMLOG_KDD" as NiFi
+component "Airflow\nDAGs" as Airflow
+component "Ingesta\ningesta_kdd.py" as Ingesta
+component "Spark\nprocesamiento_grafos.py" as Spark
+database "Kafka\nraw/filtered" as Kafka
+database "HDFS\nbackup" as HDFS
+database "Cassandra\noperacional" as Cas
+database "Hive\nhistórico" as Hive
+
+User --> UI
+User --> NiFi
+User --> Airflow
+
+NiFi --> Ingesta
+Airflow --> Ingesta
+Ingesta --> Kafka
+Ingesta --> HDFS
+
+NiFi --> Spark
+Airflow --> Spark
+Spark --> Cas
+Spark --> Hive
+Spark --> HDFS
+
+UI --> Cas
+UI --> Hive
+
+@enduml

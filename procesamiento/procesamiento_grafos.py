@@ -63,10 +63,10 @@ def cargar_estados_desde_kafka(spark):
 
 
 def crear_spark():
-    """Spark con Cassandra, JARs configurados. master=local por defecto; usar SPARK_MASTER=yarn para YARN."""
+    """Spark con Cassandra; Hive queda en modo opt-in para evitar locks del metastore."""
     os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
     master = os.environ.get("SPARK_MASTER", "local")
-    return (
+    base_builder = (
         SparkSession.builder
         .appName("SIMLOG_TransporteEspaña")
         .master(master)
@@ -81,9 +81,15 @@ def crear_spark():
         .config("spark.jars.packages", "com.datastax.spark:spark-cassandra-connector_2.12:3.5.0")
         .config("spark.eventLog.enabled", "false")
         .config("spark.hadoop.dfs.client.use.datanode.hostname", "false")
-        .enableHiveSupport()
-        .getOrCreate()
     )
+    enable_hive = os.environ.get("SIMLOG_ENABLE_HIVE", "0") == "1"
+    if not enable_hive:
+        return base_builder.getOrCreate()
+    try:
+        return base_builder.enableHiveSupport().getOrCreate()
+    except Exception as e:
+        print(f"[SPARK] Hive no disponible, continúo sin HiveSupport: {e}")
+        return base_builder.getOrCreate()
 
 
 def construir_grafo_base(spark, nodos, aristas):

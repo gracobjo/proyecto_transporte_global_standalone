@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 BASE = Path(__file__).resolve().parent.parent
 
@@ -25,7 +25,7 @@ PORT_KAFKA = int(os.environ.get("SIMLOG_PORT_KAFKA", "9092"))
 PORT_CASSANDRA = int(os.environ.get("SIMLOG_PORT_CASSANDRA", "9042"))
 PORT_HIVE = int(os.environ.get("SIMLOG_PORT_HIVE", "10000"))
 PORT_SPARK_MASTER = int(os.environ.get("SIMLOG_PORT_SPARK_MASTER", "7077"))
-PORT_AIRFLOW = int(os.environ.get("SIMLOG_PORT_AIRFLOW", "8080"))
+PORT_AIRFLOW = int(os.environ.get("SIMLOG_PORT_AIRFLOW", "8088"))
 PORT_NIFI_HTTPS = int(os.environ.get("SIMLOG_PORT_NIFI_HTTPS", "8443"))
 PORT_NIFI_HTTP = int(os.environ.get("SIMLOG_PORT_NIFI_HTTP", "8080"))
 
@@ -41,6 +41,11 @@ def puerto_activo(host: str, port: int, timeout: float = 2.0) -> bool:
         return True
     except OSError:
         return False
+
+
+def puerto_activo_en_hosts(hosts: List[str], port: int, timeout: float = 2.0) -> bool:
+    """Devuelve True si el puerto responde en cualquiera de los hosts dados."""
+    return any(puerto_activo(h, port, timeout=timeout) for h in hosts)
 
 
 def _popen_bg(cmd: List[str], cwd: Optional[Path] = None) -> None:
@@ -76,7 +81,17 @@ def _spark_home() -> Path:
 
 
 def _hive_home() -> Path:
-    return Path(os.environ.get("HIVE_HOME", "/opt/hive"))
+    env_home = os.environ.get("HIVE_HOME")
+    if env_home:
+        return Path(env_home)
+    candidates = [
+        Path("/home/hadoop/apache-hive-4.2.0-bin"),
+        Path("/opt/hive"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return Path("/opt/hive")
 
 
 def _nifi_home() -> Path:
@@ -141,7 +156,9 @@ def comprobar_cassandra() -> Dict[str, Any]:
 
 def comprobar_spark() -> Dict[str, Any]:
     """Spark standalone master (7077) o nota si no aplica."""
-    ok_master = puerto_activo("127.0.0.1", PORT_SPARK_MASTER)
+    # En algunas máquinas Spark master liga a 127.0.1.1 (hostname local) y no a 127.0.0.1.
+    spark_hosts = ["127.0.0.1", "127.0.1.1", "localhost"]
+    ok_master = puerto_activo_en_hosts(spark_hosts, PORT_SPARK_MASTER)
     sh = _spark_home()
     has_scripts = (sh / "sbin" / "start-master.sh").exists()
     return {
@@ -157,7 +174,7 @@ def comprobar_spark() -> Dict[str, Any]:
 
 
 def comprobar_hive() -> Dict[str, Any]:
-    ok = puerto_activo("127.0.0.1", PORT_HIVE)
+    ok = puerto_activo_en_hosts(["127.0.0.1", "127.0.1.1", "localhost"], PORT_HIVE)
     return {
         "id": "hive",
         "nombre": "HiveServer2",
@@ -258,7 +275,8 @@ def iniciar_cassandra() -> str:
 
 
 def iniciar_spark() -> str:
-    if puerto_activo("127.0.0.1", PORT_SPARK_MASTER):
+    spark_hosts = ["127.0.0.1", "127.0.1.1", "localhost"]
+    if puerto_activo_en_hosts(spark_hosts, PORT_SPARK_MASTER):
         return "Spark Master ya responde en el puerto configurado."
     sh = _spark_home()
     sm = sh / "sbin" / "start-master.sh"
@@ -274,16 +292,45 @@ def iniciar_spark() -> str:
 
 
 def iniciar_hive() -> str:
-    if puerto_activo("127.0.0.1", PORT_HIVE):
+    hive_hosts = ["127.0.0.1", "127.0.1.1", "localhost"]
+    if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
         return "HiveServer2 ya parece activo (puerto JDBC)."
     hh = _hive_home()
     hive_bin = hh / "bin" / "hive"
     if not hive_bin.exists():
         hive_bin = Path("/usr/bin/hive")
     if not hive_bin.exists():
-        return f"No se encontró hive en HIVE_HOME={hh}."
-    _popen_bg([str(hive_bin), "--service", "hiveserver2"], cwd=hh if hh.exists() else BASE)
-    return "HiveServer2 lanzado en segundo plano (puede tardar 1–2 min)."
+        return f"No se encontró `hive` en HIVE_HOME={hh}."
+
+    log_path = Path("/tmp/hadoop/hiveserver2-daemon.log")
+    pid_path = hh / "conf" / "hiveserver2.pid" if hh.exists() else Path("/tmp/hiveserver2.pid")
+    if pid_path.exists():
+        try:
+            old_pid = int(pid_path.read_text(encoding="utf-8").strip())
+            # Si el PID no existe, limpiamos archivo stale para que hiveserver2 no se bloquee.
+            if subprocess.run(["kill", "-0", str(old_pid)], capture_output=True).returncode != 0:
+                pid_path.unlink(missing_ok=True)
+        except Exception:
+            pid_path.unlink(missing_ok=True)
+
+    cmd = (
+        f"HIVE_CONF_DIR=\"{hh / 'conf'}\" "
+        f"nohup \"{hive_bin}\" --service hiveserver2 "
+        f">> \"{log_path}\" 2>&1 < /dev/null &"
+    )
+    code, _, err = _run(["bash", "-lc", cmd], cwd=hh if hh.exists() else BASE, timeout=20)
+    if code != 0:
+        return f"No se pudo lanzar HiveServer2: {err[-400:] if err else 'error'}"
+
+    # Comprobación activa para evitar falsos positivos de "arrancado".
+    for _ in range(18):
+        if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
+            return "HiveServer2 activo y escuchando en el puerto JDBC."
+        time.sleep(5)
+    return (
+        "HiveServer2 se lanzó pero no abrió el puerto JDBC a tiempo. "
+        "Revisa /tmp/hadoop/hiveserver2-daemon.log"
+    )
 
 
 def iniciar_airflow() -> str:
@@ -298,9 +345,16 @@ def iniciar_airflow() -> str:
         cmd = [sys.executable, "-m", "airflow", "api-server", "-p", str(PORT_AIRFLOW), "-H", "0.0.0.0"]
     try:
         subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(24):
+            if puerto_activo("127.0.0.1", PORT_AIRFLOW):
+                return (
+                    f"Airflow api-server activo (puerto {PORT_AIRFLOW}). "
+                    "En otra terminal: `airflow scheduler` si necesitas ejecutar DAGs."
+                )
+            time.sleep(1)
         return (
-            f"Airflow api-server lanzado (puerto {PORT_AIRFLOW}). "
-            "En otra terminal: `airflow scheduler` si necesitas ejecutar DAGs."
+            f"Airflow se lanzó pero no abrió el puerto {PORT_AIRFLOW} a tiempo. "
+            "Revisa configuración de Airflow/AIRFLOW_HOME."
         )
     except Exception as e:
         return f"No se pudo lanzar Airflow: {e}"
@@ -403,7 +457,12 @@ def parar_spark() -> str:
 
 
 def parar_hive() -> str:
-    return _kill_port(PORT_HIVE)
+    msg = _kill_port(PORT_HIVE)
+    for _ in range(12):
+        if not puerto_activo_en_hosts(["127.0.0.1", "127.0.1.1", "localhost"], PORT_HIVE):
+            return msg
+        time.sleep(1)
+    return f"{msg} (el puerto {PORT_HIVE} sigue activo; puede tardar en cerrar)."
 
 
 def parar_airflow() -> str:

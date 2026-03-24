@@ -54,10 +54,14 @@ def render_panel_gestion_servicios() -> None:
                 if st.button("Iniciar", key=f"svc_start_{sid}", width="stretch"):
                     msg = ejecutar_iniciar(sid)
                     st.info(msg)
+                    st.session_state["servicios_refresh_nonce"] = st.session_state.get("servicios_refresh_nonce", 0) + 1
+                    st.rerun()
             with c3:
                 if st.button("Comprobar", key=f"svc_check_{sid}", width="stretch"):
                     r = ejecutar_comprobar(sid)
                     st.info(f"{r.get('nombre')}: {'OK' if r.get('activo') else 'no responde'} — {r.get('detalle', '')}")
+                    st.session_state["servicios_refresh_nonce"] = st.session_state.get("servicios_refresh_nonce", 0) + 1
+                    st.rerun()
             with c4:
                 if st.button(
                     "Parar",
@@ -68,5 +72,7 @@ def render_panel_gestion_servicios() -> None:
                 ):
                     msg = ejecutar_parar(sid)
                     st.warning(msg)
+                    st.session_state["servicios_refresh_nonce"] = st.session_state.get("servicios_refresh_nonce", 0) + 1
+                    st.rerun()
 
             render_bloque_interfaz_web(sid)

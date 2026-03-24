@@ -1,0 +1,25 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+
+actor "Operador" as Operador
+actor "Analista logístico" as Analista
+actor "Planificador" as Planificador
+actor "Programador\n(Airflow/NiFi)" as Scheduler
+
+rectangle "SIMLOG" {
+  usecase "CU-01 Ejecutar ciclo KDD" as CU1
+  usecase "CU-02 Supervisar servicios" as CU2
+  usecase "CU-03 Visualizar estado de red" as CU3
+  usecase "CU-04 Consultar histórico" as CU4
+  usecase "CU-05 Evaluar rutas híbridas" as CU5
+}
+
+Operador --> CU2
+Operador --> CU1
+Analista --> CU3
+Analista --> CU4
+Planificador --> CU5
+Scheduler --> CU1
+
+@enduml

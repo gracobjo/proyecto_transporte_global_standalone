@@ -1,0 +1,21 @@
+@startuml
+actor "Scheduler\n(NiFi/Airflow)" as SCH
+participant "Ingesta" as ING
+participant "Kafka" as K
+participant "HDFS" as H
+participant "Spark" as S
+participant "Cassandra" as C
+participant "Hive" as HV
+participant "Dashboard" as UI
+
+SCH -> ING: Trigger (cada 15 min)
+ING -> K: Publica snapshot (raw/filtered)
+ING -> H: Guarda backup JSON
+SCH -> S: Ejecuta procesamiento
+S -> H: Lee backup / staging
+S -> C: Escribe estado operativo
+S -> HV: Escribe histórico
+UI -> C: Lee estado actual
+UI -> HV: Consulta histórico (opcional)
+
+@enduml

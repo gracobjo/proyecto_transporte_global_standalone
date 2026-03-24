@@ -7,6 +7,7 @@ Este directorio describe el **grupo de procesadores** y el flujo de datos alinea
 
 > **Nota:** NiFi no sustituye a Spark en memoria: orquesta **ingesta y disparo de jobs**. El procesamiento masivo (GraphFrames) sigue siendo `procesamiento/procesamiento_grafos.py` o un JAR equivalente.
 
+<<<<<<< HEAD
 ## Ejecucion local en Windows (sin Docker)
 
 Guia y scripts listos en:
@@ -17,25 +18,33 @@ Guia y scripts listos en:
 - `nifi/local/stop_nifi_local_windows.ps1`
 
 ## Resumen de arquitectura
+=======
+## Resumen de arquitectura (grupo completo usado en el proyecto)
+>>>>>>> 047e769 (feat: estabilizar stack y documentar arquitectura KDD completa)
 
 ```text
                     ┌─────────────────────────────────────────────────────────┐
                     │  Process Group: PG_SIMLOG_KDD                             │
                     └─────────────────────────────────────────────────────────┘
- [Timer] ──► [GPS sintético] ──┬──► [InvokeHTTP clima] ──► [Merge] ──► [JSON final]
-                               │              ▲
-                               └──────────────┘
-                    │                    │
-                    ▼                    ▼
-              [PublishKafka]      [PutHDFS raw]
-              (transporte_raw)  (/user/hadoop/.../nifi_raw/)
-                    │                    │
-                    └────────┬───────────┘
-                             ▼
-                    [ExecuteProcess]  spark-submit --master yarn ...
-                             │
-                             ▼
-                    Cassandra + Hive (vía Spark / PutHiveQL opcional)
+ [Timer 15 min]
+      │
+      ▼
+ [ExecuteScript Groovy]
+ (GPS + OpenWeather)
+      │
+      ├──► [PublishKafka transporte_raw]
+      └──► [PublishKafka transporte_filtered]
+                 │
+        ┌────────┴────────┐
+        ▼                 ▼
+ [ConsumeKafka]      [ConsumeKafka]
+   for HDFS           for Spark trigger
+        │                 │
+        ▼                 ▼
+   [PutHDFS]       [ExecuteProcess spark-submit]
+                           │
+                           ▼
+                 Cassandra + Hive (vía Spark)
 ```
 
 ## Parámetros del Parameter Context (recomendado)
@@ -58,7 +67,10 @@ Los valores por defecto del proyecto coinciden con `config.py`.
 
 ## Grupo de procesadores: `PG_SIMLOG_KDD`
 
-Orden lógico y tipos de procesador **Apache NiFi 1.x / 2.x** (nombres pueden variar según versión; buscar en el palette el equivalente `PublishKafka_2_6`, etc.).
+Orden lógico y tipos de procesador **Apache NiFi 1.x / 2.x** (los nombres exactos pueden variar por versión).
+
+> Montaje operativo paso a paso: `flow/MONTAJE_UI_NIFI.md`  
+> Especificación declarativa: `flow/simlog_kdd_flow_spec.yaml`
 
 ### 1. Orquestación y datos sintéticos (GPS)
 

@@ -11,8 +11,18 @@
 | [CASOS_DE_USO.md](CASOS_DE_USO.md) | Catálogo de casos de uso funcionales del proyecto |
 | [FLUJO_DATOS_Y_REQUISITOS.md](FLUJO_DATOS_Y_REQUISITOS.md) | Flujo de datos, ejemplos JSON, Hive/Cassandra |
 | [REQUIREMENTS_CHECKLIST.md](REQUIREMENTS_CHECKLIST.md) | Checklist frente al PDF del enunciado |
+| [DISENO_SISTEMA.md](DISENO_SISTEMA.md) | Diseño lógico, decisiones y restricciones del sistema |
+| [CASOS_DE_USO.md](CASOS_DE_USO.md) | Actores y casos de uso funcionales principales |
 | [AIRFLOW.md](AIRFLOW.md) | Arranque de Airflow (api-server + scheduler) |
 | [YARN_Y_SPARK.md](YARN_Y_SPARK.md) | Notas sobre YARN vs Spark local |
+
+## UML
+
+Diagramas UML (PlantUML):
+
+- `uml/casos_uso_simlog.puml`
+- `uml/componentes_simlog.puml`
+- `uml/secuencia_kdd_15min.puml`
 
 ## Referencia externa
 

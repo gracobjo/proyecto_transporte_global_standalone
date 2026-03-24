@@ -10,6 +10,9 @@ Si SIMLOG_UI_REVEAL_SECRETS=1, se muestran contraseñas en claro (solo entornos 
 from __future__ import annotations
 
 import os
+import socket
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from dataclasses import dataclass
 from typing import Optional
 
@@ -89,11 +92,11 @@ def _defaults() -> dict[str, InterfazWebServicio]:
         "spark": InterfazWebServicio(
             servicio_id="spark",
             nombre="Spark Master / History",
-            url=f"http://{h}:8081",
-            puerto="8081",
+            url=f"http://{h}:8080",
+            puerto="8080",
             usuario="",
             password_env="SIMLOG_UI_SPARK_PASSWORD",
-            nota="Master UI (standalone). 8081 evita choque con Airflow en 8080. Ajusta si tu cluster usa otro puerto.",
+            nota="Master UI (standalone). Si usas History Server, define SIMLOG_UI_SPARK_URL (ej. http://host:18080).",
         ),
         "hive": InterfazWebServicio(
             servicio_id="hive",
@@ -107,25 +110,49 @@ def _defaults() -> dict[str, InterfazWebServicio]:
         "airflow": InterfazWebServicio(
             servicio_id="airflow",
             nombre="Airflow",
-            url=f"http://{h}:8080",
-            puerto="8080",
+            url=f"http://{h}:8088",
+            puerto="8088",
             usuario="admin",
             password_env="SIMLOG_UI_AIRFLOW_PASSWORD",
-            nota="Web / API Airflow 2.x. Crea usuario con `airflow users create` y define credenciales en variables de entorno.",
+            nota="Web / API Airflow 2.x (normal recomendado en este stack: 8088 para no chocar con Spark 8080). Crea usuario con `airflow users create` y define credenciales en variables de entorno.",
         ),
         "nifi": InterfazWebServicio(
             servicio_id="nifi",
             nombre="Apache NiFi",
-            url=f"https://{h}:8443/nifi",
+            url="https://localhost:8443/nifi",
             puerto="8443",
             usuario="",
             password_env="SIMLOG_UI_NIFI_PASSWORD",
-            nota="HTTPS. Credenciales iniciales en logs de NiFi o configuración de seguridad.",
+            nota="HTTPS. Usa localhost por SNI/TLS; con 127.0.0.1 puede fallar 'Invalid SNI' según certificado.",
         ),
     }
 
 
 _CACHE: Optional[dict[str, InterfazWebServicio]] = None
+
+
+def _puerto_abierto_desde_url(url: str, timeout: float = 0.8) -> bool:
+    try:
+        p = urlparse(url)
+        host = p.hostname
+        if not host:
+            return False
+        port = p.port or (443 if p.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _http_contiene(url: str, texto: str, timeout: float = 1.2) -> bool:
+    """Comprobacion ligera para evitar enlazar a una UI equivocada en el mismo puerto."""
+    try:
+        req = Request(url, headers={"User-Agent": "simlog-ui-check/1.0"})
+        with urlopen(req, timeout=timeout) as r:
+            body = r.read(4096).decode("utf-8", errors="ignore").lower()
+            return texto.lower() in body
+    except Exception:
+        return False
 
 
 def obtener_interfaz_web(servicio_id: str) -> InterfazWebServicio:
@@ -183,6 +210,15 @@ def render_sidebar_enlaces_ui() -> None:
             if not url:
                 st.caption(f"**{ui.nombre}:** sin URL (configura SIMLOG_UI_{ui.servicio_id.upper()}_URL)")
                 continue
+            if not _puerto_abierto_desde_url(url):
+                st.caption(f"**{ui.nombre}:** no disponible ahora ({url})")
+                continue
+            if ui.servicio_id == "airflow" and _http_contiene(url, "spark master"):
+                st.caption(
+                    f"**{ui.nombre}:** {url} responde pero parece Spark. "
+                    "Define `SIMLOG_UI_AIRFLOW_URL` (por ejemplo `http://127.0.0.1:8088`)."
+                )
+                continue
             try:
                 st.link_button(
                     f"Abrir {ui.nombre}",
@@ -197,7 +233,20 @@ def render_sidebar_enlaces_ui() -> None:
 def url_efectiva(ui: InterfazWebServicio) -> str:
     """URL final: variable `SIMLOG_UI_<ID>_URL` tiene prioridad sobre el valor por defecto."""
     custom = _env(f"SIMLOG_UI_{ui.servicio_id.upper()}_URL", "")
-    return custom if custom else ui.url
+    if custom:
+        return custom
+    if ui.servicio_id == "spark":
+        # Spark Master suele estar en 8080; en algunos entornos lo mueven a 8081.
+        primary = ui.url
+        alt = primary.replace(":8080", ":8081")
+        if _puerto_abierto_desde_url(primary):
+            return primary
+        if _puerto_abierto_desde_url(alt):
+            return alt
+    if ui.servicio_id == "airflow":
+        # En este proyecto usamos 8088 por defecto para evitar conflicto con Spark 8080.
+        return ui.url
+    return ui.url
 
 
 def puerto_efectivo(ui: InterfazWebServicio) -> str:
