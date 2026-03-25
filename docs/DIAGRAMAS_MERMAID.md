@@ -188,6 +188,23 @@ flowchart TB
 
 ---
 
+## 7. Secuencia — Cuadro de mando (Hive) riesgo por hub 24h
+
+```mermaid
+sequenceDiagram
+  participant G as Gestor de incidencias
+  participant ST as Streamlit (Cuadro de mando)
+  participant HV as Hive (histórico)
+
+  G->>ST: Selecciona consulta (24h)\n("Riesgo por hub" / "Top causas")
+  ST->>HV: Ejecuta consulta Hive derivada (whitelist)\n(clasifica por estado + motivo_retraso + clima_actual)
+  ST->>HV: (JOIN) nodos_maestro para mapear a hub
+  HV-->>ST: Devuelve resultados agregados\n(muestras, % y duración aprox)
+  ST-->>G: Renderiza tabla/métricas
+```
+
+---
+
 ## Nota sobre PlantUML
 
 Los ficheros `docs/uml/*.puml` se mantienen como referencia alternativa (actualizados en paralelo con CU-09 y módulos UI KDD); la documentación principal usa **Mermaid** en este archivo y en `DISENO_SISTEMA.md` y `CASOS_DE_USO.md`.

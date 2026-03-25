@@ -74,8 +74,7 @@ def estimar_retraso_tramo(
     v: str,
     nodos_map: Dict[str, Dict[str, Any]],
     aristas_map: Dict[Tuple[str, str], Dict[str, Any]],
-    clima_por_hub: Optional[Dict[str, Dict[str, Any]]],
-    nodos_c_rows: List[Dict[str, Any]],
+    evaluacion_clima_por_hub: Optional[Dict[str, Dict[str, Any]]],
 ) -> Dict[str, Any]:
     """Retraso agregado en el tramo u→v (arista + extremos)."""
     key = normalizar_arista(u, v)
@@ -96,13 +95,11 @@ def estimar_retraso_tramo(
 
     extra_cli = 0
     cli_txt = ""
-    if clima_por_hub:
+    if evaluacion_clima_por_hub:
         hu, hv = nodo_a_hub(u), nodo_a_hub(v)
-        raw_u = {**(clima_por_hub.get(hu) or {}), "hub": hu}
-        raw_v = {**(clima_por_hub.get(hv) or {}), "hub": hv}
-        e1 = evaluar_retraso_integrado(raw_u, nodos_c_rows)
-        e2 = evaluar_retraso_integrado(raw_v, nodos_c_rows)
-        extra_cli = max(int(e1.get("minutos_estimados", 0)), int(e2.get("minutos_estimados", 0))) // 3
+        e1 = (evaluacion_clima_por_hub.get(hu) or {}).get("minutos_estimados", 0) or 0
+        e2 = (evaluacion_clima_por_hub.get(hv) or {}).get("minutos_estimados", 0) or 0
+        extra_cli = max(int(e1), int(e2)) // 3
         if extra_cli > 0:
             cli_txt = f"Clima (OWM) hubs {hu}/{hv}: +{extra_cli} min orient."
 
@@ -234,7 +231,8 @@ def construir_bloqueos_clima_obras(
     if aplicar_obras:
         # Simulación: aristas hacia nodos con nombre que sugieren obras en motivo (si no hay datos, marcar 1 arista de ejemplo Madrid–Toledo)
         for nid, info in nodos_cfg.items():
-            if "obras" in (str(info), "").lower():
+            # `str(info), ""` creaba una tupla (bug) y fallaba con `.lower()`.
+            if "obras" in (str(info) or "").lower():
                 nodos_b.add(nid)
         log.append("Modo obras: revisa motivos `obras` en Cassandra; si no hay datos, las alternativas siguen la topología.")
 
@@ -259,8 +257,13 @@ def analizar_ruta_completa(
     aristas_map = _dict_aristas_cassandra(aristas_rows)
 
     clima_por_hub: Dict[str, Dict[str, Any]] = {}
+    evaluacion_clima_por_hub: Optional[Dict[str, Dict[str, Any]]] = None
     if aplicar_clima_api:
         clima_por_hub = obtener_clima_todos_hubs_completo()
+        # Performance: precalculamos la parte clima+operación por hub una sola vez.
+        evaluacion_clima_por_hub = {
+            hub: evaluar_retraso_integrado(raw, nodos_rows) for hub, raw in clima_por_hub.items()
+        }
 
     nodos_b, aristas_b, log_escenario = construir_bloqueos_clima_obras(
         aplicar_clima_bloqueo, aplicar_obras, clima_por_hub, nodos_map
@@ -280,7 +283,13 @@ def analizar_ruta_completa(
     total_coste = 0.0
     for i in range(len(ruta) - 1):
         u, v = ruta[i], ruta[i + 1]
-        tr = estimar_retraso_tramo(u, v, nodos_map, aristas_map, clima_por_hub if aplicar_clima_api else None, nodos_rows)
+        tr = estimar_retraso_tramo(
+            u,
+            v,
+            nodos_map,
+            aristas_map,
+            evaluacion_clima_por_hub if aplicar_clima_api else None,
+        )
         total_min += tr["minutos"] if tr["minutos"] < 1000 else 0
         if tr.get("coste_eur"):
             total_coste += tr["coste_eur"]
@@ -296,7 +305,7 @@ def analizar_ruta_completa(
             }
         )
 
-    afectados = vehiculos_afectados_por_ruta(ruta, tracking_rows)
+    afectados = vehiculos_afectados_por_ruta(ruta, tracking_rows, origen, destino)
 
     alts = enumerar_alternativas(adj, origen, destino, ruta, nodos_b, aristas_b)
 
@@ -314,8 +323,18 @@ def analizar_ruta_completa(
     }
 
 
-def vehiculos_afectados_por_ruta(ruta: List[str], tracking_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Camiones cuya ruta sugerida o extremos intersectan nodos de la ruta analizada."""
+def vehiculos_afectados_por_ruta(
+    ruta: List[str],
+    tracking_rows: List[Dict[str, Any]],
+    origen: str,
+    destino: str,
+) -> List[Dict[str, Any]]:
+    """
+    Camiones afectados por incidencias para el cruce (origen, destino) seleccionado.
+
+    Se filtra por igualdad exacta de `ruta_origen` y `ruta_destino` en `tracking_camiones`
+    (opción A), evitando mostrar camiones de otros destinos aunque crucen nodos.
+    """
     en_ruta = set(ruta)
     out: List[Dict[str, Any]] = []
     vistos: Set[str] = set()
@@ -323,7 +342,11 @@ def vehiculos_afectados_por_ruta(ruta: List[str], tracking_rows: List[Dict[str, 
         cid = str(t.get("id_camion", ""))
         if cid in vistos:
             continue
-        ro, rd = t.get("ruta_origen"), t.get("ruta_destino")
+        ro = str(t.get("ruta_origen", ""))
+        rd = str(t.get("ruta_destino", ""))
+        # Filtro opción A: solo camiones del cruce origen->destino seleccionado.
+        if ro != str(origen) or rd != str(destino):
+            continue
         sug = t.get("ruta_sugerida") or []
         if not isinstance(sug, list):
             sug = []

@@ -205,3 +205,21 @@ Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMEN
 | RNF-KDD-04 | **Consistencia visual**: no sugerir tres grafos distintos cuando el layout topológico es el mismo | Título de gráfico y subtítulos alineados a «una red, varias fases» |
 
 Diseño detallado: **`docs/DASHBOARD_KDD_UI.md`**.
+
+---
+
+## 9. Requisitos funcionales — Cuadro de mando (Hive histórico 24h)
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-CM-HIVE-01 | En el **Cuadro de mando**, permitir consultas Hive supervisadas para analizar **incidencias** del histórico en una ventana temporal de **24 horas** | `servicios/consultas_cuadro_mando.py` (whitelist) + `render_consultas_hive()` en `servicios/cuadro_mando_ui.py` |
+| RF-CM-HIVE-02 | Calcular un informe **Riesgo por hub (últimas 24h)** derivando un tipo de incidencia a partir de `estado`, `motivo_retraso` y `clima_actual` (clasificación: OK/Congestionado/Bloqueado + subtipos) | Query Hive `riesgo_hub_24h` (deriva severidad/tipo y agrega top 3 por hub) |
+| RF-CM-HIVE-03 | Calcular un informe **Top causas (últimas 24h)** que agregue los tipos derivados de incidencia y devuelva el ranking de causas con su share y una **duración aproximada** sobre 24h | Query Hive `top_causas_24h` (top 10 por muestras) |
+
+## 10. Requisitos no funcionales — Cuadro de mando (Hive histórico 24h)
+
+| ID | Requisito | Notas |
+|----|-----------|-------|
+| RNF-CM-HIVE-01 | Las consultas Hive usadas en el UI deben ser agregadas y filtradas por ventana temporal (24h) para evitar bloqueos de la interfaz | SQL agregadas con `WHERE fecha_proceso >= ...` + límites/ranking |
+
+Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analítica y diagramas UML en `docs/uml/`.

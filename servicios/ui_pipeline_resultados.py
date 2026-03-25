@@ -16,7 +16,10 @@ from config import (
     KEYSPACE,
     TOPIC_TRANSPORTE,
 )
-from servicios.pipeline_verificacion import obtener_snapshot_pipeline
+from servicios.pipeline_verificacion import (
+    hive_resumen,
+    obtener_snapshot_pipeline,
+)
 
 
 def render_pipeline_resultados_tab() -> None:
@@ -28,16 +31,27 @@ def render_pipeline_resultados_tab() -> None:
     )
 
     if st.button("🔄 Actualizar comprobaciones", type="primary", key="btn_refresh_pipeline"):
-        st.rerun()
+        with st.spinner("Consultando servicios y ficheros…"):
+            st.session_state["pipeline_snapshot_kdd"] = obtener_snapshot_pipeline(
+                hdfs_path=HDFS_BACKUP_PATH,
+                kafka_bootstrap=KAFKA_BOOTSTRAP,
+                topic=TOPIC_TRANSPORTE,
+                cassandra_host=CASSANDRA_HOST,
+                keyspace=KEYSPACE,
+                cassandra_modo="rapido",
+                incluir_hive=False,
+                kafka_modo="rapido",
+                hdfs_max_items=3,
+                hdfs_timeout=8,
+            )
 
-    with st.spinner("Consultando servicios y ficheros…"):
-        snap = obtener_snapshot_pipeline(
-            hdfs_path=HDFS_BACKUP_PATH,
-            kafka_bootstrap=KAFKA_BOOTSTRAP,
-            topic=TOPIC_TRANSPORTE,
-            cassandra_host=CASSANDRA_HOST,
-            keyspace=KEYSPACE,
+    snap = st.session_state.get("pipeline_snapshot_kdd")
+    if snap is None:
+        st.info(
+            "Pulsa `Actualizar comprobaciones` para consultar servicios y ficheros. "
+            "Esto puede tardar (HDFS/Kafka/Cassandra/Hive)."
         )
+        return
 
     # --- 1–2 Ingesta ---
     with st.expander("**1–2 · Ingesta** (clima, simulación, payload JSON)", expanded=True):
@@ -122,23 +136,34 @@ def render_pipeline_resultados_tab() -> None:
             "(o variable `HIVE_BEELINE_BIN`)."
         )
         hv = snap["hive"]
-        if hv.get("show_tables_ok"):
-            st.success("SHOW TABLES ejecutado.")
-            st.text_area("Tablas", hv.get("tablas") or "", height=180, disabled=True, key="hive_tabs")
+        # En modo rápido omitimos Hive para no bloquear la UI por beeline/HiveServer2.
+        if hv.get("omitido_modo_rapido"):
+            st.warning(hv.get("error_tablas", "Hive omitido en modo rápido."))
+            if st.button("Cargar Hive (histórico)", key="btn_load_hive_fast", type="secondary"):
+                with st.spinner("Consultando Hive (beeline)…"):
+                    snap["hive"] = hive_resumen()
+                    st.session_state["pipeline_snapshot_kdd"] = snap
+                    st.rerun()
         else:
-            st.warning(hv.get("error_tablas", "Hive no disponible o error Beeline."))
-
-        for codigo, bloque in (hv.get("conteos") or {}).items():
-            st.markdown(f"**{codigo}**")
-            if bloque.get("ok"):
-                st.code(bloque.get("salida", "")[:1200], language="text")
+            if hv.get("show_tables_ok"):
+                st.success("SHOW TABLES ejecutado.")
+                st.text_area("Tablas", hv.get("tablas") or "", height=180, disabled=True, key="hive_tabs")
             else:
-                st.caption(f"⚠️ {bloque.get('error', 'error')}")
-        if hv.get("hint"):
-            st.info(hv["hint"])
+                st.warning(hv.get("error_tablas", "Hive no disponible o error Beeline."))
+
+            for codigo, bloque in (hv.get("conteos") or {}).items():
+                st.markdown(f"**{codigo}**")
+                if bloque.get("ok"):
+                    st.code(bloque.get("salida", "")[:1200], language="text")
+                else:
+                    st.caption(f"⚠️ {bloque.get('error', 'error')}")
+            if hv.get("hint"):
+                st.info(hv["hint"])
 
     st.divider()
     st.markdown(
         "**Flujo de referencia:** `ingesta` → Kafka + HDFS → Spark lee HDFS → "
         "Cassandra (tiempo casi real) + Hive (histórico si el metastore responde)."
     )
+
+

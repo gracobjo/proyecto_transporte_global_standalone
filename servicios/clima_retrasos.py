@@ -7,6 +7,7 @@ heurísticas de negocio (congestión, obras, incidentes simulados en Cassandra).
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -15,9 +16,31 @@ from config import API_WEATHER_BASE, API_WEATHER_KEY
 from config_nodos import get_nodos
 
 
+@lru_cache(maxsize=1)
+def _secundarios_por_hub_cached() -> Dict[str, List[str]]:
+    """Mapea hub -> lista de nodos secundarios (cacheado por proceso)."""
+    nodos_cfg = get_nodos()
+    secundarios_por_hub: Dict[str, List[str]] = {}
+    for nid, d in nodos_cfg.items():
+        if d.get("tipo") == "hub":
+            continue
+        h = d.get("hub")
+        if h:
+            secundarios_por_hub.setdefault(h, []).append(nid)
+    return secundarios_por_hub
+
+
 def obtener_clima_completo_hub(hub: str, lat: float, lon: float) -> Dict[str, Any]:
     """Respuesta cruda de OpenWeather Current Weather (métricas para el cuadro de mando)."""
+    if not (API_WEATHER_KEY or "").strip():
+        return {
+            "hub": hub,
+            "error": "API_WEATHER_KEY no configurada (define API_WEATHER_KEY u OWM_API_KEY/OPENWEATHER_API_KEY).",
+            "lat": lat,
+            "lon": lon,
+        }
     try:
+        timeout = float(os.environ.get("OWM_REQUEST_TIMEOUT_SEC", "8"))
         r = requests.get(
             API_WEATHER_BASE,
             params={
@@ -27,7 +50,7 @@ def obtener_clima_completo_hub(hub: str, lat: float, lon: float) -> Dict[str, An
                 "units": "metric",
                 "lang": "es",
             },
-            timeout=12,
+            timeout=timeout,
         )
         if r.status_code != 200:
             return {"hub": hub, "error": f"HTTP {r.status_code}", "lat": lat, "lon": lon}
@@ -175,16 +198,7 @@ def _impacto_operativo_hub(
     """
     Cruza nodos en Cassandra con configuración de red para estimar congestión/obras en el área del hub.
     """
-    # Mapa nodo -> hub
-    nodos_cfg = get_nodos()
-    secundarios_por_hub: Dict[str, List[str]] = {}
-    for nid, d in nodos_cfg.items():
-        if d.get("tipo") == "hub":
-            continue
-        h = d.get("hub")
-        if h:
-            secundarios_por_hub.setdefault(h, []).append(nid)
-
+    secundarios_por_hub = _secundarios_por_hub_cached()
     afectados = [hub] + secundarios_por_hub.get(hub, [])
     minutos = 0
     factores: List[str] = []

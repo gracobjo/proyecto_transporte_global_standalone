@@ -19,7 +19,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 | Data lake raw | Backup de snapshots y fuente de reproceso | HDFS |
 | Procesamiento | Limpieza, autosanación de grafo, analítica | Spark 3.5 + GraphFrames |
 | Estado operativo | Consulta rápida en tiempo casi real | Cassandra |
-| Histórico analítico | Consultas de tendencia y reporting | Hive |
+| Histórico analítico | Consultas de tendencia, reporting y analítica de incidencias (riesgo por hub 24h, top causas 24h) | Hive |
 | Orquestación | Programación y ejecución encadenada | Airflow |
 | Visualización | Operación, rutas/métricas y **guía del ciclo KDD** (fases, payload, topología vs mapa) | Streamlit + Folium + Altair (topología en pestaña KDD) |
 
@@ -35,7 +35,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 ## Decisiones de diseño
 
 - **Cassandra como estado operativo**: lectura rápida para UI/API.
-- **Hive como histórico**: análisis temporal y agregados.
+- **Hive como histórico**: análisis temporal, agregados y derivación de incidencias para reporting 24h.
 - **HDFS como origen auditable**: replay/reproceso de snapshots.
 - **Limpieza previa a persistencia**: nulos, duplicados y estados no canónicos.
 - **Standalone-first**: menos fricción en desarrollo; compatible con salto a YARN.

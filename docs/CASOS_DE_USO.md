@@ -19,7 +19,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-02 | Supervisar y gobernar el stack | Operador | Servicios coherentes (puertos / estado) |
 | CU-03 | Gestionar stack vía script CLI | Operador | `simlog_stack.py start/status/stop` |
 | CU-04 | Visualizar estado de red y camiones | Analista | Dashboard Streamlit / mapa |
-| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado |
+| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado (+ analítica Hive 24h: riesgo por hub y top causas) |
 | CU-06 | Evaluar rutas híbridas | Planificador | Rutas y métricas en UI de planificación |
 | CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
 | CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
@@ -49,6 +49,9 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-05 — Histórico
 
 - **Entrada:** Hive (`logistica_db` u otra base definida en el proyecto).
+
+- **Enfoque analítico 24h:** consultar incidencias derivadas en Hive sobre `logistica_espana.historico_nodos`, clasificando por `estado`, `motivo_retraso` y `clima_actual`.
+- **Resultados para el gestor:** informes (1) **Riesgo por hub (últimas 24h)** y (2) **Top causas (últimas 24h)**.
 
 ### CU-06 — Rutas híbridas
 

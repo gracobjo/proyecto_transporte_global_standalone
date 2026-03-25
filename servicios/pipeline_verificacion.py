@@ -61,9 +61,9 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
     return out
 
 
-def hdfs_listado_json(ruta: str, max_items: int = 8) -> Dict[str, Any]:
+def hdfs_listado_json(ruta: str, max_items: int = 8, timeout: int = 20) -> Dict[str, Any]:
     """Lista JSON en HDFS (backup ingesta) con nombre y tamaño aproximado."""
-    code, stdout, stderr = _run(["hdfs", "dfs", "-ls", ruta], timeout=20)
+    code, stdout, stderr = _run(["hdfs", "dfs", "-ls", ruta], timeout=timeout)
     if code != 0:
         return {
             "ok": False,
@@ -212,22 +212,32 @@ def _obtener_offsets_kafka(bootstrap: str, topic: str) -> Tuple[Optional[str], s
     return None, " ".join(diag)
 
 
-def kafka_resumen_topic(bootstrap: str, topic: str) -> Dict[str, Any]:
-    """Describe el topic y, si es posible, offsets finales por partición."""
+def kafka_resumen_topic(
+    bootstrap: str,
+    topic: str,
+    modo: str = "completo",
+    timeout_describe: int = 20,
+    timeout_list: int = 15,
+) -> Dict[str, Any]:
+    """Describe el topic y, en `modo="completo"`, intenta offsets por partición."""
     out: Dict[str, Any] = {"bootstrap": bootstrap, "topic": topic, "topic_existe": False}
     code, stdout, stderr = _run(
         ["kafka-topics.sh", "--describe", "--topic", topic, "--bootstrap-server", bootstrap],
-        timeout=20,
+        timeout=timeout_describe,
     )
     out["describe_ok"] = code == 0
     out["describe_salida"] = (stdout or stderr or "")[:1200]
 
     code2, out2, err2 = _run(
         ["kafka-topics.sh", "--list", "--bootstrap-server", bootstrap],
-        timeout=15,
+        timeout=timeout_list,
     )
     if code2 == 0 and topic in out2:
         out["topic_existe"] = True
+
+    if modo == "rapido":
+        out["nota_offsets"] = "Offsets omitidos en modo rápido (para mantener la UI responsiva)."
+        return out
 
     off_text, diag = _obtener_offsets_kafka(bootstrap, topic)
     if off_text:
@@ -243,14 +253,27 @@ def kafka_resumen_topic(bootstrap: str, topic: str) -> Dict[str, Any]:
     return out
 
 
-def cassandra_resumen_tablas(host: str, keyspace: str) -> Dict[str, Any]:
-    """Conteos aproximados en tablas operativas del gemelo (Cassandra)."""
-    tablas = [
-        ("nodos_estado", "SELECT COUNT(*) FROM nodos_estado"),
-        ("aristas_estado", "SELECT COUNT(*) FROM aristas_estado"),
-        ("tracking_camiones", "SELECT COUNT(*) FROM tracking_camiones"),
-        ("pagerank_nodos", "SELECT COUNT(*) FROM pagerank_nodos"),
-    ]
+def cassandra_resumen_tablas(host: str, keyspace: str, modo: str = "completo") -> Dict[str, Any]:
+    """
+    Resumen de tablas operativas en Cassandra.
+
+    - `modo="completo"`: usa `COUNT(*)` (puede ser lento en tablas grandes).
+    - `modo="rapido"`: solo valida existencia con `LIMIT 1` (mucho más ágil para UI).
+    """
+    if modo == "rapido":
+        tablas = [
+            ("nodos_estado", "SELECT id_nodo FROM nodos_estado LIMIT 1"),
+            ("aristas_estado", "SELECT src FROM aristas_estado LIMIT 1"),
+            ("tracking_camiones", "SELECT id_camion FROM tracking_camiones LIMIT 1"),
+            ("pagerank_nodos", "SELECT id_nodo FROM pagerank_nodos LIMIT 1"),
+        ]
+    else:
+        tablas = [
+            ("nodos_estado", "SELECT COUNT(*) FROM nodos_estado"),
+            ("aristas_estado", "SELECT COUNT(*) FROM aristas_estado"),
+            ("tracking_camiones", "SELECT COUNT(*) FROM tracking_camiones"),
+            ("pagerank_nodos", "SELECT COUNT(*) FROM pagerank_nodos"),
+        ]
     out: Dict[str, Any] = {"host": host, "keyspace": keyspace, "tablas": {}}
     try:
         from cassandra.cluster import Cluster
@@ -264,8 +287,13 @@ def cassandra_resumen_tablas(host: str, keyspace: str) -> Dict[str, Any]:
                 if row is None:
                     n = 0
                 else:
+                    # En modo rápido, la query es `LIMIT 1`:
+                    # convertimos cualquier valor a booleano "hay datos".
                     n = row[0]
-                out["tablas"][nombre] = {"filas": int(n) if n is not None else 0, "ok": True}
+                if modo == "rapido":
+                    out["tablas"][nombre] = {"filas": 1 if row is not None else 0, "ok": True}
+                else:
+                    out["tablas"][nombre] = {"filas": int(n) if n is not None else 0, "ok": True}
             except Exception as e:
                 out["tablas"][nombre] = {"ok": False, "error": str(e)[:120]}
         cluster.shutdown()
@@ -318,14 +346,26 @@ def obtener_snapshot_pipeline(
     topic: str,
     cassandra_host: str,
     keyspace: str,
+    cassandra_modo: str = "completo",
+    incluir_hive: bool = True,
+    kafka_modo: str = "completo",
+    hdfs_max_items: int = 8,
+    hdfs_timeout: int = 20,
 ) -> Dict[str, Any]:
     """
     Un solo dict con todo lo necesario para la pestaña de resultados.
     """
     return {
         "ingesta_local": leer_ultima_ingesta(),
-        "hdfs_backup": hdfs_listado_json(hdfs_path),
-        "kafka": kafka_resumen_topic(kafka_bootstrap, topic),
-        "cassandra": cassandra_resumen_tablas(cassandra_host, keyspace),
-        "hive": hive_resumen(),
+        "hdfs_backup": hdfs_listado_json(hdfs_path, max_items=hdfs_max_items, timeout=hdfs_timeout),
+        "kafka": kafka_resumen_topic(kafka_bootstrap, topic, modo=kafka_modo),
+        "cassandra": cassandra_resumen_tablas(cassandra_host, keyspace, modo=cassandra_modo),
+        "hive": hive_resumen() if incluir_hive else {
+            "tablas": None,
+            "conteos": {},
+            "show_tables_ok": False,
+            "error_tablas": "Hive omitido en modo rápido (para evitar beeline lento).",
+            "omitido_modo_rapido": True,
+            "hint": "Si necesitas el histórico Hive, pulsa dentro de la pestaña «Resultados del pipeline KDD» el botón de cargar Hive."
+        },
     }

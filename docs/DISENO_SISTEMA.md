@@ -6,7 +6,7 @@ SIMLOG implementa un ciclo KDD logístico de extremo a extremo con foco en:
 
 - operación en modo **standalone** (una máquina),
 - desacople vía **Kafka** y **HDFS**,
-- **Cassandra** (estado operativo) vs **Hive** (histórico),
+- **Cassandra** (estado operativo) vs **Hive** (histórico + analítica derivada 24h para Cuadro de mando),
 - operación por **Streamlit**, **NiFi**, **Airflow** y **scripts CLI** (`scripts/simlog_stack.py`).
 
 ## Arquitectura lógica (capas)
@@ -14,7 +14,7 @@ SIMLOG implementa un ciclo KDD logístico de extremo a extremo con foco en:
 1. **Ingesta** — `ingesta_kdd.py` y/o NiFi: snapshot cada ~15 min (clima, red, GPS).
 2. **Mensajería y backup** — Kafka (`transporte_raw`, `transporte_filtered`) y HDFS (`HDFS_BACKUP_PATH`).
 3. **Procesamiento** — Spark (`procesamiento/procesamiento_grafos.py`): grafo, autosanación, PageRank.
-4. **Persistencia** — Cassandra (operativo) y Hive (histórico).
+4. **Persistencia** — Cassandra (operativo) y Hive (histórico y analítica de incidencias para reporting 24h).
 5. **Orquestación** — Airflow (DAGs en `~/airflow/dags`, código en `orquestacion/`), NiFi (trigger), scripts de stack.
 6. **Presentación** — Streamlit, enlaces a UIs del stack (HDFS, Spark, etc.).
 
