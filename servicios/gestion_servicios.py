@@ -86,6 +86,7 @@ def _hive_home() -> Path:
         return Path(env_home)
     candidates = [
         Path("/home/hadoop/apache-hive-4.2.0-bin"),
+        Path("/home/hadoop/apache-hive-3.1.3-bin"),
         Path("/opt/hive"),
     ]
     for p in candidates:
@@ -94,12 +95,51 @@ def _hive_home() -> Path:
     return Path("/opt/hive")
 
 
+def _hive_conf_dir(hh: Path) -> Path:
+    """
+    Directorio de configuración Hive (hive-site.xml).
+    Por defecto HIVE_HOME/conf; se puede forzar con SIMLOG_HIVE_CONF_DIR o HIVE_CONF_DIR.
+    """
+    for key in ("SIMLOG_HIVE_CONF_DIR", "HIVE_CONF_DIR"):
+        raw = os.environ.get(key)
+        if raw:
+            return Path(raw).expanduser()
+    return hh / "conf"
+
+
+def _hive_tail_log(log_path: Path, max_chars: int = 2500) -> str:
+    if not log_path.exists():
+        return "(sin fichero de log)"
+    try:
+        data = log_path.read_text(encoding="utf-8", errors="replace")
+        return data[-max_chars:] if len(data) > max_chars else data
+    except OSError as e:
+        return f"(no se pudo leer el log: {e})"
+
+
+def _cassandra_logs_dir() -> Path:
+    return BASE / "cassandra" / "logs"
+
+
+def _cassandra_tail_system_log(max_chars: int = 2500) -> str:
+    return _hive_tail_log(_cassandra_logs_dir() / "system.log", max_chars=max_chars)
+
+
 def _nifi_home() -> Path:
     return Path(os.environ.get("NIFI_HOME", "/opt/nifi"))
 
 
 def _cassandra_bin() -> Path:
     return BASE / "cassandra" / "bin" / "cassandra"
+
+
+def _cassandra_daemon_corriendo() -> bool:
+    """True si hay un proceso del nodo Cassandra (evita lanzar un segundo JVM)."""
+    r = subprocess.run(
+        ["pgrep", "-f", "org.apache.cassandra.service.CassandraDaemon"],
+        capture_output=True,
+    )
+    return r.returncode == 0
 
 
 def _kill_port(port: int, host: str = "127.0.0.1") -> str:
@@ -224,6 +264,9 @@ ORDEN_SERVICIOS: List[str] = ["hdfs", "kafka", "cassandra", "spark", "hive", "ai
 # Orden recomendado al arrancar todo el stack (HDFS y Cassandra antes que Kafka)
 ORDEN_ARRANQUE_TODOS: List[str] = ["hdfs", "cassandra", "kafka", "spark", "hive", "airflow", "nifi"]
 
+# Parada inversa: clientes/orquestación antes que almacenamiento
+ORDEN_PARADA_TODOS: List[str] = ["nifi", "airflow", "hive", "spark", "kafka", "cassandra", "hdfs"]
+
 
 def comprobar_todos() -> List[Dict[str, Any]]:
     return [COMPRUEBA[sid]() for sid in ORDEN_SERVICIOS]
@@ -270,8 +313,21 @@ def iniciar_cassandra() -> str:
     cb = _cassandra_bin()
     if not cb.exists():
         return f"No se encontró {cb}. Usa la instalación embebida del proyecto o arranca Cassandra manualmente."
-    _popen_bg([str(cb)], cwd=BASE)
-    return "Cassandra arrancando (30–60 s hasta puerto 9042)."
+    if not _cassandra_daemon_corriendo():
+        _popen_bg([str(cb)], cwd=BASE)
+    # Si ya hay un CassandraDaemon (arranque lento), no lanzar otro JVM sobre el mismo data/.
+    max_wait = max(45, int(os.environ.get("SIMLOG_CASSANDRA_MAX_WAIT_SEC", "180")))
+    paso = 3
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < max_wait:
+        if puerto_activo("127.0.0.1", PORT_CASSANDRA):
+            return "Cassandra activa (puerto CQL 9042)."
+        time.sleep(paso)
+    tail = _cassandra_tail_system_log()
+    return (
+        "Cassandra se lanzó pero no abrió el puerto CQL a tiempo. "
+        f"Revisa {_cassandra_logs_dir()}. Últimas líneas de system.log:\n---\n{tail}\n---"
+    )
 
 
 def iniciar_spark() -> str:
@@ -296,13 +352,16 @@ def iniciar_hive() -> str:
     if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
         return "HiveServer2 ya parece activo (puerto JDBC)."
     hh = _hive_home()
+    conf_dir = _hive_conf_dir(hh)
     hive_bin = hh / "bin" / "hive"
     if not hive_bin.exists():
         hive_bin = Path("/usr/bin/hive")
     if not hive_bin.exists():
         return f"No se encontró `hive` en HIVE_HOME={hh}."
 
-    log_path = Path("/tmp/hadoop/hiveserver2-daemon.log")
+    log_path = Path(os.environ.get("SIMLOG_HIVE_LOG", "/tmp/hadoop/hiveserver2-daemon.log"))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
     pid_path = hh / "conf" / "hiveserver2.pid" if hh.exists() else Path("/tmp/hiveserver2.pid")
     if pid_path.exists():
         try:
@@ -313,31 +372,135 @@ def iniciar_hive() -> str:
         except Exception:
             pid_path.unlink(missing_ok=True)
 
-    cmd = (
-        f"HIVE_CONF_DIR=\"{hh / 'conf'}\" "
-        f"nohup \"{hive_bin}\" --service hiveserver2 "
-        f">> \"{log_path}\" 2>&1 < /dev/null &"
-    )
-    code, _, err = _run(["bash", "-lc", cmd], cwd=hh if hh.exists() else BASE, timeout=20)
-    if code != 0:
-        return f"No se pudo lanzar HiveServer2: {err[-400:] if err else 'error'}"
+    # Entorno aislado: HADOOP_CLASSPATH vacío evita NoClassDefFoundError / conflictos con JARs de Hadoop.
+    env = os.environ.copy()
+    env["HADOOP_CLASSPATH"] = ""
+    env["HIVE_CONF_DIR"] = str(conf_dir)
+    if hh.exists():
+        env.setdefault("HIVE_HOME", str(hh))
 
-    # Comprobación activa para evitar falsos positivos de "arrancado".
-    for _ in range(18):
+    try:
+        log_f = open(log_path, "ab", buffering=0)
+    except OSError as e:
+        return f"No se pudo abrir el log de HiveServer2 ({log_path}): {e}"
+
+    try:
+        subprocess.Popen(
+            [str(hive_bin), "--service", "hiveserver2"],
+            cwd=str(hh) if hh.exists() else str(BASE),
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        log_f.close()
+        return f"No se pudo lanzar HiveServer2: {e}"
+    log_f.close()
+
+    # Comprobación activa (Hive + Derby/metastore pueden tardar varios minutos en máquinas lentas).
+    max_wait = max(90, int(os.environ.get("SIMLOG_HIVE_MAX_WAIT_SEC", "420")))
+    paso = 5
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < max_wait:
         if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
             return "HiveServer2 activo y escuchando en el puerto JDBC."
-        time.sleep(5)
+        time.sleep(paso)
+
+    tail = _hive_tail_log(log_path)
+    extra = ""
+    if "Another instance of Derby" in tail or "Failed to start database" in tail or "db.lck" in tail.lower():
+        extra = (
+            " Posible base Derby bloqueada: cierra otros Hive/metastore, o revisa locks en "
+            "`metastore_db/` o la ruta de `javax.jdo.option.ConnectionURL` en hive-site.xml."
+        )
     return (
         "HiveServer2 se lanzó pero no abrió el puerto JDBC a tiempo. "
+        f"Revisa {log_path}.{extra} Últimas líneas del log:\n---\n{tail}\n---"
+    )
+
+
+def esperar_cassandra(timeout_sec: int = 120, paso: int = 3) -> Tuple[bool, str]:
+    """
+    Espera a que el puerto CQL (9042) de Cassandra responda.
+    Útil tras arranque en segundo plano o para comprobar el stack completo.
+    """
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout_sec:
+        if puerto_activo("127.0.0.1", PORT_CASSANDRA):
+            return True, "Cassandra responde en el puerto CQL."
+        time.sleep(paso)
+    return False, (
+        f"No se detectó el puerto CQL {PORT_CASSANDRA} tras {timeout_sec}s. "
+        f"Revisa {_cassandra_logs_dir() / 'system.log'}"
+    )
+
+
+def esperar_hiveserver2(timeout_sec: int = 240, paso: int = 5) -> Tuple[bool, str]:
+    """
+    Solo espera a que el puerto JDBC de HiveServer2 responda (sin relanzar procesos).
+    Útil tras `arrancar_todos_servicios` si Hive sigue arrancando en segundo plano.
+    """
+    hive_hosts = ["127.0.0.1", "127.0.1.1", "localhost"]
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout_sec:
+        if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
+            return True, "HiveServer2 responde en el puerto JDBC."
+        time.sleep(paso)
+    return False, (
+        f"No se detectó el puerto JDBC {PORT_HIVE} tras {timeout_sec}s. "
         "Revisa /tmp/hadoop/hiveserver2-daemon.log"
     )
 
 
-def iniciar_airflow() -> str:
-    if puerto_activo("127.0.0.1", PORT_AIRFLOW):
-        return "Airflow api-server ya escucha en el puerto configurado."
+def _airflow_scheduler_activo() -> bool:
+    r = subprocess.run(["pgrep", "-f", "airflow scheduler"], capture_output=True)
+    return r.returncode == 0
+
+
+def _env_airflow_api_alineado() -> dict:
+    """
+    Alinea el Execution API con el puerto real del api-server (SIMLOG_PORT_AIRFLOW).
+    Si no, LocalExecutor usa http://localhost:8080/execution/ y las tareas quedan en cola.
+    """
     env = os.environ.copy()
     env.setdefault("AIRFLOW_HOME", os.path.expanduser("~/airflow"))
+    base = f"http://127.0.0.1:{PORT_AIRFLOW}"
+    env.setdefault("AIRFLOW__API__BASE_URL", base)
+    env.setdefault("AIRFLOW__API__PORT", str(PORT_AIRFLOW))
+    return env
+
+
+def _iniciar_airflow_scheduler_si_hace_falta() -> str:
+    """Arranca `airflow scheduler` en segundo plano si no hay uno en marcha."""
+    if _airflow_scheduler_activo():
+        return "Airflow scheduler ya estaba en ejecución."
+    env = _env_airflow_api_alineado()
+    airflow_exe = shutil.which("airflow")
+    if airflow_exe:
+        cmd = [airflow_exe, "scheduler"]
+    else:
+        cmd = [sys.executable, "-m", "airflow", "scheduler"]
+    try:
+        subprocess.Popen(
+            cmd,
+            env=env,
+            cwd=str(BASE),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return "Airflow scheduler lanzado en segundo plano."
+    except Exception as e:
+        return f"No se pudo lanzar el scheduler: {e}"
+
+
+def iniciar_airflow() -> str:
+    if puerto_activo("127.0.0.1", PORT_AIRFLOW):
+        sch = _iniciar_airflow_scheduler_si_hace_falta()
+        return f"Airflow api-server ya escucha (puerto {PORT_AIRFLOW}). {sch}"
+    env = _env_airflow_api_alineado()
     airflow_exe = shutil.which("airflow")
     if airflow_exe:
         cmd = [airflow_exe, "api-server", "-p", str(PORT_AIRFLOW), "-H", "0.0.0.0"]
@@ -347,10 +510,8 @@ def iniciar_airflow() -> str:
         subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         for _ in range(24):
             if puerto_activo("127.0.0.1", PORT_AIRFLOW):
-                return (
-                    f"Airflow api-server activo (puerto {PORT_AIRFLOW}). "
-                    "En otra terminal: `airflow scheduler` si necesitas ejecutar DAGs."
-                )
+                sch = _iniciar_airflow_scheduler_si_hace_falta()
+                return f"Airflow api-server activo (puerto {PORT_AIRFLOW}). {sch}"
             time.sleep(1)
         return (
             f"Airflow se lanzó pero no abrió el puerto {PORT_AIRFLOW} a tiempo. "
@@ -393,12 +554,12 @@ def arrancar_stack_basico() -> List[str]:
     out.append(f"HDFS: {iniciar_hdfs()}")
     time.sleep(2)
     out.append(f"Cassandra: {iniciar_cassandra()}")
-    time.sleep(2)
+    time.sleep(1)
     out.append(f"Kafka: {iniciar_kafka()}")
     return out
 
 
-def arrancar_todos_servicios() -> List[str]:
+def arrancar_todos_servicios(*, verbose: bool = False) -> List[str]:
     """
     Intenta iniciar **todos** los servicios (orden: HDFS → Cassandra → Kafka → …).
     Puede tardar varios minutos; algunos pueden no aplicar en tu máquina (mensaje informativo).
@@ -408,6 +569,27 @@ def arrancar_todos_servicios() -> List[str]:
         fn = INICIA.get(sid)
         if not fn:
             continue
+        if verbose:
+            print(f"→ Iniciando {sid}… (espera; Hive/Spark pueden tardar 1–2 min)", flush=True)
+        try:
+            out.append(f"{sid}: {fn()}")
+        except Exception as e:
+            out.append(f"{sid}: Error — {e}")
+        time.sleep(1)
+    return out
+
+
+def parar_todos_servicios(*, verbose: bool = False) -> List[str]:
+    """
+    Detiene el stack en orden inverso a las dependencias (NiFi → … → HDFS).
+    """
+    out: List[str] = []
+    for sid in ORDEN_PARADA_TODOS:
+        fn = PARA.get(sid)
+        if not fn:
+            continue
+        if verbose:
+            print(f"→ Deteniendo {sid}…", flush=True)
         try:
             out.append(f"{sid}: {fn()}")
         except Exception as e:

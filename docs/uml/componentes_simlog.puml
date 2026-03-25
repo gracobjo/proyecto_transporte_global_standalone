@@ -4,6 +4,9 @@ skinparam componentStyle rectangle
 actor "Usuario" as User
 
 component "Streamlit\napp_visualizacion.py" as UI
+package "UI Ciclo KDD" {
+  component "kdd_vista_ficheros\nkdd_reglas_ui\nkdd_vista_grafo" as KDDUI
+}
 component "NiFi\nPG_SIMLOG_KDD" as NiFi
 component "Airflow\nDAGs" as Airflow
 component "Ingesta\ningesta_kdd.py" as Ingesta
@@ -16,6 +19,10 @@ database "Hive\nhistórico" as Hive
 User --> UI
 User --> NiFi
 User --> Airflow
+
+UI --> KDDUI
+KDDUI --> Ingesta : consulta clima\nopcional
+KDDUI --> Cas : nodos / PageRank
 
 NiFi --> Ingesta
 Airflow --> Ingesta

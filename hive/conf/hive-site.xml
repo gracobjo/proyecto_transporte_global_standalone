@@ -17,4 +17,9 @@
         <name>datanucleus.schema.autoCreateAll</name>
         <value>true</value>
     </property>
+    <property>
+        <name>hive.server2.enable.doAs</name>
+        <value>false</value>
+        <description>Desactiva impersonación JDBC en desarrollo (alinear con HS2 local).</description>
+    </property>
 </configuration>

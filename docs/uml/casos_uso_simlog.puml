@@ -13,12 +13,15 @@ rectangle "SIMLOG" {
   usecase "CU-03 Visualizar estado de red" as CU3
   usecase "CU-04 Consultar histórico" as CU4
   usecase "CU-05 Evaluar rutas híbridas" as CU5
+  usecase "CU-09 Explorar KDD en dashboard\n(Streamlit)" as CU9
 }
 
 Operador --> CU2
 Operador --> CU1
+Operador --> CU9
 Analista --> CU3
 Analista --> CU4
+Analista --> CU9
 Planificador --> CU5
 Scheduler --> CU1
 

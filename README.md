@@ -315,10 +315,14 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 
 ## Documentación adicional
 
+- **docs/README.md**: índice de toda la documentación técnica.
 - **README_SIMLOG.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
 - **docs/AIRFLOW.md**: ejecucion del pipeline sin Streamlit con DAGs de servicios + DAGs por fases KDD + pipeline maestro cada 15 min.
-- **docs/FLUJO_DATOS_Y_REQUISITOS.md**: ejemplos GPS/clima/rutas, qué guarda Spark dónde, calidad de datos, consultas Hive.
+- **docs/DIAGRAMAS_MERMAID.md**: diagramas UML en Mermaid (casos de uso incl. CU-09, componentes con `servicios/kdd_*`, secuencias, despliegue).
+- **docs/DASHBOARD_KDD_UI.md**: diseño de la pestaña **Ciclo KDD** (vista previa, OpenWeather, simulación, grafo topológico).
+- **docs/DISENO_SISTEMA.md** / **docs/CASOS_DE_USO.md**: diseño y casos de uso (CU-01…CU-09) con diagramas Mermaid.
 - **docs/REQUIREMENTS_CHECKLIST.md**: cotejo con el PDF *Proyecto Big Data.pdf* (Fases I–IV, rúbrica).
+- **docs/FLUJO_DATOS_Y_REQUISITOS.md**: ejemplos GPS/clima/rutas, qué guarda Spark dónde, calidad de datos, consultas Hive.
 - **docs/YARN_Y_SPARK.md**: cómo ejecutar Spark en YARN (`SPARK_MASTER=yarn`, `spark-submit --master yarn`).
 
 ### Cambios alineados al PDF (sin NiFi)

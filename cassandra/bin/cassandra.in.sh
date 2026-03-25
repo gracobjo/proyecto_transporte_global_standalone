@@ -18,6 +18,14 @@ if [ "x$CASSANDRA_HOME" = "x" ]; then
     CASSANDRA_HOME="`dirname "$0"`/.."
 fi
 
+# SIMLOG: Cassandra 4.x no arranca con Java 21+ (Security Manager). Preferir JDK 17 LTS.
+# Anula con SIMLOG_CASSANDRA_JAVA_HOME=/ruta/al/jdk si hace falta otro JDK soportado.
+if [ -n "${SIMLOG_CASSANDRA_JAVA_HOME:-}" ] && [ -x "${SIMLOG_CASSANDRA_JAVA_HOME}/bin/java" ]; then
+    export JAVA_HOME="$SIMLOG_CASSANDRA_JAVA_HOME"
+elif [ -x "/usr/lib/jvm/java-17-openjdk-amd64/bin/java" ]; then
+    export JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+fi
+
 # The directory where Cassandra's configs live (required)
 if [ "x$CASSANDRA_CONF" = "x" ]; then
     CASSANDRA_CONF="$CASSANDRA_HOME/conf"

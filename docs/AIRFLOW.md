@@ -10,6 +10,8 @@ En dos terminales separadas:
 cd ~/proyecto_transporte_global
 source venv_transporte/bin/activate
 export AIRFLOW_HOME=~/airflow
+export AIRFLOW__API__BASE_URL=http://127.0.0.1:8088
+export AIRFLOW__API__PORT=8088
 airflow api-server -H 0.0.0.0 -p 8088
 ```
 
@@ -17,19 +19,34 @@ airflow api-server -H 0.0.0.0 -p 8088
 cd ~/proyecto_transporte_global
 source venv_transporte/bin/activate
 export AIRFLOW_HOME=~/airflow
+export AIRFLOW__API__BASE_URL=http://127.0.0.1:8088
+export AIRFLOW__API__PORT=8088
 airflow scheduler
 ```
 
 URL: `http://localhost:8088`
 
+En `~/airflow/airflow.cfg`, la seccion `[api]` debe tener `base_url` y `port` alineados con el api-server (8088). Si `base_url` queda vacio, Airflow 3 usa `http://localhost:8080/execution/` para el LocalExecutor; si en 8080 hay otro servicio (p. ej. Spark UI), las tareas se quedan en **cola** sin ejecutarse.
+
 ## DAGs operativos (pipeline backend)
 
-Los DAGs de operacion viven en `~/airflow/dags` y se apoyan en codigo del repo (`servicios/gestion_servicios.py` y `orquestacion/kdd_ejecucion.py`).
+Los DAGs de operacion viven bajo `~/airflow/dags/` en **dos carpetas** (Airflow 3 **DAG bundles**), para que en la UI queden agrupados por proyecto sin depender solo del nombre del DAG:
+
+| Bundle (nombre en UI) | Carpeta | Contenido |
+|----------------------|---------|-----------|
+| `simlog` | `~/airflow/dags/simlog/` | Arranque / parada / comprobación stack, fases KDD `simlog_kdd_*` |
+| `smart_grid` | `~/airflow/dags/smart_grid/` | DAGs legacy del otro proyecto (`*_smart_grid`, fases KDD antiguas, etc.) |
+
+Además, cada DAG lleva etiquetas **`proyecto_simlog`** o **`proyecto_smart_grid`** para **filtrar por tag** en el listado de DAGs.
+
+La configuración está en `~/airflow/airflow.cfg`, clave `[dag_processor]` → `dag_bundle_config_list` (dos `LocalDagBundle` con `path` a esas carpetas).
+
+El codigo Python de los DAGs sigue apoyandose en el repo (`servicios/gestion_servicios.py`, `orquestacion/kdd_ejecucion.py`, etc.).
 
 ### Gestion de servicios
 
 - `dag_arranque_servicios_smart_grid`: arranca HDFS, Cassandra, Kafka, Spark, Hive, Airflow y NiFi.
-- `dag_comprobar_servicios_smart_grid`: comprueba estado de todos los servicios y falla si alguno no responde.
+- `dag_comprobar_servicios_simlog`: comprueba estado de todos los servicios y falla si alguno no responde.
 - `dag_parar_servicios_smart_grid`: detiene el stack de forma ordenada.
 
 ### Fases KDD (un DAG por fase)
@@ -67,6 +84,8 @@ airflow dags trigger dag_arranque_servicios_smart_grid
 
 ## Troubleshooting rapido
 
+- Tareas en **queued** sin arrancar: revisa `[api] base_url` y `port` (8088) y reinicia **api-server** y **scheduler**; o exporta `AIRFLOW__API__BASE_URL=http://127.0.0.1:8088` antes de lanzarlos.
 - Si no ves DAGs nuevos: ejecuta `airflow dags reserialize` y refresca la UI.
 - Si un DAG falla por rutas/entorno: verifica `AIRFLOW_HOME`, `HADOOP_HOME`, `KAFKA_HOME`, `SPARK_HOME`, `HIVE_HOME`, `NIFI_HOME`.
-- Si `dag_comprobar_servicios_smart_grid` falla: revisa puertos (`9870`, `9092`, `9042`, `7077`, `10000`, `8088`, `8443`/`8080`) y levanta con el DAG de arranque.
+- Si `dag_comprobar_servicios_simlog` falla: revisa puertos (`9870`, `9092`, `9042`, `7077`, `10000`, `8088`, `8443`/`8080`) y levanta con el DAG de arranque.
+- **Hive (10000) no arranca**: el script usa `HADOOP_CLASSPATH` vacío y escribe en `/tmp/hadoop/hiveserver2-daemon.log`. Si el log habla de Derby bloqueada, cierra procesos Hive viejos y revisa locks en el directorio del metastore (según `hive-site.xml`). Opcional: `SIMLOG_HIVE_MAX_WAIT_SEC`, `SIMLOG_HIVE_CONF_DIR`, `SIMLOG_HIVE_LOG`.

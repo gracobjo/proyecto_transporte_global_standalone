@@ -164,33 +164,44 @@ Todo lo que se escribe en Cassandra (y en Hive si aplica) pasa por esta capa ant
 
 En el estado actual del proyecto:
 
-<<<<<<< HEAD
-| Requisito típico | En este proyecto (sin NiFi) |
-|------------------|-----------------------------|
-| **Ingesta de datos** | Sí: script de ingesta (API clima + simulación) → Kafka + HDFS. |
-| **Almacenamiento distribuido (HDFS)** | Sí: JSON de ingesta en HDFS; warehouse de Hive en HDFS. |
-| **Procesamiento con motor Big Data (Spark)** | Sí: Spark (GraphFrames) para grafo, autosanación, PageRank, escritura a Cassandra y Hive. |
-| **Almacenamiento NoSQL (Cassandra)** | Sí: keyspace `logistica_espana`, tablas nodos, aristas, camiones, PageRank. |
-| **Almacenamiento SQL / data warehouse (Hive)** | Sí: base `logistica_db` (y/o `logistica_espana` en Hive), tablas históricas particionadas. |
-| **Cola de mensajes (Kafka)** | Sí: temas `transporte_raw` y `transporte_filtered`; Spark puede consumir y también leer backup en HDFS. |
-| **Limpieza / calidad de datos** | Parcial: lógica actual no tiene paso explícito; se puede cumplir añadiendo el paso de la sección 3 antes de escribir en Cassandra. |
-| **Visualización o dashboard** | Sí: Streamlit + Folium leyendo de Cassandra. |
-| **Orquestación (Airflow u otro)** | Sí: DAG que lanza Ingesta → Procesamiento. |
-| **NiFi** | No: no está en la infraestructura actual; si el PDF lo exige, habría que incorporarlo (p. ej. para ingesta o flujos adicionales). |
-=======
 | Requisito típico | Estado actual |
 |------------------|---------------|
-| **Ingesta de datos** | Sí: NiFi + script de ingesta (OpenWeather + simulación GPS). |
-| **Almacenamiento distribuido (HDFS)** | Sí: backup JSON por ventana temporal. |
-| **Procesamiento Big Data (Spark)** | Sí: GraphFrames, autosanación, métricas y persistencia. |
-| **Almacenamiento NoSQL (Cassandra)** | Sí: estado operativo de red y camiones. |
+| **Ingesta de datos** | Sí: NiFi y/o script de ingesta (OpenWeather + simulación GPS) → Kafka + HDFS. |
+| **Almacenamiento distribuido (HDFS)** | Sí: backup JSON; warehouse Hive en HDFS. |
+| **Procesamiento Big Data (Spark)** | Sí: GraphFrames, autosanación, PageRank, persistencia. |
+| **Almacenamiento NoSQL (Cassandra)** | Sí: keyspace operativo (nodos, aristas, camiones, PageRank). |
 | **Almacenamiento analítico (Hive)** | Sí: histórico y consultas supervisadas. |
-| **Cola de mensajes (Kafka)** | Sí: topics `transporte_raw` y `transporte_filtered`. |
-| **Calidad de datos** | Sí: limpieza previa a persistencia (nulos, duplicados, normalización). |
-| **Visualización** | Sí: Streamlit + mapa y paneles operativos. |
-| **Orquestación** | Sí: Airflow y trigger periódico en NiFi. |
-| **NiFi** | Sí: integrado y operativo en el pipeline e2e. |
->>>>>>> 047e769 (feat: estabilizar stack y documentar arquitectura KDD completa)
+| **Cola de mensajes (Kafka)** | Sí: `transporte_raw` y `transporte_filtered`. |
+| **Calidad de datos** | Sí: limpieza previa a persistencia en el pipeline Spark. |
+| **Visualización** | Sí: Streamlit + mapa. |
+| **Orquestación** | Sí: Airflow (DAGs) y/o trigger en NiFi; scripts `simlog_stack.py` para el stack. |
+| **NiFi** | Sí: flujo documentado y alineado al proyecto (`nifi/`). |
 
 Conclusión: la arquitectura actual cubre el ciclo completo KDD con stack Apache en modo standalone.  
 Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMENTS_CHECKLIST.md`.
+
+---
+
+## 7. Requisitos funcionales — dashboard Ciclo KDD (Streamlit)
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-KDD-01 | Asociar cada fase KDD a **scripts y stack** declarados en `servicios/kdd_fases.py` | Tarjeta por fase + caption stack/script |
+| RF-KDD-02 | **Vista previa** de ficheros del repositorio citados (p. ej. `ingesta/ingesta_kdd.py`, `procesamiento_grafos.py`) | `servicios/kdd_vista_ficheros.py` — primeras y últimas 5 líneas |
+| RF-KDD-03 | En fases 1–2, mostrar **GPS sintético** (`camiones`) y **clima** (`clima_hubs`) del último payload | Lectura de `reports/kdd/work/ultimo_payload.json` |
+| RF-KDD-04 | Permitir **consulta en vivo** a OpenWeather con API key introducida en formulario (sin persistir en disco) | Formulario Streamlit + `consulta_clima_hubs(api_key=…)` |
+| RF-KDD-05 | **Simular** otra ventana temporal: slider de paso, ingesta desde la tarjeta, **instantánea** y **diff** de payload | `st.session_state` + comparación JSON |
+| RF-KDD-06 | En fases 3–5, documentar **reglas de negocio** del grafo sin repetir el mismo texto al cambiar de fase | `servicios/kdd_reglas_ui.py` — panel unificado |
+| RF-KDD-07 | Mostrar **topología lógica** (Altair) como **una** figura para fases 3–5; distinguir de mapa geográfico | `servicios/kdd_vista_grafo.py` |
+| RF-KDD-08 | Listado «Ver todas las fases» sin **duplicar** formularios/sliders (evitar colisión de `key` en Streamlit) | `mostrar_vista_previa=False` en lista |
+
+## 8. Requisitos no funcionales — dashboard Ciclo KDD
+
+| ID | Requisito | Notas |
+|----|-----------|--------|
+| RNF-KDD-01 | **Usabilidad**: una sola zona interactiva principal por tipo de control en la vista de fase activa | `widget_scope` (`kdd_principal` vs `kdd_lista_fN`) |
+| RNF-KDD-02 | **Seguridad**: no almacenar API keys de prueba en ficheros del proyecto | Solo `st.session_state`; `.env` sigue siendo la vía para clave estable |
+| RNF-KDD-03 | **Mantenibilidad**: módulos `servicios/kdd_*.py` desacoplados de la orquestación | Ingesta invocable por subproceso desde `ejecucion_pipeline` |
+| RNF-KDD-04 | **Consistencia visual**: no sugerir tres grafos distintos cuando el layout topológico es el mismo | Título de gráfico y subtítulos alineados a «una red, varias fases» |
+
+Diseño detallado: **`docs/DASHBOARD_KDD_UI.md`**.

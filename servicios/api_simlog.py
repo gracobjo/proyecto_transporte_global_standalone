@@ -169,7 +169,7 @@ def api_info() -> ProyectoInfo:
     "/api/v1/servicios/estado",
     response_model=ServicioEstadoResponse,
     tags=["infraestructura"],
-    summary="Estado por puerto (HDFS NameNode, Kafka, Cassandra)",
+    summary="Estado del stack completo (HDFS, Kafka, Cassandra, Spark, Hive, Airflow, NiFi)",
 )
 def api_estado_servicios() -> ServicioEstadoResponse:
     raw = estado_servicios()

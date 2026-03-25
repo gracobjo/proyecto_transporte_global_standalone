@@ -52,6 +52,9 @@ from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_se
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
 from servicios.mapa_rutas_hibridas import crear_mapa_planificacion_rutas
+from servicios.kdd_vista_grafo import render_bloque_grafo_fases_spark
+from servicios.kdd_reglas_ui import render_panel_reglas_grafo
+from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
 
 COLORES_ESTADO = {
     "ok": "green",
@@ -151,24 +154,49 @@ def crear_mapa(
     return m
 
 
-def _render_kdd_paginator() -> int:
-    """Controles ◀ / selector / ▶ para una fase a la vez. Devuelve índice 0..n-1.
-
-    `kdd_fase_idx` es el estado lógico (no se usa como `key` de ningún widget).
-    El desplegable usa `key="kdd_select_widget"` para no chocar con Streamlit.
-    Los botones van **antes** del selectbox en el orden de columnas para poder
-    mutar `kdd_fase_idx` sin conflicto con el widget.
-    """
+def _kdd_sync_idx() -> tuple[int, int, list[str]]:
+    """Índice acotado, n y etiquetas de fase."""
     n = len(FASES_KDD)
     if "kdd_fase_idx" not in st.session_state:
         st.session_state.kdd_fase_idx = 0
     idx = max(0, min(n - 1, int(st.session_state.kdd_fase_idx)))
     st.session_state.kdd_fase_idx = idx
-
     labels = [f"{f.orden}. {f.titulo}" for f in FASES_KDD]
+    return idx, n, labels
 
-    n1, n2, n3 = st.columns([1, 1, 6])
-    with n1:
+
+def _kdd_on_fase_select_change() -> None:
+    """Sincroniza índice lógico solo cuando el usuario cambia el desplegable (no machaca ◀ ▶)."""
+    st.session_state.kdd_fase_idx = int(st.session_state.kdd_select_widget)
+
+
+def _render_kdd_title_and_selector() -> None:
+    """Fila superior: título a la izquierda, «Ir a fase» + desplegable a la derecha (misma banda visual)."""
+    idx, n, labels = _kdd_sync_idx()
+    c_title, c_sel = st.columns([3, 2])
+    with c_title:
+        st.subheader("Fases del ciclo KDD en este proyecto")
+    with c_sel:
+        st.markdown("**Ir a fase**")
+        # El valor del widget debe seguir a kdd_fase_idx tras ◀/▶; si además comparamos sel != idx aquí,
+        # un desfase del selectbox devolvía siempre fase 1 o bloqueaba en fase 2.
+        if st.session_state.get("kdd_select_widget") != idx:
+            st.session_state.kdd_select_widget = idx
+        st.selectbox(
+            "Ir a fase",
+            options=list(range(n)),
+            format_func=lambda i: labels[i],
+            key="kdd_select_widget",
+            label_visibility="collapsed",
+            on_change=_kdd_on_fase_select_change,
+        )
+
+
+def _render_kdd_prev_next() -> int:
+    """Solo ◀ / ▶ en una fila; caption de posición. Devuelve índice 0..n-1."""
+    idx, n, labels = _kdd_sync_idx()
+    b1, b2 = st.columns([1, 1])
+    with b1:
         if st.button(
             "◀ Anterior",
             disabled=idx <= 0,
@@ -177,9 +205,8 @@ def _render_kdd_paginator() -> int:
             help="Fase anterior del ciclo KDD",
         ):
             st.session_state.kdd_fase_idx = idx - 1
-            st.session_state.pop("kdd_select_widget", None)
             st.rerun()
-    with n2:
+    with b2:
         if st.button(
             "Siguiente ▶",
             disabled=idx >= n - 1,
@@ -188,28 +215,19 @@ def _render_kdd_paginator() -> int:
             help="Siguiente fase del ciclo KDD",
         ):
             st.session_state.kdd_fase_idx = idx + 1
-            st.session_state.pop("kdd_select_widget", None)
             st.rerun()
-    with n3:
-        sel = st.selectbox(
-            "Ir a fase",
-            options=list(range(n)),
-            format_func=lambda i: labels[i],
-            index=idx,
-            key="kdd_select_widget",
-            label_visibility="visible",
-        )
-
-    if sel != st.session_state.kdd_fase_idx:
-        st.session_state.kdd_fase_idx = sel
-        st.rerun()
 
     k = int(st.session_state.kdd_fase_idx)
     st.caption(f"**Fase {k + 1} de {n}** — {labels[k]}")
     return k
 
 
-def _render_fase_kdd_card(f: FaseKDD) -> None:
+def _render_fase_kdd_card(
+    f: FaseKDD,
+    *,
+    widget_scope: str = "kdd_principal",
+    mostrar_vista_previa: bool = True,
+) -> None:
     with st.container(border=True):
         st.markdown(f"### {f.orden}. {f.titulo}")
         st.caption(f.resumen)
@@ -226,7 +244,19 @@ def _render_fase_kdd_card(f: FaseKDD) -> None:
             for x in f.datos_salida:
                 st.markdown(f"- `{x}`")
         st.markdown("**Stack / script**")
-        st.caption(", ".join(f.stack) + (f" → `{f.script}`" if f.script else ""))
+        _cap_stack = list(f.stack)
+        if f.script and f.script.strip():
+            sc = f.script.strip()
+            if sc not in _cap_stack:
+                _cap_stack.append(f"`{sc}`")
+        st.caption(" · ".join(_cap_stack))
+        if mostrar_vista_previa:
+            render_vista_previa_ficheros_fase(st, f, BASE, widget_scope=widget_scope)
+        else:
+            st.caption(
+                "Vista previa de ficheros, simulación por paso, GPS y OpenWeather: "
+                "elige esta fase con **◀ / ▶** o «Ir a fase» en la cabecera de la pestaña."
+            )
 
 
 def main() -> None:
@@ -252,36 +282,70 @@ def main() -> None:
     # --- Sidebar: servicios + paso temporal + acciones ---
     with st.sidebar:
         st.subheader("Estado de servicios")
-        for nombre, etiqueta in estado_servicios().items():
-            # Misma línea visual: ✅ Activo / ❌ Inactivo + nombre en negrita
+        estado_stack = estado_servicios()
+        for nombre, etiqueta in estado_stack.items():
             st.markdown(f"{etiqueta} **{nombre}**")
 
-        st.caption(
-            f"Puertos: NameNode **9870**, Kafka **9092**, Cassandra **9042** (host: `{CASSANDRA_HOST}`)."
+        todos_ok = all(
+            v.startswith("✅") or "Activo" in v for v in estado_stack.values()
         )
 
-        if st.button(
-            "▶ Arrancar HDFS + Cassandra + Kafka",
-            help="Ejecuta el arranque en orden. Luego pulsa «Actualizar estado».",
-            width="stretch",
-            type="primary",
-            key="btn_arrancar_stack_basico",
-        ):
-            with st.spinner("Arrancando HDFS, Cassandra y Kafka…"):
-                msgs = arrancar_stack_basico()
-            st.session_state["last_arranque_msgs"] = msgs
-            st.rerun()
+        st.caption(
+            "Resumen **stack completo** (7 componentes). "
+            f"Puertos típicos: `9870` HDFS · `9092` Kafka · `9042` Cassandra (`{CASSANDRA_HOST}`) · "
+            "`7077` Spark · `10000` Hive · `8088` Airflow · `8443`/`8080` NiFi."
+        )
+        st.caption("Controles por servicio (iniciar/parar) en la pestaña **Servicios**.")
 
         if st.button("🔄 Actualizar estado", width="stretch", key="btn_refresh_estado"):
             st.rerun()
 
-        with st.expander("Arrancar stack completo (7 servicios)", expanded=False):
-            st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
-            if st.button("Ejecutar arranque completo", key="btn_arrancar_todos"):
-                with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
-                    msgs = arrancar_todos_servicios()
+        if todos_ok:
+            st.success("Stack en marcha: todos los servicios responden.")
+            with st.expander("Reiniciar arranque (solo si lo necesitas)", expanded=False):
+                st.caption(
+                    "No hace falta usar esto si el pipeline ya funciona. "
+                    "Solo tras reinicio del sistema o si un servicio se ha caído."
+                )
+                if st.button(
+                    "▶ Arrancar base (HDFS + Cassandra + Kafka)",
+                    help="Orden mínimo para ingesta. Luego «Actualizar estado».",
+                    width="stretch",
+                    type="secondary",
+                    key="btn_arrancar_stack_basico",
+                ):
+                    with st.spinner("Arrancando HDFS, Cassandra y Kafka…"):
+                        msgs = arrancar_stack_basico()
+                    st.session_state["last_arranque_msgs"] = msgs
+                    st.rerun()
+
+                st.caption("Stack completo: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
+                if st.button("Ejecutar arranque completo (7 servicios)", key="btn_arrancar_todos"):
+                    with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
+                        msgs = arrancar_todos_servicios()
+                    st.session_state["last_arranque_msgs"] = msgs
+                    st.rerun()
+        else:
+            st.warning("Algunos servicios no responden — revisa la lista o arranca el stack.")
+            if st.button(
+                "▶ Arrancar base (HDFS + Cassandra + Kafka)",
+                help="Primero el núcleo de ingesta. Luego «Actualizar estado».",
+                width="stretch",
+                type="primary",
+                key="btn_arrancar_stack_basico",
+            ):
+                with st.spinner("Arrancando HDFS, Cassandra y Kafka…"):
+                    msgs = arrancar_stack_basico()
                 st.session_state["last_arranque_msgs"] = msgs
                 st.rerun()
+
+            with st.expander("Arrancar stack completo (7 servicios)", expanded=False):
+                st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
+                if st.button("Ejecutar arranque completo", key="btn_arrancar_todos"):
+                    with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
+                        msgs = arrancar_todos_servicios()
+                    st.session_state["last_arranque_msgs"] = msgs
+                    st.rerun()
 
         if st.session_state.get("last_arranque_msgs"):
             with st.expander("Último resultado de arranque", expanded=True):
@@ -374,14 +438,12 @@ def main() -> None:
     )
 
     with tab_kdd:
-        st.subheader("Fases del ciclo KDD en este proyecto")
+        _render_kdd_title_and_selector()
         st.info(
             "Las fases **1–2** se realizan en `ingesta/ingesta_kdd.py`. "
             "Las fases **3–5** se concentran en `procesamiento/procesamiento_grafos.py` (Spark)."
         )
-
-        st.markdown("##### Navegación por fases")
-        idx = _render_kdd_paginator()
+        idx = _render_kdd_prev_next()
         fase_actual = FASES_KDD[idx]
 
         paso = int(st.session_state.paso_15min)
@@ -398,6 +460,21 @@ def main() -> None:
             st.info(
                 "Fases **3** y **4** ejecutan solo la parte Spark indicada (`fase_kdd_spark`). "
                 "Para persistir en Cassandra y ver el mapa actualizado, usa la **fase 5** o el botón de procesamiento completo en la barra lateral."
+            )
+        elif fase_actual.orden == 5:
+            st.info(
+                "La **fase 5** persiste en Cassandra y opcionalmente en Hive. "
+                "El mapa geográfico está en **Mapa y métricas**; la figura de **topología** (abajo) es la misma para fases 3–5."
+            )
+
+        if fase_actual.orden in (3, 4, 5):
+            render_panel_reglas_grafo(st, fase_actual.orden)
+            pr_rows = cargar_pagerank_cassandra() if fase_actual.orden >= 4 else []
+            render_bloque_grafo_fases_spark(
+                st,
+                orden_fase=fase_actual.orden,
+                nodos_cassandra=cargar_nodos_cassandra(),
+                pagerank_rows=pr_rows,
             )
 
         c_run, c_spacer = st.columns([2, 3])
@@ -426,19 +503,11 @@ def main() -> None:
 
         with st.expander("Ver todas las fases (lista completa)", expanded=False):
             for f in FASES_KDD:
-                _render_fase_kdd_card(f)
-
-        with st.expander("Diagrama resumido"):
-            st.code(
-                """
-┌──────────────────────────────────────────────────────────────────┐
-│ 1–2 INGESTA          API clima + simulación + GPS → Kafka + HDFS │
-│ 3–5 SPARK            GraphFrames → autosanación → PageRank →     │
-│                      Cassandra (+ Hive opcional)                  │
-└──────────────────────────────────────────────────────────────────┘
-""",
-                language="text",
-            )
+                _render_fase_kdd_card(
+                    f,
+                    widget_scope=f"kdd_lista_f{f.orden}",
+                    mostrar_vista_previa=False,
+                )
 
     with tab_resultados:
         render_pipeline_resultados_tab()

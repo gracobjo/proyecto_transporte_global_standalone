@@ -114,6 +114,14 @@ HIVE_METASTORE_URIS = os.environ.get("HIVE_METASTORE_URIS", "")  # ej: thrift://
 HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 para JDBC/beeline
 # JDBC para beeline / clientes (cuadro de mando, integraciones)
 HIVE_JDBC_URL = os.environ.get("HIVE_JDBC_URL", "jdbc:hive2://localhost:10000")
+# Usuario Hive (beeline -n). Sin esto, HiveServer2 trata la sesión como «anonymous» y puede fallar con
+# «User: hadoop is not allowed to impersonate anonymous» si no hay proxy user en core-site.xml.
+_SIMLOG_HIVE_USER = os.environ.get("SIMLOG_HIVE_BEELINE_USER", "").strip()
+HIVE_BEELINE_USER = (
+    _SIMLOG_HIVE_USER
+    if _SIMLOG_HIVE_USER
+    else (os.environ.get("HADOOP_USER_NAME") or os.environ.get("USER") or "hadoop")
+)
 
 # NiFi (opcional; URL de la UI para documentación o integración)
 # Importante: usar localhost por SNI/TLS del certificado por defecto de NiFi.

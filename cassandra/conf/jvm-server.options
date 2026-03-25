@@ -108,8 +108,8 @@
 # transparent hugepage allocation more effective.
 -XX:+AlwaysPreTouch
 
-# Disable biased locking as it does not benefit Cassandra.
--XX:-UseBiasedLocking
+# Biased locking removed in JDK 21+; omit -XX:-UseBiasedLocking (unrecognized on Java 21).
+# (Cassandra 4.x jvm options predating JDK 21)
 
 # Enable thread-local allocation blocks and allow the JVM to automatically
 # resize them at runtime.
