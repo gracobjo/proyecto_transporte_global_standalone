@@ -7,6 +7,7 @@ participant "Spark" as S
 participant "Cassandra" as C
 participant "Hive" as HV
 participant "Dashboard" as UI
+participant "OpenWeather API" as OWM
 
 SCH -> ING: Trigger (cada 15 min)
 ING -> K: Publica snapshot (raw/filtered)
@@ -17,5 +18,11 @@ S -> C: Escribe estado operativo
 S -> HV: Escribe histórico
 UI -> C: Lee estado actual
 UI -> HV: Consulta histórico (opcional)
+
+== Exploración didáctica (CU-09, opcional) ==
+UI -> ING: consulta_clima_hubs(api_key sesión)
+ING -> OWM: HTTP OpenWeather
+OWM --> ING: clima por hub
+ING --> UI: tabla en Streamlit
 
 @enduml

@@ -38,11 +38,25 @@ MOTIVOS = {
 }
 
 
-def consulta_clima_hubs() -> dict:
-    """Obtener clima actual de los 5 Hubs vía API OpenWeather."""
+def consulta_clima_hubs(api_key: str | None = None) -> dict:
+    """
+    Obtener clima actual de los 5 Hubs vía API OpenWeather.
+    Si `api_key` viene rellena (p. ej. desde el dashboard), se usa como `appid`;
+    si no, `API_WEATHER_KEY` de config / entorno.
+    """
+    appid = (api_key or "").strip() or (API_WEATHER_KEY or "").strip()
     hubs = RED["hubs"]
     nodos = get_nodos()
-    clima = {}
+    clima: dict = {}
+    if not appid:
+        for hub in hubs:
+            clima[hub] = {
+                "descripcion": "Sin API key: define API_WEATHER_KEY o pasa api_key a consulta_clima_hubs().",
+                "temp": None,
+                "humedad": None,
+                "viento": None,
+            }
+        return clima
     for hub in hubs:
         lat = nodos[hub]["lat"]
         lon = nodos[hub]["lon"]
@@ -52,7 +66,7 @@ def consulta_clima_hubs() -> dict:
                 params={
                     "lat": lat,
                     "lon": lon,
-                    "appid": API_WEATHER_KEY,
+                    "appid": appid,
                     "units": "metric",
                     "lang": "es",
                 },
@@ -67,7 +81,14 @@ def consulta_clima_hubs() -> dict:
                     "viento": d.get("wind", {}).get("speed"),
                 }
             else:
-                clima[hub] = {"descripcion": "N/A", "temp": None, "humedad": None, "viento": None}
+                msg = "HTTP " + str(r.status_code)
+                try:
+                    err_j = r.json()
+                    if isinstance(err_j, dict) and err_j.get("message"):
+                        msg += f": {err_j['message']}"
+                except Exception:
+                    pass
+                clima[hub] = {"descripcion": msg, "temp": None, "humedad": None, "viento": None}
         except Exception as e:
             clima[hub] = {"descripcion": f"Error: {e}", "temp": None, "humedad": None, "viento": None}
     return clima

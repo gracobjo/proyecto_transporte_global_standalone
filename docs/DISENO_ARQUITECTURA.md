@@ -21,7 +21,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 | Estado operativo | Consulta rápida en tiempo casi real | Cassandra |
 | Histórico analítico | Consultas de tendencia y reporting | Hive |
 | Orquestación | Programación y ejecución encadenada | Airflow |
-| Visualización | Operación y análisis de rutas/métricas | Streamlit + Folium |
+| Visualización | Operación, rutas/métricas y **guía del ciclo KDD** (fases, payload, topología vs mapa) | Streamlit + Folium + Altair (topología en pestaña KDD) |
 
 ## Flujo de extremo a extremo
 
@@ -30,6 +30,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 3. Spark lee desde HDFS/Kafka, normaliza datos y aplica lógica de grafo.
 4. Persistencia en Cassandra (estado actual) y Hive (histórico).
 5. Dashboard y API consumen Cassandra para operación diaria.
+6. La pestaña **Ciclo KDD** del dashboard enlaza fases con scripts y ficheros del repo, permite probar **OpenWeather** con clave opcional en sesión y muestra **una** vista topológica de la red para fases 3–5 (detalle en `docs/DASHBOARD_KDD_UI.md`).
 
 ## Decisiones de diseño
 
@@ -54,6 +55,10 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 
 ## Evolución prevista
 
-- Activar NiFi 2.6 en runtime de forma estándar.
+- Activar NiFi en runtime de forma estándar según `NIFI_HOME`.
 - Endurecer validaciones de contrato JSON (esquemas explícitos).
 - Añadir evidencias de pruebas E2E para rúbrica académica.
+
+## Diagramas
+
+Los diagramas visuales actualizados (Mermaid) están en [DIAGRAMAS_MERMAID.md](DIAGRAMAS_MERMAID.md) y en [DISENO_SISTEMA.md](DISENO_SISTEMA.md).

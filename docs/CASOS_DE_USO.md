@@ -1,132 +1,110 @@
-<<<<<<< HEAD
-# Casos de uso (SIMLOG España)
+# Casos de uso — SIMLOG España
 
-Documento de casos de uso funcionales para la plataforma en modo standalone.
+Documento funcional para la plataforma en modo standalone.
 
 ## Actores
 
-- Operador de plataforma
-- Analista logístico
-- Orquestador (Airflow/NiFi)
-- Sistema externo (API OpenWeather)
+| Actor | Descripción |
+|-------|-------------|
+| **Operador de plataforma** | Arranca/para servicios, lanza DAGs, ejecuta scripts. |
+| **Analista logístico** | Consulta mapa, métricas, histórico. |
+| **Planificador** | Evalúa rutas híbridas y alternativas. |
+| **Sistema programador** | Airflow, NiFi, cron — ejecución automática. |
 
-## Catálogo de casos de uso
+## Catálogo
 
 | ID | Caso de uso | Actor principal | Resultado |
 |----|-------------|-----------------|-----------|
-| CU-01 | Ejecutar ingesta KDD | Operador / Orquestador | Snapshot con clima, estados y camiones publicado en Kafka y guardado en HDFS |
-| CU-02 | Procesar grafo de transporte | Operador / Orquestador | Grafo autosanado, PageRank y persistencia en Cassandra/Hive |
-| CU-03 | Consultar estado operativo | Analista | Visualización actual de nodos/aristas/camiones en dashboard |
-| CU-04 | Planificar ruta alternativa | Analista | Ruta principal y alternativas con estimación de retraso/coste |
-| CU-05 | Ejecutar pipeline por fases | Operador | Ejecución controlada de fases KDD 1..5 con trazabilidad |
-| CU-06 | Revisar calidad de datos | Operador | Detección y tratamiento de nulos/duplicados/estados no canónicos |
-| CU-07 | Orquestar operación periódica | Orquestador | Ejecución programada cada 15 min y tareas mensuales de mantenimiento |
-| CU-08 | Gestionar servicios del stack | Operador | Inicio/parada/comprobación de HDFS, Kafka, Cassandra, Spark, Hive, NiFi |
+| CU-01 | Ejecutar ciclo KDD (ingesta → procesamiento) | Operador / Programador | Snapshot en Kafka/HDFS y datos en Cassandra/Hive |
+| CU-02 | Supervisar y gobernar el stack | Operador | Servicios coherentes (puertos / estado) |
+| CU-03 | Gestionar stack vía script CLI | Operador | `simlog_stack.py start/status/stop` |
+| CU-04 | Visualizar estado de red y camiones | Analista | Dashboard Streamlit / mapa |
+| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado |
+| CU-06 | Evaluar rutas híbridas | Planificador | Rutas y métricas en UI de planificación |
+| CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
+| CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
+| CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather; simulación por paso; topología sin duplicar mapas |
 
-## Detalle resumido por caso
+## Detalle breve
 
-### CU-01 Ejecutar ingesta KDD
+### CU-01 — Ejecutar ciclo KDD
 
-- **Entrada**: API key OpenWeather, topología de nodos.
-- **Flujo**: consulta clima + simulación de incidentes + generación GPS camiones.
-- **Salida**: JSON enriquecido en `transporte_raw`/`transporte_filtered` y backup HDFS.
+- **Precondiciones:** HDFS, Kafka, Cassandra (y opcionalmente Hive) activos.
+- **Flujo:** ingesta genera JSON → Kafka + HDFS → Spark procesa → Cassandra + Hive.
+- **Disparadores:** Streamlit “Paso siguiente”, Airflow `dag_maestro_smart_grid`, DAGs `simlog_kdd_*`, NiFi.
 
-### CU-02 Procesar grafo de transporte
+### CU-02 — Supervisar el stack
 
-- **Entrada**: JSON desde HDFS/Kafka.
-- **Flujo**: limpieza, autosanación de aristas, métricas de centralidad (PageRank).
-- **Salida**: tablas operativas en Cassandra y tablas históricas en Hive.
+- **Flujo:** panel Streamlit “Servicios” o `scripts/comprobar_stack.sh` / API si está expuesta.
 
-### CU-03 Consultar estado operativo
+### CU-03 — Gestionar stack por CLI
 
-- **Entrada**: datos de Cassandra.
-- **Flujo**: renderizado en mapa y paneles de métricas.
-- **Salida**: visión en tiempo casi real de la red.
+- **Comandos:** `python -u scripts/simlog_stack.py start|status|stop` desde la raíz del proyecto (venv activado).
+- **Nota:** no sustituye la configuración de `AIRFLOW_HOME` ni de `[api] base_url` para Airflow.
 
-### CU-04 Planificar ruta alternativa
+### CU-04 — Visualizar estado operativo
 
-- **Entrada**: origen/destino y estado de red.
-- **Flujo**: cálculo de ruta principal + alternativas ante bloqueos/incidencias.
-- **Salida**: pasos de ruta, coste estimado y visualización.
+- **Entrada:** lecturas desde Cassandra en `app_visualizacion.py`.
 
-### CU-05 Ejecutar pipeline por fases
+### CU-05 — Histórico
 
-- **Entrada**: fase seleccionada (1..5), paso temporal.
-- **Flujo**: ejecución controlada por script/pestaña KDD.
-- **Salida**: artefactos por fase y trazabilidad en `reports/kdd/work`.
+- **Entrada:** Hive (`logistica_db` u otra base definida en el proyecto).
 
-### CU-06 Revisar calidad de datos
+### CU-06 — Rutas híbridas
 
-- **Entrada**: payloads de ingesta.
-- **Flujo**: normalización de estados, tratamiento de nulos, deduplicación por `id_camion`.
-- **Salida**: datos válidos para persistencia.
+- **UI:** vistas de planificación / mapa híbrido en el proyecto.
 
-### CU-07 Orquestar operación periódica
+### CU-07 — Airflow
 
-- **Entrada**: planificación Airflow (15 min/mensual).
-- **Flujo**: tareas encadenadas y control de dependencias.
-- **Salida**: pipeline autónomo y mantenido.
+- **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
+- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `dag_maestro_smart_grid`.
 
-### CU-08 Gestionar servicios del stack
+### CU-08 — NiFi
 
-- **Entrada**: orden de operación (iniciar/comprobar/parar).
-- **Flujo**: comandos de servicio y chequeo por puertos.
-- **Salida**: estado técnico actualizado por componente.
-=======
-# Casos de uso — SIMLOG
+- **Documentación:** `nifi/README_NIFI.md`, especificación de flujo en `nifi/flow/`.
 
-## Actores
+### CU-09 — Explorar ciclo KDD en Streamlit
 
-- **Operador de plataforma**: monitoriza y arranca/parada servicios.
-- **Analista logístico**: consulta estado de red, rutas y métricas.
-- **Planificador**: evalúa impacto operativo y alternativas.
-- **Sistema programador**: Airflow/NiFi ejecutan procesos automáticos.
+- **Precondiciones:** proyecto clonado; opcionalmente ingesta previa para ver `ultimo_payload.json`.
+- **Flujo principal:** abrir pestaña **Ciclo KDD** → elegir fase (◀ ▶ o desplegable) → leer reglas / vistas previas / grafo topológico según fase → en 1–2 ajustar paso, ejecutar ingesta o guardar instantánea y comparar payload → en 1–2 opcionalmente introducir API key y consultar OpenWeather.
+- **Postcondiciones:** comprensión del alineamiento fase–script–datos sin exigir lectura directa de todo el código.
+- **Diseño:** `docs/DASHBOARD_KDD_UI.md`.
 
-## Casos de uso principales
+---
 
-### CU-01 — Ejecutar ciclo KDD completo
+## Diagrama de casos de uso (Mermaid)
 
-- **Actor**: Sistema programador / Operador.
-- **Precondiciones**: Kafka, HDFS, Cassandra, Spark (y opcional Hive) activos.
-- **Flujo**:
-  1. Disparo cada 15 min.
-  2. Ingesta genera snapshot.
-  3. Publicación en Kafka y backup en HDFS.
-  4. Spark procesa y persiste en Cassandra/Hive.
-- **Postcondición**: estado operativo actualizado y histórico persistido.
+> Reproducible en GitHub, GitLab, VS Code (Mermaid) y editores compatibles.
 
-### CU-02 — Supervisar servicios del stack
-
-- **Actor**: Operador.
-- **Flujo**:
-  1. Consulta panel de servicios.
-  2. Inicia/parar/comprueba servicios.
-  3. Revalida puertos y estado.
-- **Postcondición**: stack en estado consistente para operación.
-
-### CU-03 — Visualizar estado de red y camiones
-
-- **Actor**: Analista logístico.
-- **Flujo**:
-  1. Abre dashboard Streamlit.
-  2. Consulta mapa operativo y métricas.
-  3. Revisa nodos/aristas/camiones/PageRank.
-- **Postcondición**: diagnóstico operativo de la red.
-
-### CU-04 — Consultar histórico analítico
-
-- **Actor**: Analista logístico.
-- **Flujo**:
-  1. Ejecuta consultas supervisadas en Hive.
-  2. Cruza resultados con estado actual de Cassandra.
-- **Postcondición**: análisis histórico y tendencias.
-
-### CU-05 — Evaluar rutas híbridas
-
-- **Actor**: Planificador.
-- **Flujo**:
-  1. Selecciona origen/destino.
-  2. Calcula ruta principal y alternativas.
-  3. Evalúa coste/retardo estimado.
-- **Postcondición**: decisión de ruta con soporte analítico.
->>>>>>> 047e769 (feat: estabilizar stack y documentar arquitectura KDD completa)
+```mermaid
+flowchart LR
+  subgraph Actores
+    OP[Operador]
+    AN[Analista]
+    PL[Planificador]
+    PR[Sistema programador]
+  end
+  subgraph SIMLOG
+    CU1[CU-01 Ciclo KDD]
+    CU2[CU-02 Supervisar stack]
+    CU3[CU-03 Script CLI]
+    CU4[CU-04 Visualizar]
+    CU5[CU-05 Histórico Hive]
+    CU6[CU-06 Rutas híbridas]
+    CU7[CU-07 Airflow]
+    CU8[CU-08 NiFi]
+    CU9[CU-09 Explorar KDD en UI]
+  end
+  OP --> CU1
+  OP --> CU2
+  OP --> CU3
+  OP --> CU7
+  OP --> CU9
+  AN --> CU4
+  AN --> CU5
+  AN --> CU9
+  PL --> CU6
+  PR --> CU1
+  PR --> CU7
+  PR --> CU8
+```

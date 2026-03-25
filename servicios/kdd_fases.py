@@ -59,12 +59,19 @@ FASES_KDD: Tuple[FaseKDD, ...] = (
         titulo="Transformación",
         resumen="Modelar la red como grafo y aplicar reglas de negocio.",
         actividades=(
-            "Construcción GraphFrame (vértices + aristas con distancia).",
-            "Autosanación: eliminar rutas bloqueadas; penalizar congestión/clima.",
+            "Construcción GraphFrame (vértices + aristas con distancia km).",
+            "Autosanación: aristas Bloqueado fuera del grafo; Congestionado o motivo Niebla/Lluvia → peso ×1,5.",
+            "En el dashboard, expande «Reglas de negocio y evolución del grafo (fases 3–5)».",
         ),
         datos_entrada=("JSON HDFS / Kafka", "topología estática"),
         datos_salida=("grafo filtrado y ponderado",),
-        stack=("Spark 3.5", "GraphFrames", "procesamiento/procesamiento_grafos.py"),
+        stack=(
+            "Spark 3.5",
+            "GraphFrames",
+            "config_nodos.py",
+            "datos/rutas_red_simlog.yaml",
+            "procesamiento/procesamiento_grafos.py",
+        ),
         script="procesamiento/procesamiento_grafos.py",
     ),
     FaseKDD(
