@@ -10,7 +10,7 @@ import re
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import CASSANDRA_HOST, HIVE_DB, HIVE_JDBC_URL, KEYSPACE
+from config import CASSANDRA_HOST, HIVE_BEELINE_USER, HIVE_DB, HIVE_JDBC_URL, KEYSPACE
 
 # --- Cassandra (CQL) ---
 
@@ -114,7 +114,8 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
 def _hive_beeline_cmd() -> List[str]:
     jdbc = os.environ.get("HIVE_JDBC_URL", HIVE_JDBC_URL)
     bin_name = os.environ.get("HIVE_BEELINE_BIN", "beeline")
-    return [bin_name, "-u", jdbc, "--silent=true", "--outputformat=tsv2"]
+    # -n evita sesión «anonymous» y el error de impersonación (hadoop vs anonymous) en HS2+doAs.
+    return [bin_name, "-u", jdbc, "-n", HIVE_BEELINE_USER, "--silent=true", "--outputformat=tsv2"]
 
 
 def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:

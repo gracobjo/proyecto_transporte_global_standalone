@@ -303,6 +303,12 @@ def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
             "`jdbc:hive2://localhost:10000`). Arranca HiveServer2 (p. ej. servicio `hive-server` "
             "en docker-compose del proyecto) o apunta el JDBC al host donde escucha HS2."
         )
+    if "impersonate" in blob_err.lower() and "anonymous" in blob_err.lower():
+        out["hint_impersonacion"] = (
+            "HiveServer2 intenta impersonar al usuario del cliente; sin usuario, beeline va como "
+            "«anonymous». Define `SIMLOG_HIVE_BEELINE_USER` (p. ej. hadoop) o deja que use `USER`. "
+            "En el cluster: reglas `hadoop.proxyuser.hadoop.*` en `core-site.xml` si aplica."
+        )
     return out
 
 

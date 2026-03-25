@@ -19,6 +19,7 @@ PyYAML>=6.0
 streamlit>=1.28.0
 streamlit-folium>=0.15.0
 folium>=0.14.0
+networkx>=3.0
 
 # Airflow (si se instala en el mismo entorno)
 apache-airflow>=2.6.0

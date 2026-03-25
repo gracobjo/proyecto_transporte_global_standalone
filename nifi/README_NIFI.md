@@ -7,7 +7,6 @@ Este directorio describe el **grupo de procesadores** y el flujo de datos alinea
 
 > **Nota:** NiFi no sustituye a Spark en memoria: orquesta **ingesta y disparo de jobs**. El procesamiento masivo (GraphFrames) sigue siendo `procesamiento/procesamiento_grafos.py` o un JAR equivalente.
 
-<<<<<<< HEAD
 ## Ejecucion local en Windows (sin Docker)
 
 Guia y scripts listos en:
@@ -17,10 +16,7 @@ Guia y scripts listos en:
 - `nifi/local/start_nifi_local_windows.ps1`
 - `nifi/local/stop_nifi_local_windows.ps1`
 
-## Resumen de arquitectura
-=======
 ## Resumen de arquitectura (grupo completo usado en el proyecto)
->>>>>>> 047e769 (feat: estabilizar stack y documentar arquitectura KDD completa)
 
 ```text
                     ┌─────────────────────────────────────────────────────────┐
