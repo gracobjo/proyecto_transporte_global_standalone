@@ -15,6 +15,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | **YARN** | Parcial | Soportado (`SPARK_MASTER=yarn`); despliegue habitual `local[*]`. |
 | **Documentación** | Sí | Requisitos, diseño, casos de uso, diagramas Mermaid/PlantUML, Airflow, flujo de datos, **DASHBOARD_KDD_UI**. |
 | **Operación stack** | Sí | `scripts/simlog_stack.py` (`start` / `status` / `stop`) y `servicios/gestion_servicios.py`. |
+| **Cluster en Codespaces (perfil aislado)** | Sí | Guía y artefactos dedicados: `docker-compose.codespaces.yml`, `Dockerfile.codespaces`, `hadoop.codespaces.env`, `docs/CODESPACES_CLUSTER.md`. |
 | **Dashboard KDD (UI)** | Sí | Pestaña Ciclo KDD: fases enlazadas a código/datos, OpenWeather en formulario, simulación por paso, topología única vs mapas en otras pestañas (`docs/DASHBOARD_KDD_UI.md`, RF/RNF en `FLUJO_DATOS_Y_REQUISITOS.md` §7–8). |
 
 ---
@@ -28,6 +29,21 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | HDFS + Cassandra + Hive | Rutas en `config.py` / esquemas | Sí |
 | Airflow | DAGs en `~/airflow/dags` + `orquestacion/`; Execution API alineada al puerto del api-server | Sí |
 | YARN como runtime principal | Opcional; no es el modo por defecto | Parcial |
+| Despliegue cloud didáctico (Codespaces) | Perfil separado y documentado para no interferir con stack principal | Sí |
+
+---
+
+## Requisito específico: clúster en GitHub Codespaces
+
+| Punto | Estado |
+|------|--------|
+| Composición del clúster | Cubierto (`docker-compose.codespaces.yml`) |
+| Imagen Hadoop + Java 21 | Cubierto (`Dockerfile.codespaces`) |
+| Variables de configuración | Cubierto (`hadoop.codespaces.env`) |
+| Guía paso a paso (arranque, puertos, validación, parada) | Cubierto (`docs/CODESPACES_CLUSTER.md`) |
+| Separación respecto al despliegue principal | Cubierto (perfil con nombres dedicados `*.codespaces.*`) |
+
+**Conclusión:** Cumplido para entorno docente/demostrativo en Codespaces.
 
 ---
 

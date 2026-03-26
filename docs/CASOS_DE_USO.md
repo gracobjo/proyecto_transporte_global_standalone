@@ -26,6 +26,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather; simulación por paso; topología sin duplicar mapas |
 | CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
 | CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
+| CU-12 | Desplegar clúster didáctico en GitHub Codespaces | Operador / Docente | Hadoop+Spark+Kafka+Jupyter en perfil aislado `*.codespaces.*` |
 
 ## Detalle breve
 
@@ -88,6 +89,13 @@ Documento funcional para la plataforma en modo standalone.
 - **Flujo:** Airflow llama al microservicio FastAPI `/analyze-graph` (NetworkX) y persiste los resultados en Cassandra (`graph_anomalies`).
 - **Salida:** anomalías por nodo con `anomaly_score` y métricas asociadas; opcional Kafka `graph_anomalies`.
 
+### CU-12 — Desplegar clúster en GitHub Codespaces
+
+- **Precondiciones:** repositorio actualizado, Codespace activo, Docker operativo.
+- **Flujo principal:** ejecutar `docker compose -f docker-compose.codespaces.yml up -d --build` -> publicar puertos (`9870`, `8080`, `8888`) en modo Public -> validar UIs y logs.
+- **Postcondición:** clúster docente disponible sin alterar el `docker-compose.yml` principal.
+- **Documentación:** `docs/CODESPACES_CLUSTER.md`.
+
 ---
 
 ## Diagrama de casos de uso (Mermaid)
@@ -114,6 +122,7 @@ flowchart LR
     CU9[CU-09 Explorar KDD en UI]
     CU10[CU-10 Asistente de Flota]
     CU11[CU-11 Graph AI anomalías]
+    CU12[CU-12 Cluster Codespaces]
   end
   OP --> CU1
   OP --> CU2
@@ -130,4 +139,6 @@ flowchart LR
   PR --> CU8
   OP --> CU11
   AN --> CU11
+  OP --> CU12
+  PR --> CU12
 ```

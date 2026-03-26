@@ -35,8 +35,28 @@ La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **
 | Hive opcional en Spark (`SIMLOG_ENABLE_HIVE`) | Evitar bloqueos de metastore en desarrollo |
 | Airflow 3 + `LocalExecutor` | `[api] base_url` y puerto deben coincidir con el api-server (p. ej. 8088) para no dejar tareas en cola |
 | `simlog_stack.py` | Arranque/parada secuencial reproducible tras reinicio |
+| Perfil Codespaces aislado (`*.codespaces.*`) | Evitar conflictos con `docker-compose.yml` principal y facilitar prácticas cloud |
 | `widget_scope` en vistas KDD | Prefijo único (`kdd_principal` vs `kdd_lista_fN`) para claves Streamlit y un solo formulario OpenWeather por vista |
 | Panel de reglas unificado | Menos repetición textual al navegar fases 3–5; misma figura topológica con leyenda clara |
+
+## Perfil de despliegue: clúster en GitHub Codespaces
+
+Para uso docente/demostrativo cloud se define un perfil separado del stack principal:
+
+- `docker-compose.codespaces.yml`
+- `Dockerfile.codespaces`
+- `hadoop.codespaces.env`
+- guía operativa: `docs/CODESPACES_CLUSTER.md`
+
+Este perfil levanta Hadoop+Spark+Kafka+Jupyter con límites de recursos conservadores y puertos preparados para publicación en Codespaces.
+
+### Flujo operativo del perfil Codespaces
+
+1. Crear Codespace sobre `main`.
+2. Arrancar con `docker compose -f docker-compose.codespaces.yml up -d --build`.
+3. Publicar puertos `9870`, `8080`, `8888` como `Public`.
+4. Validar estado por logs/UIs.
+5. Parar con `docker compose -f docker-compose.codespaces.yml down` (o `down -v` para limpieza completa).
 
 ## Flujo operativo recomendado
 

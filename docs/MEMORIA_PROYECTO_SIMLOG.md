@@ -219,6 +219,35 @@ El proyecto dispone de guias para stack completo y mapeo practico con el enuncia
 
 Se incorpora modo demo de bajo riesgo con script de arranque en un comando (`scripts/demo_codespaces.sh`), pensado para presentaciones sin depender de levantar todo el stack pesado.
 
+Adicionalmente, se define un perfil de cluster docente aislado para Codespaces:
+
+- `docker-compose.codespaces.yml`
+- `Dockerfile.codespaces`
+- `hadoop.codespaces.env`
+- guia operativa: `docs/CODESPACES_CLUSTER.md`
+
+Este perfil evita conflictos con el `docker-compose.yml` principal y permite mostrar infraestructura Hadoop/Spark/Kafka/Jupyter en entorno cloud controlado.
+
+### 10.4 Procedimiento resumido del cluster en Codespaces
+
+1. Crear Codespace sobre `main`.
+2. Levantar cluster:
+
+```bash
+docker compose -f docker-compose.codespaces.yml up -d --build
+docker compose -f docker-compose.codespaces.yml ps
+```
+
+3. Publicar puertos en modo `Public`: `9870`, `8080`, `8888`.
+4. Validar UIs y logs (`namenode`, `spark-master`, `kafka`).
+5. Parar/limpiar cuando termine la sesion:
+
+```bash
+docker compose -f docker-compose.codespaces.yml down
+# o limpieza completa
+docker compose -f docker-compose.codespaces.yml down -v
+```
+
 ---
 
 ## 11. Orquestacion y automatizacion (Airflow y NiFi)
@@ -311,6 +340,16 @@ Lineas de evolucion propuestas:
 bash scripts/demo_codespaces.sh
 ```
 
+Variantes utiles:
+
+```bash
+# Solo UI (sin Docker)
+SIMLOG_DEMO_DOCKER=0 bash scripts/demo_codespaces.sh
+
+# Con HDFS + Cassandra + Kafka
+SIMLOG_DEMO_DOCKER_SERVICES="namenode datanode cassandra kafka" bash scripts/demo_codespaces.sh
+```
+
 ### 16.2 Arranque local basico
 
 ```bash
@@ -327,6 +366,14 @@ streamlit run app_visualizacion.py
 python -u scripts/simlog_stack.py start
 python -u scripts/simlog_stack.py status
 python -u scripts/simlog_stack.py stop
+```
+
+### 16.4 Cluster aislado en Codespaces
+
+```bash
+docker compose -f docker-compose.codespaces.yml up -d --build
+docker compose -f docker-compose.codespaces.yml ps
+docker compose -f docker-compose.codespaces.yml down
 ```
 
 ---
@@ -351,6 +398,7 @@ Esta memoria sintetiza y agrupa el contenido distribuido en la documentacion exi
 - `docs/MANUAL_DESARROLLADOR.md`
 - `docs/MANUAL_USUARIO_GRAFICO.md`
 - `docs/CODESPACES_DEMO.md`
+- `docs/CODESPACES_CLUSTER.md`
 - `DOCKER.md`
 - `GUIA_PRACTICA_DOCKER.md`
 - `nifi/README_NIFI.md`

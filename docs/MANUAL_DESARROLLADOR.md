@@ -191,6 +191,44 @@ Documentación:
 
 Sugerencia: prueba endpoints directamente desde Swagger (botón “Try it out”) para validar payloads y respuestas.
 
+## 4.2 Cluster Big Data en GitHub Codespaces (perfil aislado)
+
+Para evitar conflictos con el stack principal del proyecto, el repositorio incorpora un perfil dedicado a Codespaces:
+
+- `docker-compose.codespaces.yml`
+- `Dockerfile.codespaces`
+- `hadoop.codespaces.env`
+- guía operativa: `docs/CODESPACES_CLUSTER.md`
+
+### Flujo recomendado
+
+1. Crear Codespace sobre `main`.
+2. Ejecutar:
+
+   ```bash
+   docker compose -f docker-compose.codespaces.yml up -d --build
+   docker compose -f docker-compose.codespaces.yml ps
+   ```
+
+3. En la pestaña **Ports**, marcar como `Public`:
+   - `9870` (Hadoop NameNode UI)
+   - `8080` (Spark Master UI)
+   - `8888` (Jupyter)
+
+4. Validar logs:
+
+   ```bash
+   docker compose -f docker-compose.codespaces.yml logs --tail=120 namenode
+   docker compose -f docker-compose.codespaces.yml logs --tail=120 spark-master
+   docker compose -f docker-compose.codespaces.yml logs --tail=120 kafka
+   ```
+
+### Notas de mantenimiento
+
+- Este perfil no reemplaza `docker-compose.yml` del stack completo.
+- Si hay presión de recursos en Codespaces, parar `python-env` (Jupyter) primero.
+- No levantar simultaneamente perfil Codespaces y stack completo en el mismo entorno.
+
 ## 5. UML / Diagramas (PlantUML) para documentación
 
 ### 5.1 Secuencia — Asistente de Flota

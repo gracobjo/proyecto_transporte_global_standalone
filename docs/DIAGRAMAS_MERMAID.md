@@ -26,6 +26,7 @@ flowchart TB
     UC9[CU-09 Explorar KDD UI]
     UC10[CU-10 Asistente de Flota]
     UC11[CU-11 Graph AI anomalías]
+    UC12[CU-12 Cluster Codespaces]
   end
   OP --> UC1
   OP --> UC2
@@ -40,8 +41,10 @@ flowchart TB
   SCH --> UC1
   SCH --> UC7
   SCH --> UC8
+  SCH --> UC12
   OP --> UC11
   AN --> UC11
+  OP --> UC12
 ```
 
 ---
@@ -189,6 +192,34 @@ flowchart TB
   PY --> API
   PY --> SCH
   PY --> NF
+```
+
+---
+
+## 6.b Despliegue lógico (perfil Codespaces aislado)
+
+```mermaid
+flowchart LR
+  subgraph Codespaces
+    CC[Codespace VM]
+    subgraph Docker_profile[docker-compose.codespaces.yml]
+      NN[NameNode]
+      DN[DataNode]
+      SM[Spark Master]
+      SW[Spark Worker]
+      KF[Kafka]
+      JP[Jupyter]
+    end
+    DOC[docs/CODESPACES_CLUSTER.md]
+  end
+
+  CC --> NN
+  CC --> DN
+  CC --> SM
+  CC --> SW
+  CC --> KF
+  CC --> JP
+  DOC --> Docker_profile
 ```
 
 ---
