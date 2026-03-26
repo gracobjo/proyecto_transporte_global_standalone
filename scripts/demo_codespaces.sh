@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Arranque rapido para demo en GitHub Codespaces:
 # 1) crea/activa venv, 2) instala dependencias, 3) prepara .env,
-# 4) genera un snapshot de ingesta (opcional), 5) lanza Streamlit.
+# 4) arranca servicios Docker opcionales (cassandra/kafka por defecto),
+# 5) genera snapshot de ingesta (opcional), 6) lanza Streamlit.
 
 set -euo pipefail
 
@@ -14,6 +15,10 @@ log() {
 
 warn() {
   echo "[demo-codespaces][WARN] $*" >&2
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
 }
 
 pick_python() {
@@ -32,6 +37,9 @@ pick_python() {
 PYTHON_BIN="$(pick_python)"
 VENV_DIR="${SIMLOG_VENV_DIR:-.venv}"
 PORT="${PORT:-8501}"
+DEMO_DOCKER="${SIMLOG_DEMO_DOCKER:-1}"
+DEMO_DOCKER_SERVICES="${SIMLOG_DEMO_DOCKER_SERVICES:-cassandra kafka}"
+DEMO_INIT_CASSANDRA="${SIMLOG_DEMO_INIT_CASSANDRA:-1}"
 
 if [[ ! -d "$VENV_DIR" ]]; then
   log "Creando entorno virtual en $VENV_DIR"
@@ -58,6 +66,32 @@ fi
 export SIMLOG_ENABLE_HIVE="${SIMLOG_ENABLE_HIVE:-0}"
 export SIMLOG_SPARK_TIMEOUT_SEC="${SIMLOG_SPARK_TIMEOUT_SEC:-2400}"
 export SIMLOG_INGESTA_TIMEOUT_SEC="${SIMLOG_INGESTA_TIMEOUT_SEC:-600}"
+
+if [[ "$DEMO_DOCKER" == "1" ]]; then
+  if have_cmd docker; then
+    log "Arrancando servicios Docker de demo: ${DEMO_DOCKER_SERVICES}"
+    if ! docker compose up -d ${DEMO_DOCKER_SERVICES}; then
+      warn "No se pudieron arrancar los servicios Docker (${DEMO_DOCKER_SERVICES}). Continuo en modo solo-UI."
+    else
+      if [[ "$DEMO_INIT_CASSANDRA" == "1" ]] && [[ "$DEMO_DOCKER_SERVICES" == *"cassandra"* ]]; then
+        if [[ -f "cassandra/esquema_logistica.cql" ]]; then
+          log "Inicializando esquema Cassandra (idempotente si ya existe)."
+          if ! docker cp "cassandra/esquema_logistica.cql" cassandra:/tmp/esquema_logistica.cql >/dev/null 2>&1; then
+            warn "No se pudo copiar esquema CQL al contenedor Cassandra."
+          elif ! docker exec cassandra cqlsh -f /tmp/esquema_logistica.cql >/dev/null 2>&1; then
+            warn "No se pudo aplicar el esquema en Cassandra (puede requerir mas tiempo de arranque)."
+          fi
+        else
+          warn "No existe cassandra/esquema_logistica.cql; se omite inicializacion de tablas."
+        fi
+      fi
+    fi
+  else
+    warn "Docker no esta disponible; continuo en modo solo-UI."
+  fi
+else
+  log "SIMLOG_DEMO_DOCKER=0 -> se omite arranque de servicios Docker."
+fi
 
 if [[ "${SIMLOG_DEMO_SKIP_INGESTA:-0}" != "1" ]]; then
   log "Generando snapshot de ingesta (python -m ingesta.ingesta_kdd)"

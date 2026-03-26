@@ -21,6 +21,8 @@ Este script hace:
 - crea/activa `.venv`
 - instala `requirements.txt`
 - crea `.env` desde `.env.example` si no existe
+- arranca servicios Docker de demo (`cassandra kafka` por defecto, configurable)
+- intenta inicializar esquema Cassandra (`cassandra/esquema_logistica.cql`)
 - ejecuta una ingesta inicial (si no la desactivas)
 - arranca Streamlit en `0.0.0.0:8501`
 
@@ -30,6 +32,18 @@ Este script hace:
 - Abre la URL reenviada por GitHub.
 
 ## 4) Ajustes utiles de demo
+
+- Para ejecutar en modo solo-UI (sin Docker):
+
+```bash
+SIMLOG_DEMO_DOCKER=0 bash scripts/demo_codespaces.sh
+```
+
+- Para levantar tambien HDFS de apoyo:
+
+```bash
+SIMLOG_DEMO_DOCKER_SERVICES="namenode datanode cassandra kafka" bash scripts/demo_codespaces.sh
+```
 
 - Para omitir la ingesta inicial:
 
