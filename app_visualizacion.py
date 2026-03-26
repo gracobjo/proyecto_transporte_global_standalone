@@ -50,7 +50,7 @@ from servicios.cuadro_mando_ui import render_cuadro_mando_tab
 from servicios.ui_gestion_servicios import render_panel_gestion_servicios
 from servicios.ui_servicios_web import render_sidebar_enlaces_ui
 from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
-from servicios.gestion_servicios import ORDEN_SERVICIOS, PORT_AIRFLOW, PORT_API, PORT_CASSANDRA, PORT_HDFS, PORT_HIVE, PORT_KAFKA, PORT_NIFI_HTTP, PORT_NIFI_HTTPS, PORT_SPARK_MASTER
+from servicios.gestion_servicios import ORDEN_SERVICIOS, PORT_AIRFLOW, PORT_API, PORT_CASSANDRA, PORT_FAQ_IA, PORT_HDFS, PORT_HIVE, PORT_KAFKA, PORT_NIFI_HTTP, PORT_NIFI_HTTPS, PORT_SPARK_MASTER
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
 from servicios.ui_asistente_flota import render_asistente_flota_tab
@@ -59,6 +59,7 @@ from servicios.mapa_rutas_hibridas import crear_mapa_planificacion_rutas
 from servicios.kdd_vista_grafo import render_bloque_grafo_fases_spark
 from servicios.kdd_reglas_ui import render_panel_reglas_grafo
 from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
+from servicios.ui_faq_ia import render_faq_ia_panel
 
 COLORES_ESTADO = {
     "ok": "green",
@@ -89,10 +90,11 @@ def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
     if not q:
         return []
     catalogo = [
-        {"tab": "Servicios", "titulo": "Levantar/parar stack y Swagger", "keywords": "servicios iniciar parar swagger api airflow nifi kafka hive cassandra spark hdfs"},
+        {"tab": "Servicios", "titulo": "Levantar/parar stack y Swagger", "keywords": "servicios iniciar parar swagger api faq ia airflow nifi kafka hive cassandra spark hdfs"},
         {"tab": "Cuadro de mando", "titulo": "Consultas supervisadas Cassandra/Hive", "keywords": "consulta sql cql hive cassandra dashboard cuadro mando"},
         {"tab": "Cuadro de mando", "titulo": "Informes a medida + PDF", "keywords": "informe pdf plantilla campos select tabla where order"},
         {"tab": "Asistente flota", "titulo": "Preguntas en lenguaje natural", "keywords": "asistente flota lenguaje natural camion rutas"},
+        {"tab": "Servicios", "titulo": "FAQ IA para dudas rápidas", "keywords": "faq ia preguntas frecuentes ayuda soporte"},
         {"tab": "Rutas híbridas", "titulo": "Planificación origen-destino y alternativas", "keywords": "ruta hibrida alternativa origen destino bfs"},
         {"tab": "Mapa y métricas", "titulo": "Mapa operativo y PageRank", "keywords": "mapa metrica pagerank nodos aristas tracking"},
         {"tab": "Resultados pipeline", "titulo": "Resultado de fases y persistencia", "keywords": "pipeline resultado fases ingesta spark"},
@@ -323,29 +325,34 @@ def main() -> None:
     if "timeline" not in st.session_state:
         st.session_state.timeline = []
 
-    h1, h2, h3 = st.columns([1, 5, 4])
+    h1, h2, h3 = st.columns([1, 4, 3])
     with h1:
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), width=96)
+            st.image(str(LOGO_PATH), width=88)
     with h2:
         st.title(PROJECT_DISPLAY_NAME)
         st.caption(PROJECT_TAGLINE)
     with h3:
-        st.markdown("**Buscador semántico rápido**")
-        q = st.text_input("Buscar función/área", value="", placeholder="Ej.: swagger, historial 24h, rutas alternativas", key="ui_sem_search", label_visibility="collapsed")
-        hits = _buscar_semantico_ui(q)
-        if hits:
-            for i, h in enumerate(hits):
-                if st.button(f"Ir a {h['tab']} · {h['titulo']}", key=f"hit_{i}_{h['tab']}"):
-                    st.session_state["quick_open_tab"] = h["tab"]
-                    st.rerun()
-        elif q.strip():
-            st.caption("Sin hallazgos; prueba términos como `servicios`, `hive`, `informe`, `rutas`.")
+        with st.container(border=True):
+            st.markdown("**Ir rápido a una sección**")
+            q = st.text_input(
+                "Buscar sección o función",
+                value="",
+                placeholder="Ej.: servicios, hive, informe, rutas",
+                key="ui_sem_search",
+            ).strip()
+            st.caption("Atajos útiles: `servicios`, `hive`, `informes`, `rutas`, `swagger`.")
+            hits = _buscar_semantico_ui(q)
+            if hits:
+                for i, h in enumerate(hits[:3]):
+                    if st.button(f"{h['tab']} · {h['titulo']}", key=f"hit_{i}_{h['tab']}", width="stretch"):
+                        st.session_state["quick_open_tab"] = h["tab"]
+                        st.rerun()
+            elif q:
+                st.caption("Sin coincidencias. Prueba con términos más cortos.")
 
-    st.markdown(
-        f"{PROJECT_DESCRIPTION} Ciclo **KDD** con stack Apache: **ingesta**, "
-        "**Spark + GraphFrames**, **interpretación** (Cassandra + este dashboard)."
-    )
+    st.caption(PROJECT_DESCRIPTION)
+    st.caption("Flujo principal: ingesta, Spark/GraphFrames y visualización operativa en el dashboard.")
 
     # --- Sidebar: servicios + paso temporal + acciones ---
     with st.sidebar:
@@ -368,6 +375,7 @@ def main() -> None:
             f"Puertos típicos: `{PORT_HDFS}` HDFS · `{PORT_KAFKA}` Kafka · "
             f"`{PORT_CASSANDRA}` Cassandra (`{CASSANDRA_HOST}`) · `{PORT_SPARK_MASTER}` Spark · "
             f"`{PORT_HIVE}` Hive · `{PORT_AIRFLOW}` Airflow · `{PORT_API}` Swagger API · "
+            f"`{PORT_FAQ_IA}` FAQ IA API · "
             f"`{PORT_NIFI_HTTPS}`/`{PORT_NIFI_HTTP}` NiFi."
         )
         st.caption("Controles por servicio (iniciar/parar) en la pestaña **Servicios**.")
@@ -394,8 +402,8 @@ def main() -> None:
                     st.session_state["last_arranque_msgs"] = msgs
                     st.rerun()
 
-                st.caption("Stack completo: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
-                if st.button("Ejecutar arranque completo (7 servicios)", key="btn_arrancar_todos"):
+                st.caption("Stack completo: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → API → FAQ IA → NiFi.")
+                if st.button(f"Ejecutar arranque completo ({len(ORDEN_SERVICIOS)} servicios)", key="btn_arrancar_todos"):
                     with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
                         msgs = arrancar_todos_servicios()
                     st.session_state["last_arranque_msgs"] = msgs
@@ -414,8 +422,8 @@ def main() -> None:
                 st.session_state["last_arranque_msgs"] = msgs
                 st.rerun()
 
-            with st.expander("Arrancar stack completo (7 servicios)", expanded=False):
-                st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
+            with st.expander(f"Arrancar stack completo ({len(ORDEN_SERVICIOS)} servicios)", expanded=False):
+                st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → API → FAQ IA → NiFi.")
                 if st.button("Ejecutar arranque completo", key="btn_arrancar_todos"):
                     with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
                         msgs = arrancar_todos_servicios()
@@ -628,6 +636,8 @@ def main() -> None:
 
     if active_tab == "Servicios":
         render_panel_gestion_servicios()
+        st.divider()
+        render_faq_ia_panel()
 
     if active_tab == "Mapa y métricas":
         modo_mapa = st.radio(

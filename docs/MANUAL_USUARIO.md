@@ -21,6 +21,7 @@ La app es un dashboard **Streamlit** para supervisión y análisis del ciclo **K
    ```
 
 2. Si servicios no están activos, usa el menú lateral (sidebar) o la pestaña **Servicios**.
+3. Si tienes dudas de uso, en la pestaña **Servicios** encontrarás el bloque **FAQ IA** para preguntas frecuentes del proyecto.
 
 ## 3. Sidebar global (qué controles hay y qué hace)
 
@@ -227,8 +228,33 @@ Cómo usarla:
    - **Iniciar**
    - **Comprobar**
    - **Parar** (requiere confirmar en checkbox, porque puede cortar trabajos).
+3. En la parte inferior encontrarás **FAQ IA** para resolver dudas rápidas sobre operación, informes, NiFi, Swagger o uso general del dashboard.
 
-**Resultado esperado**: estados por servicio (OK/❌) y enlaces a consolas web si existen.
+**Resultado esperado**: estados por servicio (OK/❌), enlaces a consolas web si existen y un asistente de FAQ local para incidencias frecuentes.
+
+### FAQ IA dentro de “Servicios”
+
+Qué hace:
+
+- Consulta una base de conocimiento local del proyecto.
+- Devuelve una respuesta, una puntuación de confianza, la coincidencia principal y sugerencias relacionadas.
+- Guarda un historial corto de la sesión.
+
+Cómo usarlo:
+
+1. Asegúrate de que el servicio **FAQ IA API** está activo.
+2. Escribe una pregunta como:
+   - “¿Cómo genero un informe PDF?”
+   - “¿Por qué NiFi no aparece activo?”
+   - “¿Dónde veo Swagger?”
+3. Pulsa **“Preguntar al FAQ IA”**.
+
+Resultados esperados:
+
+- Respuesta operativa inmediata.
+- Métrica de confianza.
+- Sugerencias de preguntas cercanas.
+- Fuentes del repositorio utilizadas como referencia.
 
 ---
 

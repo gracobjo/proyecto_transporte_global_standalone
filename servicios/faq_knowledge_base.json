@@ -1,0 +1,38 @@
+[
+  {
+    "question": "¿Cómo arranco todo el stack de SIMLOG?",
+    "keywords": "arrancar iniciar stack servicios hdfs kafka cassandra spark hive airflow nifi api",
+    "answer": "Desde la app, entra en la pestaña Servicios y usa 'Iniciar todos'. Por CLI también puedes ejecutar: python -u scripts/simlog_stack.py start. Revisa después el estado con 'Actualizar estado'.",
+    "sources": ["scripts/simlog_stack.py", "servicios/gestion_servicios.py"]
+  },
+  {
+    "question": "¿Por qué una consulta Hive tarda tanto o hace timeout?",
+    "keywords": "hive timeout lento query pyhive hs2 10000",
+    "answer": "Suele ocurrir por consultas pesadas o tablas sin partición/índices adecuados. Prueba primero 'diag_smoke_hive', añade LIMIT y evita ORDER BY global si no es imprescindible. Verifica también que HiveServer2 esté activo en el puerto 10000.",
+    "sources": ["servicios/cuadro_mando_ui.py", "servicios/consultas_cuadro_mando.py"]
+  },
+  {
+    "question": "¿Cómo genero un informe PDF a medida?",
+    "keywords": "informe pdf plantilla campos where order by limit cuadro mando",
+    "answer": "En Cuadro de mando > Informes a medida: selecciona motor, tabla y campos (o SELECT *), define filtros y previsualiza. Después usa 'Descargar PDF'. Puedes guardar plantillas para reutilizar configuración.",
+    "sources": ["servicios/cuadro_mando_ui.py", "servicios/report_templates.json"]
+  },
+  {
+    "question": "¿Qué significa que una consulta sea correcta pero sin filas?",
+    "keywords": "consulta correcta sin filas empty result",
+    "answer": "La sintaxis es válida, pero no hay datos que cumplan el filtro/ventana temporal. Revisa WHERE, fechas, LIMIT y que la ingesta/procesamiento se hayan ejecutado antes.",
+    "sources": ["servicios/cuadro_mando_ui.py"]
+  },
+  {
+    "question": "¿Cómo sé si NiFi está realmente activo?",
+    "keywords": "nifi activo jps 8443 8080 spark falso positivo",
+    "answer": "SIMLOG valida NiFi por proceso y firma del endpoint /nifi, no solo por puerto. Si 8080 está ocupado por Spark, no se considera NiFi activo. Revisa también jps para confirmar proceso org.apache.nifi.NiFi.",
+    "sources": ["servicios/gestion_servicios.py"]
+  },
+  {
+    "question": "¿Dónde veo Swagger de las APIs?",
+    "keywords": "swagger docs api fastapi 8090 8091",
+    "answer": "API principal: http://127.0.0.1:8090/docs. FAQ IA API: http://127.0.0.1:8091/docs. También tienes /redoc y /openapi.json en cada servicio.",
+    "sources": ["servicios/api_simlog.py", "servicios/api_faq_ia.py"]
+  }
+]

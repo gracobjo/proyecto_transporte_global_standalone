@@ -4,7 +4,7 @@ Guia practica para usar el dashboard sin entrar en detalle de codigo.
 
 ## 1) Barra superior
 
-- **Buscador semantico rapido**: escribe terminos como `swagger`, `informes`, `hive`, `rutas`.
+- **Buscador semantico rapido**: escribe terminos como `swagger`, `informes`, `hive`, `rutas`, `faq`.
 - Pulsa el hallazgo `Ir a ...` para abrir directamente la seccion funcional.
 - **Cabecera**: logo + nombre del proyecto + acceso rapido por pestañas.
 
@@ -50,12 +50,20 @@ En la pestaña **Servicios** puedes:
 - comprobar,
 - parar
 
-cada componente del stack, incluido **Swagger API (FastAPI)**.
+cada componente del stack, incluido **Swagger API (FastAPI)** y **FAQ IA API**.
 
 En cada bloque se muestra:
 - estado,
 - detalle,
 - enlace a interfaz web/cadena de acceso.
+
+### 4.1 FAQ IA
+
+Al final de la pestaña **Servicios** tienes un panel de preguntas frecuentes:
+
+1. Escribe una duda operativa.
+2. Pulsa **Preguntar al FAQ IA**.
+3. Revisa respuesta, confianza, sugerencias y fuentes.
 
 ## 5) Flujo recomendado de uso
 
@@ -65,6 +73,7 @@ En cada bloque se muestra:
 4. Consulta operativo en Cassandra.
 5. Consulta historico en Hive.
 6. Genera informe PDF para compartir/imprimir.
+7. Si hay dudas de uso, consulta **FAQ IA** antes de salir del dashboard.
 
 ## 6) Errores frecuentes y lectura rapida
 

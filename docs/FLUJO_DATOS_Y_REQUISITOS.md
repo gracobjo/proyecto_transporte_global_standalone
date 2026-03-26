@@ -176,6 +176,7 @@ En el estado actual del proyecto:
 | **Visualización** | Sí: Streamlit + mapa. |
 | **Orquestación** | Sí: Airflow (DAGs) y/o trigger en NiFi; scripts `simlog_stack.py` para el stack. |
 | **NiFi** | Sí: flujo documentado y alineado al proyecto (`nifi/`). |
+| **FAQ IA operativa** | Sí: microservicio local + panel Streamlit para preguntas frecuentes sobre uso, stack e informes. |
 
 Conclusión: la arquitectura actual cubre el ciclo completo KDD con stack Apache en modo standalone.  
 Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMENTS_CHECKLIST.md`.
@@ -237,7 +238,27 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RF-AF-05 | Mostrar resultados en un `st.dataframe` y permitir transparencia del SQL | `st.toggle("Ver consulta SQL")` + `st.code(..., language='sql')` |
 | RF-AF-06 | Mantener consistencia con el esquema real (ej. `id_camion/lat/lon`, sin `nodo_actual`) | SQL/CQL ajustados a `cassandra/esquema_logistica.cql` |
 
-## 12. Requisitos funcionales — Graph AI (FastAPI + NetworkX) para detección de anomalías
+## 12. Requisitos funcionales — FAQ IA (microservicio local + panel Streamlit)
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-FAQ-01 | Exponer un microservicio FAQ accesible por HTTP para resolver preguntas frecuentes del proyecto | `servicios/api_faq_ia.py` con FastAPI en `SIMLOG_PORT_FAQ_IA` (default `8091`) |
+| RF-FAQ-02 | Resolver preguntas en lenguaje natural sin depender de un LLM externo ni de servicios cloud | Motor local `semantic-fallback-v1` basado en similitud léxica + `SequenceMatcher` |
+| RF-FAQ-03 | Mantener una base editable de preguntas/respuestas y fuentes | `servicios/faq_knowledge_base.json` |
+| RF-FAQ-04 | Permitir consulta interactiva desde la UI con historial de sesión y sugerencias | `servicios/ui_faq_ia.py` en la pestaña **Servicios** |
+| RF-FAQ-05 | Mostrar transparencia mínima: coincidencia principal, confianza, sugerencias y fuentes | Respuesta `FAQAskResponse` (`matched_question`, `confidence`, `suggestions`, `sources`) |
+| RF-FAQ-06 | Publicar documentación Swagger del FAQ para pruebas manuales e integración | `/docs`, `/redoc` y `/openapi.json` del servicio FAQ IA |
+
+## 13. Requisitos no funcionales — FAQ IA
+
+| ID | Requisito | Notas |
+|----|-----------|-------|
+| RNF-FAQ-01 | Operación offline/local | La recuperación semántica usa JSON local y librerías estándar de Python |
+| RNF-FAQ-02 | Latencia baja para soporte de uso | Búsqueda en memoria sobre una KB pequeña; sin llamadas a terceros |
+| RNF-FAQ-03 | Mantenibilidad documental | Nuevas preguntas se añaden editando `servicios/faq_knowledge_base.json` |
+| RNF-FAQ-04 | Trazabilidad | Cada respuesta puede citar ficheros fuente del proyecto |
+
+## 14. Requisitos funcionales — Graph AI (FastAPI + NetworkX) para detección de anomalías
 
 | ID | Requisito | Implementación |
 |----|-----------|----------------|
@@ -249,7 +270,7 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RF-GAI-06 | Persistir anomalías en Cassandra en la tabla `graph_anomalies` | DAG `orquestacion/dag_graph_ai_anomalias.py` |
 | RF-GAI-07 | Orquestación periódica cada 15 minutos | Airflow DAG `simlog_graph_ai_anomalias` (schedule `timedelta(minutes=15)`) |
 
-## 13. Requisitos no funcionales — Graph AI
+## 15. Requisitos no funcionales — Graph AI
 
 | ID | Requisito | Notas |
 |----|-----------|-------|
@@ -258,4 +279,4 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RNF-GAI-03 | Tolerancia a fallos | El DAG captura fallos de red/consultas y permite reintentos de Airflow |
 | RNF-GAI-04 | Consistencia de esquema | `graph_anomalies` se alinea a `cassandra/esquema_logistica.cql` |
 
-Diseño / diagramas: nuevos bloques añadidos en `docs/DIAGRAMAS_MERMAID.md` (diagramas Asistente de Flota + Graph AI + DAG Airflow).
+Diseño / diagramas: nuevos bloques añadidos en `docs/DIAGRAMAS_MERMAID.md` (FAQ IA, Asistente de Flota, Graph AI y DAG Airflow).

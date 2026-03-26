@@ -20,6 +20,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | **Cuadro de mando extendido** | Sí | Consultas supervisadas Hive/Cassandra, SQL/CQL de lectura desde frontend, formateo tabular para usuario final, informes a medida con PDF y plantillas. |
 | **Navegación semántica UI** | Sí | Buscador semántico en cabecera con salto directo a pestañas/secciones. |
 | **Swagger en catálogo de servicios** | Sí | API FastAPI incluida en resumen de servicios y enlaces de acceso (`/docs`, `/redoc`). |
+| **FAQ IA operativa** | Sí | Microservicio FAQ local (`8091`) + panel Streamlit + KB JSON editable + Swagger. |
 
 ---
 
@@ -33,6 +34,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | Airflow | DAGs en `~/airflow/dags` + `orquestacion/`; Execution API alineada al puerto del api-server | Sí |
 | YARN como runtime principal | Opcional; no es el modo por defecto | Parcial |
 | Despliegue cloud didáctico (Codespaces) | Perfil separado y documentado para no interferir con stack principal | Sí |
+| FAQ IA local | `servicios/api_faq_ia.py` + `servicios/ui_faq_ia.py` + `servicios/faq_knowledge_base.json` | Sí |
 
 ---
 
@@ -102,8 +104,8 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | Procesamiento Spark | GraphFrames + persistencia |
 | Persistencia | Cassandra + Hive |
 | Orquestación | Airflow + scripts de stack |
-| Documentación | Checklist, diseño, casos de uso, Mermaid, CU-09, diseño UI KDD |
-| Documentación operativa ampliada | Manual usuario/desarrollador + memoria actualizados con informes, buscador semántico y Swagger |
+| Documentación | Checklist, diseño, casos de uso, Mermaid, CU-09 y FAQ IA documentada |
+| Documentación operativa ampliada | Manual usuario/desarrollador + memoria actualizados con informes, buscador semántico, Swagger y FAQ IA |
 
 ---
 
@@ -111,7 +113,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 
 1. Evidencias E2E automatizadas (reportes por run) para evaluación académica.
 2. Si el tribunal exige YARN: documentar despliegue con `SPARK_MASTER=yarn`.
-3. Unificar versión NiFi en documentación vs instalación local (`NIFI_HOME`).
+3. Ampliar la KB FAQ con troubleshooting adicional según incidencias reales de operación.
 
 ---
 

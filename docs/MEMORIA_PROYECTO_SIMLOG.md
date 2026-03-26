@@ -100,6 +100,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 - Ejecutar consultas de lectura desde frontend (SQL/CQL seguro).
 - Construir informes a medida por seleccion de tabla/campos/filtros.
 - Exportar informes en PDF y reutilizar plantillas de informe.
+- Resolver preguntas frecuentes desde un FAQ IA local integrado en la UI.
 - Orquestar ejecuciones periodicas.
 - Gestionar servicios del stack desde interfaz.
 
@@ -112,6 +113,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 - Observabilidad operativa basica (checks de servicios y pipeline).
 - Navegacion asistida por buscador semantico para reducir tiempo de acceso.
 - Seguridad de consulta: bloqueo de operaciones de escritura/borrado desde UI.
+- Soporte contextual local: FAQ IA sin dependencia de servicios externos.
 
 ---
 
@@ -124,7 +126,7 @@ La arquitectura se organiza en seis capas:
 3. **Procesamiento:** Spark con modelado de grafo y reglas de negocio.
 4. **Persistencia:** Cassandra (operativa) + Hive (historico/analitica).
 5. **Orquestacion:** Airflow, NiFi y scripts de control.
-6. **Presentacion:** Streamlit y vistas cartograficas/topologicas.
+6. **Presentacion:** Streamlit, vistas cartograficas/topologicas y FAQ IA integrada en `Servicios`.
 
 Decisiones de diseno clave:
 
@@ -181,6 +183,7 @@ El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `
 
 - Scripts de arranque/parada/comprobacion.
 - API y utilidades para consultas supervisadas.
+- FAQ IA local con base de conocimiento JSON y API Swagger.
 - Componentes de soporte para gemelo digital y asistentes.
 
 ---
@@ -195,7 +198,7 @@ La aplicacion Streamlit estructura el trabajo en nueve pestanias:
 4. **Asistente flota:** lenguaje natural hacia consultas supervisadas.
 5. **Rutas hibridas:** planificacion con incidencias y alternativas.
 6. **Gemelo digital:** simulacion de escenarios y comparacion de rutas.
-7. **Servicios:** iniciar/comprobar/parar componentes del stack.
+7. **Servicios:** iniciar/comprobar/parar componentes del stack + panel FAQ IA.
 8. **Mapa y metricas:** vista operativa y vista de planificacion.
 9. **Verificacion tecnica:** checks rapidos de conectividad y datos.
 
@@ -207,7 +210,8 @@ Aspectos UX destacados:
 - toggle de simulacion de incidencias desde frontend,
 - buscador semantico en cabecera con salto directo de pestañas,
 - constructor de informes a medida con modo `SELECT *` o por campos,
-- exportacion PDF para consumo de negocio y auditoria.
+- exportacion PDF para consumo de negocio y auditoria,
+- FAQ IA con historial, sugerencias y fuentes para reducir friccion operativa.
 
 ---
 
@@ -286,6 +290,7 @@ Mecanismos incorporados:
 - lectura de tablas de Cassandra,
 - consultas supervisadas en Hive/Cassandra,
 - paneles de verificacion en frontend.
+- FAQ IA para troubleshooting rapido y autoservicio documental.
 
 Estrategia recomendada:
 
@@ -302,6 +307,7 @@ Estrategia recomendada:
 - Interfaz unificada para operacion y explicacion del sistema.
 - Persistencia operativa e historica separadas por objetivo.
 - Capacidad de simulacion de escenarios y rutas alternativas.
+- Soporte contextual integrado mediante FAQ IA local y documentada.
 - Documentacion extensa para perfiles tecnico, usuario y presentacion.
 
 El estado actual permite demostraciones completas y ejecucion incremental segun recursos disponibles.

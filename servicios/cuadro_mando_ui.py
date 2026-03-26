@@ -41,6 +41,7 @@ from servicios.kdd_operaciones import OPERACIONES_POR_FASE
 from config import PROJECT_DISPLAY_NAME, TOPIC_TRANSPORTE
 
 REPORT_TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "servicios" / "report_templates.json"
+LOGO_PATH = Path(__file__).resolve().parents[1] / "logo.png"
 
 
 def _cargar_plantillas_usuario() -> dict:
@@ -562,6 +563,13 @@ def render_informes_a_medida() -> None:
             "default_order_by": "",
             "aliases": {},
         },
+        "administrativa": {
+            "label": "Administrativa (solo metadatos de emisión/firma)",
+            "default_limit": 1,
+            "default_where": "",
+            "default_order_by": "",
+            "aliases": {},
+        },
     }
     plantillas_usuario = _cargar_plantillas_usuario()
     plantillas = {**plantillas_base, **plantillas_usuario}
@@ -584,6 +592,65 @@ def render_informes_a_medida() -> None:
         st.session_state["rep_order"] = str(tpl_cfg.get("default_order_by", ""))
         st.session_state["rep_limit"] = int(tpl_cfg.get("default_limit", 200))
         st.session_state["rep_tpl_prev"] = plantilla
+
+    st.markdown("**Datos administrativos del informe**")
+    c_meta1, c_meta2, c_meta3 = st.columns([1, 1, 1])
+    with c_meta1:
+        fecha_emision = st.text_input(
+            "Fecha de emisión",
+            value=st.session_state.get("rep_fecha_emision", datetime.now().strftime("%Y-%m-%d")),
+            key="rep_fecha_emision",
+        ).strip()
+    with c_meta2:
+        firmante = st.text_input(
+            "Firmante",
+            value=st.session_state.get("rep_firmante", ""),
+            key="rep_firmante",
+        ).strip()
+    with c_meta3:
+        cargo = st.text_input(
+            "Cargo",
+            value=st.session_state.get("rep_cargo", ""),
+            key="rep_cargo",
+        ).strip()
+    organismo = st.text_input(
+        "Organismo / Área",
+        value=st.session_state.get("rep_organismo", PROJECT_DISPLAY_NAME),
+        key="rep_organismo",
+    ).strip()
+    observaciones = st.text_area(
+        "Observaciones / alcance (texto libre)",
+        value=st.session_state.get("rep_observaciones", ""),
+        height=90,
+        key="rep_observaciones",
+    ).strip()
+    modo_formulario = st.checkbox(
+        "Generar en formato formulario (imprimible)",
+        value=bool(st.session_state.get("rep_modo_formulario", False)),
+        key="rep_modo_formulario",
+        help="Dibuja campos tipo ficha para completar/firmar. Si dejas valores vacíos, se mantienen líneas en blanco.",
+    )
+
+    admin_meta = {
+        "fecha_emision": fecha_emision,
+        "firmante": firmante,
+        "cargo": cargo,
+        "organismo": organismo,
+        "observaciones": observaciones,
+        "modo_formulario": modo_formulario,
+    }
+
+    if plantilla == "administrativa":
+        st.info("Esta plantilla permite generar un PDF administrativo sin extraer datos de tablas.")
+        if st.button("Generar PDF administrativo", key="rep_pdf_admin", type="primary"):
+            st.session_state["rep_last_df"] = pd.DataFrame()
+            st.session_state["rep_last_sql"] = "(sin consulta: plantilla administrativa)"
+            st.session_state["rep_last_ctx"] = {
+                "motor": "documental",
+                "tabla": "administrativa",
+                "plantilla": plantilla,
+                "meta": admin_meta,
+            }
 
     motor = st.radio(
         "Base de datos",
@@ -712,7 +779,12 @@ def render_informes_a_medida() -> None:
             df = pd.DataFrame(rows)
             st.session_state["rep_last_df"] = df
             st.session_state["rep_last_sql"] = cql
-            st.session_state["rep_last_ctx"] = {"motor": motor, "tabla": tabla, "plantilla": plantilla}
+            st.session_state["rep_last_ctx"] = {
+                "motor": motor,
+                "tabla": tabla,
+                "plantilla": plantilla,
+                "meta": admin_meta,
+            }
     else:
         sql = f"SELECT {campos_sql} FROM {tabla}"
         if "." not in tabla:
@@ -731,7 +803,12 @@ def render_informes_a_medida() -> None:
             df = pd.read_csv(io.StringIO(out), sep="\t") if (out or "").strip() else pd.DataFrame()
             st.session_state["rep_last_df"] = df
             st.session_state["rep_last_sql"] = sql
-            st.session_state["rep_last_ctx"] = {"motor": motor, "tabla": tabla, "plantilla": plantilla}
+            st.session_state["rep_last_ctx"] = {
+                "motor": motor,
+                "tabla": tabla,
+                "plantilla": plantilla,
+                "meta": admin_meta,
+            }
 
     df = st.session_state.get("rep_last_df")
     ctx = st.session_state.get("rep_last_ctx") or {}
@@ -821,41 +898,144 @@ def render_informes_a_medida() -> None:
 def _generar_pdf_informe(df: pd.DataFrame, *, ctx: dict) -> bytes:
     from io import BytesIO
     from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_JUSTIFY
     from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph
     from reportlab.pdfgen import canvas
 
+    class NumberedCanvas(canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self._draw_footer(total)
+                super().showPage()
+            super().save()
+
+        def _draw_footer(self, total_pages: int):
+            self.setFont("Helvetica", 8)
+            txt = f"{self._pageNumber} de {total_pages}"
+            self.drawRightString(w - 1.2 * cm, 0.9 * cm, txt)
+
     buff = BytesIO()
-    cv = canvas.Canvas(buff, pagesize=landscape(A4))
     w, h = landscape(A4)
+    cv = NumberedCanvas(buff, pagesize=landscape(A4))
 
-    titulo = f"Informe {ctx.get('plantilla', 'operativa').title()} — {ctx.get('motor', '').upper()}::{ctx.get('tabla', '')}"
+    def _draw_header(y_top: float) -> float:
+        x_left = 1.2 * cm
+        if LOGO_PATH.exists():
+            try:
+                cv.drawImage(str(LOGO_PATH), x_left, y_top - 1.5 * cm, width=1.3 * cm, height=1.3 * cm, preserveAspectRatio=True, mask="auto")
+            except Exception:
+                pass
+        cv.setFont("Helvetica-Bold", 12)
+        cv.drawString(x_left + 1.6 * cm, y_top - 0.5 * cm, PROJECT_DISPLAY_NAME)
+        cv.setFont("Helvetica", 9)
+        cv.drawString(x_left + 1.6 * cm, y_top - 1.0 * cm, "Informe generado desde Cuadro de mando")
+        return y_top - 1.8 * cm
+
+    def _draw_paragraph_justified(text: str, x: float, y: float, width: float, font_size: int = 9) -> float:
+        style = ParagraphStyle(
+            "justified",
+            fontName="Helvetica",
+            fontSize=font_size,
+            leading=font_size + 3,
+            alignment=TA_JUSTIFY,
+        )
+        p = Paragraph(text, style=style)
+        _, ph = p.wrap(width, h)
+        p.drawOn(cv, x, y - ph)
+        return y - ph
+
+    def _draw_form_field(label: str, value: str, x: float, y: float, width: float) -> float:
+        cv.setFont("Helvetica-Bold", 9)
+        cv.drawString(x, y, label)
+        y_line = y - 0.18 * cm
+        cv.line(x + 3.2 * cm, y_line, x + width, y_line)
+        cv.setFont("Helvetica", 9)
+        if value:
+            cv.drawString(x + 3.3 * cm, y, str(value)[:120])
+        return y - 0.7 * cm
+
+    meta = ctx.get("meta", {}) if isinstance(ctx, dict) else {}
+    titulo = f"Informe {ctx.get('plantilla', 'operativa').title()} - {ctx.get('motor', '').upper()}::{ctx.get('tabla', '')}"
+    y = _draw_header(h - 1.0 * cm)
     cv.setFont("Helvetica-Bold", 14)
-    cv.drawString(1.2 * cm, h - 1.2 * cm, titulo)
+    cv.drawString(1.2 * cm, y, titulo)
     cv.setFont("Helvetica", 9)
-    cv.drawString(1.2 * cm, h - 1.9 * cm, f"Generado: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    cv.drawString(1.2 * cm, h - 2.5 * cm, f"Filas: {len(df)}  Columnas: {len(df.columns)}")
+    y -= 0.55 * cm
+    cv.drawString(1.2 * cm, y, f"Generado: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    y -= 0.45 * cm
+    cv.drawString(1.2 * cm, y, f"Fecha emisión: {meta.get('fecha_emision', '')}    Firmante: {meta.get('firmante', '')}")
+    y -= 0.45 * cm
+    cv.drawString(1.2 * cm, y, f"Cargo: {meta.get('cargo', '')}    Organismo: {meta.get('organismo', '')}")
+    y -= 0.55 * cm
+    cv.drawString(1.2 * cm, y, f"Filas: {len(df)}  Columnas: {len(df.columns)}")
 
-    # cabecera
-    y = h - 3.4 * cm
+    obs = str(meta.get("observaciones", "") or "").strip()
+    modo_form = bool(meta.get("modo_formulario", False))
+    if modo_form:
+        y -= 0.9 * cm
+        cv.setFont("Helvetica-Bold", 10)
+        cv.drawString(1.2 * cm, y, "Formulario de emisión")
+        y -= 0.2 * cm
+        cv.rect(1.1 * cm, y - 3.0 * cm, w - 2.2 * cm, 3.2 * cm)
+        y -= 0.5 * cm
+        y = _draw_form_field("Fecha emisión", str(meta.get("fecha_emision", "")), 1.4 * cm, y, w - 3.0 * cm)
+        y = _draw_form_field("Firmante", str(meta.get("firmante", "")), 1.4 * cm, y, w - 3.0 * cm)
+        y = _draw_form_field("Cargo", str(meta.get("cargo", "")), 1.4 * cm, y, w - 3.0 * cm)
+        y = _draw_form_field("Organismo", str(meta.get("organismo", "")), 1.4 * cm, y, w - 3.0 * cm)
+        y -= 0.1 * cm
+        cv.setFont("Helvetica-Bold", 9)
+        cv.drawString(1.4 * cm, y, "Firma")
+        cv.line(3.2 * cm, y - 0.18 * cm, w - 2.0 * cm, y - 0.18 * cm)
+        y -= 0.8 * cm
+
+    if obs:
+        y -= 0.7 * cm
+        cv.setFont("Helvetica-Bold", 10)
+        cv.drawString(1.2 * cm, y, "Observaciones")
+        y -= 0.25 * cm
+        y = _draw_paragraph_justified(obs, 1.2 * cm, y, w - 2.4 * cm, font_size=9)
+
+    y -= 0.8 * cm
     x0 = 1.2 * cm
     max_cols = min(len(df.columns), 8)
     cols = list(df.columns[:max_cols])
-    col_w = (w - 2.4 * cm) / max(max_cols, 1)
-    cv.setFont("Helvetica-Bold", 8)
-    for i, c in enumerate(cols):
-        cv.drawString(x0 + i * col_w, y, str(c)[:28])
-    y -= 0.45 * cm
-    cv.setFont("Helvetica", 8)
-    max_rows = min(len(df), 30)
-    for _, row in df.head(max_rows).iterrows():
+    if cols:
+        col_w = (w - 2.4 * cm) / max(max_cols, 1)
+        cv.setFont("Helvetica-Bold", 8)
         for i, c in enumerate(cols):
-            cv.drawString(x0 + i * col_w, y, str(row.get(c, ""))[:28])
-        y -= 0.42 * cm
-        if y < 1.5 * cm:
-            cv.showPage()
-            y = h - 1.5 * cm
-            cv.setFont("Helvetica", 8)
+            cv.drawString(x0 + i * col_w, y, str(c)[:28])
+        y -= 0.45 * cm
+        cv.setFont("Helvetica", 8)
+        max_rows = min(len(df), 120)
+        for _, row in df.head(max_rows).iterrows():
+            if y < 1.8 * cm:
+                cv.showPage()
+                y = _draw_header(h - 1.0 * cm) - 0.2 * cm
+                cv.setFont("Helvetica-Bold", 8)
+                for i, c in enumerate(cols):
+                    cv.drawString(x0 + i * col_w, y, str(c)[:28])
+                y -= 0.45 * cm
+                cv.setFont("Helvetica", 8)
+            for i, c in enumerate(cols):
+                cv.drawString(x0 + i * col_w, y, str(row.get(c, ""))[:28])
+            y -= 0.42 * cm
+    else:
+        cv.setFont("Helvetica-Oblique", 10)
+        cv.drawString(1.2 * cm, y, "Informe sin tabla de datos (plantilla administrativa).")
 
+    cv.showPage()
     cv.save()
     return buff.getvalue()
 

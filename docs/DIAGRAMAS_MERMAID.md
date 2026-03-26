@@ -29,6 +29,7 @@ flowchart TB
     UC12[CU-12 Cluster Codespaces]
     UC13[CU-13 Informes a medida]
     UC14[CU-14 Buscador semántico]
+    UC15[CU-15 FAQ IA]
   end
   OP --> UC1
   OP --> UC2
@@ -51,6 +52,8 @@ flowchart TB
   AN --> UC13
   OP --> UC14
   AN --> UC14
+  OP --> UC15
+  AN --> UC15
 ```
 
 ---
@@ -65,6 +68,7 @@ flowchart LR
     N[NiFi UI]
     A[Airflow UI]
     SW[Swagger UI]
+    FQ[FAQ IA API]
   end
   subgraph UI_KDD[servicios kdd_*]
     VF[kdd_vista_ficheros]
@@ -82,11 +86,13 @@ flowchart LR
   subgraph Stores
     C[Cassandra]
     V[Hive]
+    KB[FAQ KB JSON]
   end
   U --> ST
   U --> N
   U --> A
   U --> SW
+  U --> FQ
   ST --> VF
   ST --> VR
   ST --> VG
@@ -104,6 +110,8 @@ flowchart LR
   P --> V
   ST --> C
   ST --> SW
+  ST --> FQ
+  FQ --> KB
 ```
 
 ---
@@ -281,7 +289,25 @@ sequenceDiagram
 
 ---
 
-## 9. Componentes — Integración Asistente de Flota + Graph AI
+## 9. Secuencia — FAQ IA (panel Streamlit + microservicio local)
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit (Servicios)
+  participant API as FAQ IA FastAPI
+  participant KB as faq_knowledge_base.json
+
+  U->>ST: Escribe pregunta y pulsa "Preguntar al FAQ IA"
+  ST->>API: POST /api/v1/faq/ask
+  API->>KB: Carga KB local (question, keywords, answer, sources)
+  API-->>ST: answer + confidence + matched_question + suggestions + sources
+  ST-->>U: Respuesta, confianza, sugerencias e historial
+```
+
+---
+
+## 10. Componentes — Integración FAQ IA + Asistente de Flota + Graph AI
 
 ```mermaid
 flowchart LR
@@ -291,6 +317,11 @@ flowchart LR
 
   subgraph Backend_SQL
     GSQL[Gestor consultas (whitelist)]
+  end
+
+  subgraph FAQ_Local
+    FAQ[FAQ IA FastAPI]
+    KB[KB FAQ JSON]
   end
 
   subgraph Datos
@@ -310,6 +341,8 @@ flowchart LR
   ST --> GSQL
   GSQL --> CS
   GSQL --> HV
+  ST --> FAQ
+  FAQ --> KB
 
   DAG --> CS
   DAG --> FAPI
@@ -319,7 +352,7 @@ flowchart LR
 
 ---
 
-## 10. Secuencia — Graph AI análisis (Airflow → FastAPI → Cassandra)
+## 11. Secuencia — Graph AI análisis (Airflow → FastAPI → Cassandra)
 
 ```mermaid
 sequenceDiagram
@@ -339,7 +372,7 @@ sequenceDiagram
 
 ---
 
-## 11. Diagrama (modelo conceptual) — Graph AI
+## 12. Diagrama (modelo conceptual) — Graph AI
 
 ```mermaid
 classDiagram
@@ -371,7 +404,7 @@ classDiagram
 
 ---
 
-## 12. Secuencia — Constructor de informes a medida
+## 13. Secuencia — Constructor de informes a medida
 
 ```mermaid
 sequenceDiagram
@@ -394,7 +427,7 @@ sequenceDiagram
 
 ---
 
-## 13. Secuencia — Buscador semántico y salto de pestaña
+## 14. Secuencia — Buscador semántico y salto de pestaña
 
 ```mermaid
 sequenceDiagram

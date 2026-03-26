@@ -29,6 +29,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-12 | Desplegar clúster didáctico en GitHub Codespaces | Operador / Docente | Hadoop+Spark+Kafka+Jupyter en perfil aislado `*.codespaces.*` |
 | CU-13 | Generar informes a medida (plantillas + PDF) | Analista / Operador | Informe personalizado por tabla/campos/filtros y export PDF |
 | CU-14 | Navegar por buscador semántico del dashboard | Analista / Operador | Hallazgos rápidos y salto directo a secciones/pestañas |
+| CU-15 | Resolver dudas operativas con FAQ IA | Analista / Operador | Respuesta semántica local con sugerencias y fuentes |
 
 ## Detalle breve
 
@@ -110,6 +111,12 @@ Documento funcional para la plataforma en modo standalone.
 - **Flujo:** matching semántico sobre catálogo funcional y botón `Ir a ...`.
 - **Salida:** apertura directa de la sección objetivo en la navegación principal.
 
+### CU-15 — FAQ IA (preguntas frecuentes de operación)
+
+- **Entrada:** pregunta libre (ej. “¿cómo genero un informe PDF?” o “¿por qué NiFi no aparece activo?”).
+- **Flujo:** la pestaña **Servicios** consulta `servicios/api_faq_ia.py`, que busca coincidencias en `servicios/faq_knowledge_base.json` y devuelve respuesta, confianza, coincidencia principal, sugerencias y fuentes.
+- **Salida:** respuesta operativa inmediata sin salir del dashboard; posibilidad de reutilizar preguntas del historial.
+
 ---
 
 ## Diagrama de casos de uso (Mermaid)
@@ -139,6 +146,7 @@ flowchart LR
     CU12[CU-12 Cluster Codespaces]
     CU13[CU-13 Informes a medida]
     CU14[CU-14 Buscador semántico]
+    CU15[CU-15 FAQ IA]
   end
   OP --> CU1
   OP --> CU2
@@ -161,4 +169,6 @@ flowchart LR
   AN --> CU13
   OP --> CU14
   AN --> CU14
+  OP --> CU15
+  AN --> CU15
 ```

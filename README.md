@@ -25,6 +25,7 @@ Las capacidades del sistema se alinean conceptualmente con el proyecto de refere
 | **Persistencia** | **Cassandra** (única base operativa en tiempo casi real; **no se usa MongoDB**): nodos, aristas, tracking de camiones y PageRank. **Hive**: histórico particionado para análisis. |
 | **Dashboard** | Aplicación Streamlit + Folium: mapa de España con nodos/aristas coloreados por estado, camiones en ruta, rutas alternativas (línea azul), métricas PageRank y botón "Paso Siguiente (15 min)" que ejecuta ingesta + procesamiento. |
 | **Orquestación** | DAG de Airflow que cada 15 minutos verifica HDFS/Kafka/Cassandra y ejecuta Ingesta → Procesamiento (sin solapamiento, pensado para entornos con ~4 GB RAM). |
+| **FAQ IA** | Microservicio FastAPI + panel Streamlit para preguntas frecuentes sobre stack, informes, Swagger y troubleshooting básico, sin depender de servicios externos. |
 
 ---
 
