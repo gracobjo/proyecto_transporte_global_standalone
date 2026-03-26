@@ -159,6 +159,38 @@ Ejecución:
    - `GET /health`
    - `POST /analyze-graph` con un ejemplo.
 
+## 4.1 Swagger / OpenAPI (documentación interactiva)
+
+Este proyecto usa **FastAPI**, por lo que incluye documentación interactiva **Swagger UI** y **ReDoc**.
+
+### API principal SIMLOG (`servicios/api_simlog.py`)
+
+Arranque típico:
+
+```bash
+uvicorn servicios.api_simlog:app --host 0.0.0.0 --port 8090
+```
+
+Documentación:
+- Swagger UI: `http://<host>:8090/docs`
+- ReDoc: `http://<host>:8090/redoc`
+- Esquema OpenAPI JSON: `http://<host>:8090/openapi.json`
+
+### Graph AI (`graph_ai/api.py`)
+
+Arranque típico:
+
+```bash
+uvicorn graph_ai.api:app --host 0.0.0.0 --port 8001
+```
+
+Documentación:
+- Swagger UI: `http://<host>:8001/docs`
+- ReDoc: `http://<host>:8001/redoc`
+- Esquema OpenAPI JSON: `http://<host>:8001/openapi.json`
+
+Sugerencia: prueba endpoints directamente desde Swagger (botón “Try it out”) para validar payloads y respuestas.
+
 ## 5. UML / Diagramas (PlantUML) para documentación
 
 ### 5.1 Secuencia — Asistente de Flota
