@@ -17,6 +17,9 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | **Operación stack** | Sí | `scripts/simlog_stack.py` (`start` / `status` / `stop`) y `servicios/gestion_servicios.py`. |
 | **Cluster en Codespaces (perfil aislado)** | Sí | Guía y artefactos dedicados: `docker-compose.codespaces.yml`, `Dockerfile.codespaces`, `hadoop.codespaces.env`, `docs/CODESPACES_CLUSTER.md`. |
 | **Dashboard KDD (UI)** | Sí | Pestaña Ciclo KDD: fases enlazadas a código/datos, OpenWeather en formulario, simulación por paso, topología única vs mapas en otras pestañas (`docs/DASHBOARD_KDD_UI.md`, RF/RNF en `FLUJO_DATOS_Y_REQUISITOS.md` §7–8). |
+| **Cuadro de mando extendido** | Sí | Consultas supervisadas Hive/Cassandra, SQL/CQL de lectura desde frontend, formateo tabular para usuario final, informes a medida con PDF y plantillas. |
+| **Navegación semántica UI** | Sí | Buscador semántico en cabecera con salto directo a pestañas/secciones. |
+| **Swagger en catálogo de servicios** | Sí | API FastAPI incluida en resumen de servicios y enlaces de acceso (`/docs`, `/redoc`). |
 
 ---
 
@@ -100,6 +103,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | Persistencia | Cassandra + Hive |
 | Orquestación | Airflow + scripts de stack |
 | Documentación | Checklist, diseño, casos de uso, Mermaid, CU-09, diseño UI KDD |
+| Documentación operativa ampliada | Manual usuario/desarrollador + memoria actualizados con informes, buscador semántico y Swagger |
 
 ---
 

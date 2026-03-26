@@ -97,6 +97,9 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 - Consultar estado de red, camiones y criticidad.
 - Calcular rutas hibridas y alternativas ante incidencias.
 - Realizar consultas supervisadas (Cassandra/Hive).
+- Ejecutar consultas de lectura desde frontend (SQL/CQL seguro).
+- Construir informes a medida por seleccion de tabla/campos/filtros.
+- Exportar informes en PDF y reutilizar plantillas de informe.
 - Orquestar ejecuciones periodicas.
 - Gestionar servicios del stack desde interfaz.
 
@@ -107,6 +110,8 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 - Modularidad y separacion por responsabilidades.
 - Tolerancia a degradacion parcial (Hive opcional en ciertos escenarios).
 - Observabilidad operativa basica (checks de servicios y pipeline).
+- Navegacion asistida por buscador semantico para reducir tiempo de acceso.
+- Seguridad de consulta: bloqueo de operaciones de escritura/borrado desde UI.
 
 ---
 
@@ -199,7 +204,10 @@ Aspectos UX destacados:
 - selector de fase con navegacion consistente,
 - separacion entre topologia logica y mapa geografico,
 - trazabilidad visual de cambios de payload,
-- toggle de simulacion de incidencias desde frontend.
+- toggle de simulacion de incidencias desde frontend,
+- buscador semantico en cabecera con salto directo de pestañas,
+- constructor de informes a medida con modo `SELECT *` o por campos,
+- exportacion PDF para consumo de negocio y auditoria.
 
 ---
 

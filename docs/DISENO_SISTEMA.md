@@ -18,6 +18,23 @@ SIMLOG implementa un ciclo KDD logístico de extremo a extremo con foco en:
 5. **Orquestación** — Airflow (DAGs en `~/airflow/dags`, código en `orquestacion/`), NiFi (trigger), scripts de stack.
 6. **Presentación** — Streamlit, enlaces a UIs del stack (HDFS, Spark, etc.).
 
+## Requisitos actualizados (resumen)
+
+Funcionales incorporados en la versión actual:
+
+- Consultas supervisadas en Hive/Cassandra con salida tabular amigable.
+- Ejecución de SQL/CQL de lectura desde frontend (modo seguro).
+- Constructor de informes a medida por selección de tabla/campos/filtros.
+- Exportación de informes en PDF y gestión de plantillas personalizadas.
+- Buscador semántico en cabecera con navegación directa a la sección objetivo.
+- Inclusión de Swagger API en el panel de servicios y en el resumen del stack.
+
+No funcionales reforzados:
+
+- Seguridad: ejecución restringida a sentencias de lectura.
+- Trazabilidad: plantilla de informe persistida en fichero versionable.
+- Usabilidad: navegación determinista por pestañas (`active_tab`) desde hallazgos.
+
 ### 6.1 Pestaña «Ciclo KDD» (diseño de UI)
 
 La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **documentar en vivo** el alineamiento fase ↔ código ↔ datos. Diseño detallado: **[DASHBOARD_KDD_UI.md](DASHBOARD_KDD_UI.md)**.
@@ -38,6 +55,9 @@ La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **
 | Perfil Codespaces aislado (`*.codespaces.*`) | Evitar conflictos con `docker-compose.yml` principal y facilitar prácticas cloud |
 | `widget_scope` en vistas KDD | Prefijo único (`kdd_principal` vs `kdd_lista_fN`) para claves Streamlit y un solo formulario OpenWeather por vista |
 | Panel de reglas unificado | Menos repetición textual al navegar fases 3–5; misma figura topológica con leyenda clara |
+| SQL/CQL seguro en frontend | Permitir exploración del dato sin abrir riesgo de escritura/borrado accidental |
+| Plantillas de informe en JSON | Reutilización operativa y generación PDF consistente para negocio |
+| Navegación por buscador semántico | Reducir tiempo de acceso a funciones cuando aumenta el número de pestañas/servicios |
 
 ## Perfil de despliegue: clúster en GitHub Codespaces
 
@@ -125,7 +145,11 @@ flowchart LR
     CS[Cassandra]
     HV[Hive]
   end
+  subgraph API
+    FAPI[FastAPI / Swagger]
+  end
   ST --> CS
+  ST --> FAPI
   AFU --> AFD
   AFD --> SPK
   NIF --> KF

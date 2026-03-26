@@ -28,11 +28,11 @@ En la **barra lateral izquierda** verás:
 
 ### 3.1 Estado de servicios
 
-- Botón **“🔄 Actualizar estado”**: revisa si HDFS/Kafka/Cassandra/Spark/Hive/Airflow/NiFi responden por puerto.
+- Botón **“🔄 Actualizar estado”**: revisa si HDFS/Kafka/Cassandra/Spark/Hive/Airflow/API(Swagger)/NiFi responden por puerto.
 - Si todo está OK: puedes usar **“Reiniciar arranque”** (opcional).
 - Si falta algo: puedes usar:
   - **“▶ Arrancar base (HDFS + Cassandra + Kafka)”**
-  - **“Ejecutar arranque completo (7 servicios)”**
+  - **“Ejecutar arranque completo (8 servicios)”**
 
 **Resultado esperado**: servicios levantados y listos para ingesta/procesamiento.
 
@@ -131,13 +131,20 @@ Qué incluye:
    - Pulsas **“Ejecutar consulta Cassandra”**.
    - Se muestra un `st.dataframe`.
    - (Siempre puedes ver la CQL exacta en el expander “CQL ejecutado”.)
+   - También dispones de un bloque **“CQL (copiar / pegar / ejecutar)”** para consultas `SELECT` directas.
 5. **Consultas supervisadas — Hive (histórico)**:
    - Igual que Cassandra, pero usando HiveServer2 con PyHive.
    - Se limita para evitar bloqueos del UI.
-6. **Slides — Clima y anticipación de retrasos**:
+   - También dispones de **“SQL (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.
+6. **Informes a medida (Cassandra/Hive)**:
+   - Selección por motor, tabla y campos (o modo `SELECT *`).
+   - Configuración de `WHERE`, `ORDER BY`, `LIMIT`.
+   - Guardado/carga de plantillas personalizadas.
+   - Exportación a PDF para visualización o impresión.
+7. **Slides — Clima y anticipación de retrasos**:
    - Genera una estimación orientativa por hub combinando variables meteorológicas y estados.
 
-**Resultado esperado**: tablas y métricas listadas sin necesidad de que el usuario escriba SQL.
+**Resultado esperado**: tablas y métricas listas para usuario final, con opción de consulta libre segura y generación de informes PDF.
 
 ---
 

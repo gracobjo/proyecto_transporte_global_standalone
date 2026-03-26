@@ -269,6 +269,51 @@ AF -> STORE: INSERT graph_anomalies
 
 ## 6. Checklist de extensiones (para mantener coherencia)
 
+## 6.1 Novedades UI (consultas, informes y navegacion)
+
+Nuevos bloques relevantes:
+
+- `servicios/cuadro_mando_ui.py`
+  - **Informes a medida (plantillas + PDF)**:
+    - descubrimiento de tablas/columnas por motor,
+    - modo `SELECT *` y modo por campos,
+    - filtros (`WHERE`), orden (`ORDER BY`), limite,
+    - export PDF (`reportlab`),
+    - plantillas personalizadas persistidas en `servicios/report_templates.json`.
+  - **Consultas libres seguras**:
+    - Cassandra: `SELECT` via `ejecutar_cassandra_cql_seguro()`.
+    - Hive: `SHOW|SELECT|WITH|DESCRIBE` via `ejecutar_hive_sql_seguro()`.
+
+- `servicios/consultas_cuadro_mando.py`
+  - Descubrimiento de metadata:
+    - `listar_keyspaces_cassandra()`
+    - `listar_tablas_cassandra()`
+    - `listar_columnas_cassandra()`
+    - `listar_tablas_hive()`
+    - `listar_columnas_hive()`
+
+- `app_visualizacion.py`
+  - **Buscador semantico rapido** en cabecera.
+  - Navegacion determinista por `active_tab` al pulsar hallazgos.
+  - Mejora de presentacion (branding en sidebar + cabecera).
+
+## 6.2 Servicios del stack: Swagger API incluido
+
+Se integra `api` como servicio gestionable:
+
+- Archivo: `servicios/gestion_servicios.py`
+- Operaciones:
+  - `comprobar_api()`
+  - `iniciar_api()` (lanza `uvicorn servicios.api_simlog:app`)
+  - `parar_api()`
+- Puerto configurable:
+  - `SIMLOG_PORT_API` (default `8090`)
+
+Enlaces de interfaz:
+
+- Archivo: `servicios/ui_servicios_web.py`
+- Entrada nueva: `api` con URL por defecto `http://127.0.0.1:8090/docs`.
+
 Antes de añadir nuevas funcionalidades:
 
 - Validar que las columnas reales coinciden con `cassandra/esquema_logistica.cql`.

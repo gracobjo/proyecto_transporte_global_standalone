@@ -4,9 +4,11 @@ Widgets Streamlit: cuadro de mando, consultas supervisadas y slides de clima/ret
 from __future__ import annotations
 
 import io
+import json
 import time
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Tuple
 
 import pandas as pd
@@ -23,8 +25,13 @@ from servicios.consultas_cuadro_mando import (
     ejecutar_cassandra_cql_seguro,
     ejecutar_hive_consulta,
     ejecutar_hive_sql_seguro,
+    listar_columnas_cassandra,
+    listar_columnas_hive,
     listar_claves_cassandra,
     listar_claves_hive,
+    listar_keyspaces_cassandra,
+    listar_tablas_cassandra,
+    listar_tablas_hive,
     titulo_cassandra,
     titulo_hive,
 )
@@ -32,6 +39,25 @@ from servicios.ejecucion_pipeline import ejecutar_ingesta, ejecutar_procesamient
 from servicios.estado_y_datos import cargar_nodos_cassandra, verificar_kafka_topic
 from servicios.kdd_operaciones import OPERACIONES_POR_FASE
 from config import PROJECT_DISPLAY_NAME, TOPIC_TRANSPORTE
+
+REPORT_TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "servicios" / "report_templates.json"
+
+
+def _cargar_plantillas_usuario() -> dict:
+    if not REPORT_TEMPLATES_PATH.exists():
+        return {}
+    try:
+        return json.loads(REPORT_TEMPLATES_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _guardar_plantillas_usuario(plantillas: dict) -> tuple[bool, str]:
+    try:
+        REPORT_TEMPLATES_PATH.write_text(json.dumps(plantillas, ensure_ascii=True, indent=2), encoding="utf-8")
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 def _badge_tipo(tipo: str) -> str:
@@ -507,6 +533,333 @@ def render_verificacion_kafka_cuadro() -> None:
     st.info(verificar_kafka_topic(TOPIC_TRANSPORTE))
 
 
+def render_informes_a_medida() -> None:
+    st.subheader("Informes a medida (plantillas + PDF)")
+    st.caption(
+        "Selecciona BD, tabla y campos para generar un informe personalizado. "
+        "Incluye vista previa y descarga en PDF."
+    )
+
+    plantillas_base = {
+        "operativa": {
+            "label": "Operativa (tabla + resumen corto)",
+            "default_limit": 200,
+            "default_where": "",
+            "default_order_by": "",
+            "aliases": {},
+        },
+        "ejecutiva": {
+            "label": "Ejecutiva (KPIs + tabla)",
+            "default_limit": 120,
+            "default_where": "",
+            "default_order_by": "",
+            "aliases": {},
+        },
+        "auditoria": {
+            "label": "Auditoría (detalle completo)",
+            "default_limit": 500,
+            "default_where": "",
+            "default_order_by": "",
+            "aliases": {},
+        },
+    }
+    plantillas_usuario = _cargar_plantillas_usuario()
+    plantillas = {**plantillas_base, **plantillas_usuario}
+    plantilla = st.selectbox(
+        "Plantilla",
+        options=list(plantillas.keys()),
+        format_func=lambda x: plantillas.get(x, {}).get("label", x),
+        key="rep_tpl",
+    )
+    tpl_cfg = plantillas.get(plantilla, {})
+    tpl_prev = st.session_state.get("rep_tpl_prev")
+    if tpl_prev != plantilla:
+        # Al cambiar de plantilla, aplicar defaults completos (motor/tabla/campos/filtros).
+        if tpl_cfg.get("default_motor") in ("cassandra", "hive"):
+            st.session_state["rep_motor"] = tpl_cfg.get("default_motor")
+        st.session_state["rep_tabla"] = tpl_cfg.get("default_table", "")
+        st.session_state["rep_keyspace"] = tpl_cfg.get("default_keyspace", st.session_state.get("rep_keyspace", "logistica_espana"))
+        st.session_state["rep_campos"] = list(tpl_cfg.get("default_fields", []) or [])
+        st.session_state["rep_where"] = str(tpl_cfg.get("default_where", ""))
+        st.session_state["rep_order"] = str(tpl_cfg.get("default_order_by", ""))
+        st.session_state["rep_limit"] = int(tpl_cfg.get("default_limit", 200))
+        st.session_state["rep_tpl_prev"] = plantilla
+
+    motor = st.radio(
+        "Base de datos",
+        options=["cassandra", "hive"],
+        horizontal=True,
+        format_func=lambda x: "Cassandra (operativo)" if x == "cassandra" else "Hive (histórico)",
+        key="rep_motor",
+    )
+
+    if motor == "cassandra":
+        ok_ks, err_ks, keyspaces = listar_keyspaces_cassandra()
+        if not ok_ks:
+            st.error(err_ks or "No se pudieron listar keyspaces.")
+            return
+        if not keyspaces:
+            st.info("No hay keyspaces disponibles en Cassandra.")
+            return
+        ks_default = "logistica_espana" if "logistica_espana" in keyspaces else keyspaces[0]
+        ks_actual = st.session_state.get("rep_keyspace", ks_default)
+        if ks_actual not in keyspaces:
+            ks_actual = ks_default
+            st.session_state["rep_keyspace"] = ks_actual
+        keyspace_sel = st.selectbox("Keyspace", options=keyspaces, key="rep_keyspace")
+        if keyspace_sel != "logistica_espana":
+            st.caption(f"Usando keyspace `{keyspace_sel}` (el configurado por defecto es `logistica_espana`).")
+        ok_t, err_t, tablas = listar_tablas_cassandra(keyspace=keyspace_sel)
+    else:
+        ok_t, err_t, tablas = listar_tablas_hive()
+    if not ok_t:
+        st.error(err_t or "No se pudieron listar tablas.")
+        return
+    if not tablas:
+        st.info("No hay tablas disponibles para este motor.")
+        return
+
+    tabla_actual = st.session_state.get("rep_tabla", "")
+    if tabla_actual not in tablas:
+        st.session_state["rep_tabla"] = tablas[0]
+    tabla = st.selectbox("Tabla", options=tablas, key="rep_tabla")
+    if motor == "cassandra":
+        keyspace_sel = st.session_state.get("rep_keyspace", "logistica_espana")
+        ok_c, err_c, columnas = listar_columnas_cassandra(tabla, keyspace=keyspace_sel)
+    else:
+        ok_c, err_c, columnas = listar_columnas_hive(tabla)
+    if not ok_c:
+        st.error(err_c or "No se pudieron listar columnas.")
+        return
+    if not columnas:
+        st.info("La tabla no expone columnas seleccionables.")
+        return
+
+    modo_select = st.radio(
+        "Modo de SELECT",
+        options=["custom", "all"],
+        horizontal=True,
+        format_func=lambda x: "Campos seleccionados" if x == "custom" else "SELECT * (exploración)",
+        key="rep_select_mode",
+    )
+    campos: List[str] = []
+    if modo_select == "custom":
+        campos_actuales = st.session_state.get("rep_campos", [])
+        if not isinstance(campos_actuales, list):
+            campos_actuales = []
+        campos_validos = [c for c in campos_actuales if c in columnas]
+        if not campos_validos:
+            campos_validos = columnas[: min(6, len(columnas))]
+        st.session_state["rep_campos"] = campos_validos
+        campos = st.multiselect("Campos (1 o más)", options=columnas, key="rep_campos")
+        if not campos:
+            st.warning("Selecciona al menos un campo.")
+            return
+    else:
+        st.info("Modo exploración activo: se ejecutará `SELECT *` sobre la tabla elegida.")
+
+    if "rep_where" not in st.session_state:
+        st.session_state["rep_where"] = str(tpl_cfg.get("default_where", ""))
+    if "rep_limit" not in st.session_state:
+        st.session_state["rep_limit"] = int(tpl_cfg.get("default_limit", 200))
+    if "rep_order" not in st.session_state:
+        st.session_state["rep_order"] = str(tpl_cfg.get("default_order_by", ""))
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        where_txt = st.text_input(
+            "Filtro WHERE (opcional, sin escribir WHERE)",
+            key="rep_where",
+            help="Ejemplo: estado = 'Bloqueado' o fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)",
+        ).strip()
+    with c2:
+        limit_n = int(
+            st.number_input(
+                "Límite",
+                min_value=1,
+                max_value=5000,
+                step=50,
+                key="rep_limit",
+            )
+        )
+    order_by = st.text_input(
+        "ORDER BY (opcional, sin escribir ORDER BY)",
+        key="rep_order",
+    ).strip()
+    sin_limit = st.checkbox(
+        "Traer todas las filas (sin LIMIT)",
+        value=False,
+        key="rep_no_limit",
+        help="Puede tardar y consumir memoria. Recomendado solo para tablas pequeñas.",
+    )
+
+    campos_sql = "*" if modo_select == "all" else ", ".join(campos)
+    if motor == "cassandra":
+        keyspace_sel = st.session_state.get("rep_keyspace", "logistica_espana")
+        tabla_ref = f"{keyspace_sel}.{tabla}"
+        cql = f"SELECT {campos_sql} FROM {tabla_ref}"
+        if where_txt:
+            cql += f" WHERE {where_txt}"
+        if order_by:
+            cql += f" ORDER BY {order_by}"
+        if not sin_limit:
+            cql += f" LIMIT {limit_n}"
+        if st.button("Previsualizar informe", key=f"rep_run_cql_{tabla}", type="primary"):
+            ok, err, rows = ejecutar_cassandra_cql_seguro(cql)
+            if not ok:
+                st.error(err or "Error Cassandra")
+                return
+            df = pd.DataFrame(rows)
+            st.session_state["rep_last_df"] = df
+            st.session_state["rep_last_sql"] = cql
+            st.session_state["rep_last_ctx"] = {"motor": motor, "tabla": tabla, "plantilla": plantilla}
+    else:
+        sql = f"SELECT {campos_sql} FROM {tabla}"
+        if "." not in tabla:
+            sql = f"SELECT {campos_sql} FROM {tabla}"
+        if where_txt:
+            sql += f" WHERE {where_txt}"
+        if order_by:
+            sql += f" ORDER BY {order_by}"
+        if not sin_limit:
+            sql += f" LIMIT {limit_n}"
+        if st.button("Previsualizar informe", key=f"rep_run_sql_{tabla}", type="primary"):
+            ok, err, out = ejecutar_hive_sql_seguro(sql)
+            if not ok:
+                st.error(err or "Error Hive")
+                return
+            df = pd.read_csv(io.StringIO(out), sep="\t") if (out or "").strip() else pd.DataFrame()
+            st.session_state["rep_last_df"] = df
+            st.session_state["rep_last_sql"] = sql
+            st.session_state["rep_last_ctx"] = {"motor": motor, "tabla": tabla, "plantilla": plantilla}
+
+    df = st.session_state.get("rep_last_df")
+    ctx = st.session_state.get("rep_last_ctx") or {}
+    if isinstance(df, pd.DataFrame):
+        aliases = tpl_cfg.get("aliases", {})
+        if aliases and not df.empty:
+            ren = {c: aliases[c] for c in df.columns if c in aliases}
+            if ren:
+                df = df.rename(columns=ren)
+                st.session_state["rep_last_df"] = df
+        st.markdown("**Vista previa**")
+        if df.empty:
+            st.info("Consulta correcta pero sin filas.")
+        else:
+            st.dataframe(df, width="stretch", hide_index=True)
+            st.caption(f"{len(df)} fila(s) · {len(df.columns)} columna(s)")
+        with st.expander("Consulta generada", expanded=False):
+            st.code(st.session_state.get("rep_last_sql", ""), language="sql")
+
+        try:
+            pdf_bytes = _generar_pdf_informe(df, ctx=ctx)
+            st.download_button(
+                "Descargar PDF",
+                data=pdf_bytes,
+                file_name=f"informe_{ctx.get('motor','db')}_{ctx.get('tabla','tabla')}.pdf",
+                mime="application/pdf",
+                key="rep_dl_pdf",
+            )
+        except Exception as e:
+            st.warning(
+                "No se pudo generar PDF en este entorno. "
+                f"Detalle: {e}. Instala `reportlab` para habilitarlo."
+            )
+
+    with st.expander("Gestionar plantillas personalizadas", expanded=False):
+        st.caption("Guarda configuración reutilizable: campos, alias, filtros, orden y límite.")
+        tpl_name = st.text_input("Nombre plantilla nueva", value="", key="rep_tpl_new_name").strip()
+        alias_txt = st.text_area(
+            "Alias de columnas (JSON opcional)",
+            value=json.dumps(tpl_cfg.get("aliases", {}), ensure_ascii=True),
+            height=100,
+            key="rep_tpl_aliases",
+            help='Ejemplo: {"id_nodo":"Nodo","fecha_proceso":"Fecha"}',
+        ).strip()
+        ctp1, ctp2 = st.columns([1, 1])
+        with ctp1:
+            if st.button("Guardar plantilla actual", key="rep_tpl_save"):
+                if not tpl_name:
+                    st.warning("Indica un nombre de plantilla.")
+                else:
+                    try:
+                        aliases = json.loads(alias_txt) if alias_txt else {}
+                        if not isinstance(aliases, dict):
+                            raise ValueError("aliases debe ser objeto JSON")
+                    except Exception as e:
+                        st.error(f"Alias JSON no válido: {e}")
+                        return
+                    plantillas_usuario[tpl_name] = {
+                        "label": tpl_name,
+                        "default_limit": limit_n,
+                        "default_where": where_txt,
+                        "default_order_by": order_by,
+                        "aliases": aliases,
+                        "default_fields": campos,
+                        "default_motor": motor,
+                        "default_keyspace": st.session_state.get("rep_keyspace", "logistica_espana"),
+                        "default_table": tabla,
+                    }
+                    ok_g, err_g = _guardar_plantillas_usuario(plantillas_usuario)
+                    if ok_g:
+                        st.success(f"Plantilla guardada: {tpl_name}")
+                    else:
+                        st.error(f"No se pudo guardar plantilla: {err_g}")
+        with ctp2:
+            if st.button("Eliminar plantilla seleccionada", key="rep_tpl_delete"):
+                if plantilla in plantillas_base:
+                    st.warning("No se puede eliminar una plantilla base.")
+                elif plantilla in plantillas_usuario:
+                    plantillas_usuario.pop(plantilla, None)
+                    ok_g, err_g = _guardar_plantillas_usuario(plantillas_usuario)
+                    if ok_g:
+                        st.success(f"Plantilla eliminada: {plantilla}")
+                    else:
+                        st.error(f"No se pudo eliminar plantilla: {err_g}")
+
+
+def _generar_pdf_informe(df: pd.DataFrame, *, ctx: dict) -> bytes:
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import cm
+    from reportlab.pdfgen import canvas
+
+    buff = BytesIO()
+    cv = canvas.Canvas(buff, pagesize=landscape(A4))
+    w, h = landscape(A4)
+
+    titulo = f"Informe {ctx.get('plantilla', 'operativa').title()} — {ctx.get('motor', '').upper()}::{ctx.get('tabla', '')}"
+    cv.setFont("Helvetica-Bold", 14)
+    cv.drawString(1.2 * cm, h - 1.2 * cm, titulo)
+    cv.setFont("Helvetica", 9)
+    cv.drawString(1.2 * cm, h - 1.9 * cm, f"Generado: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    cv.drawString(1.2 * cm, h - 2.5 * cm, f"Filas: {len(df)}  Columnas: {len(df.columns)}")
+
+    # cabecera
+    y = h - 3.4 * cm
+    x0 = 1.2 * cm
+    max_cols = min(len(df.columns), 8)
+    cols = list(df.columns[:max_cols])
+    col_w = (w - 2.4 * cm) / max(max_cols, 1)
+    cv.setFont("Helvetica-Bold", 8)
+    for i, c in enumerate(cols):
+        cv.drawString(x0 + i * col_w, y, str(c)[:28])
+    y -= 0.45 * cm
+    cv.setFont("Helvetica", 8)
+    max_rows = min(len(df), 30)
+    for _, row in df.head(max_rows).iterrows():
+        for i, c in enumerate(cols):
+            cv.drawString(x0 + i * col_w, y, str(row.get(c, ""))[:28])
+        y -= 0.42 * cm
+        if y < 1.5 * cm:
+            cv.showPage()
+            y = h - 1.5 * cm
+            cv.setFont("Helvetica", 8)
+
+    cv.save()
+    return buff.getvalue()
+
+
 def render_cuadro_mando_tab() -> None:
     """Contenido completo de la pestaña Cuadro de mando."""
     st.header("Cuadro de mando")
@@ -521,5 +874,7 @@ def render_cuadro_mando_tab() -> None:
     render_consultas_cassandra()
     st.divider()
     render_consultas_hive()
+    st.divider()
+    render_informes_a_medida()
     st.divider()
     render_slides_clima_retrasos()

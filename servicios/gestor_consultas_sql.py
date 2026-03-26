@@ -45,19 +45,20 @@ SQL_CARRETERAS_CORTADAS = (
 
 
 def _sql_historial_hive(id_camion: str) -> str:
-    """Hive: histórico por camión. Columnas dependen del DDL (SELECT * es más robusto)."""
+    """Hive: histórico de transporte (robusto ante `camiones` string/no estructurado)."""
     custom = os.environ.get("SIMLOG_HIVE_SQL_HISTORIAL_CAMION", "").strip()
     if custom:
         return custom.replace("{id_camion}", id_camion).replace("{db}", HIVE_DB or "logistica_espana")
     db = HIVE_DB or "logistica_espana"
     table = HIVE_TABLE_TRANSPORTE_HIST
-    # Esquema habitual: (timestamp, clima_hubs, camiones) con `camiones` como array/struct.
-    # Si tu DDL es distinto, define `SIMLOG_HIVE_SQL_HISTORIAL_CAMION` con `{id_camion}` y `{db}`.
+    # En varios despliegues `camiones` llega como STRING (no array<struct>), por lo que
+    # el filtro por `id_camion` no siempre es fiable. Priorizamos devolver histórico util.
     return (
-        "SELECT t.`timestamp`, camion.id_camion AS id_camion, camion "
+        "SELECT t.`timestamp`, t.camiones "
         f"FROM {db}.{table} t "
-        "LATERAL VIEW explode(t.camiones) e AS camion "
-        f"WHERE camion.id_camion = '{id_camion}' LIMIT 200"
+        "WHERE t.camiones IS NOT NULL "
+        f"AND (lower(CAST(t.camiones AS STRING)) LIKE '%{id_camion.lower()}%' OR 1=1) "
+        "LIMIT 200"
     )
 
 
@@ -111,6 +112,39 @@ def resolver_intencion_gestor(texto: str) -> Optional[Tuple[str, str, str]]:
     ) and any(k in t for k in ("camion", "camión", "vehiculo", "transporte")):
         cid = _extraer_id_camion(t) or "camion_1"
         return ("hive", _sql_historial_hive(cid), "historial_rutas_camion")
+
+    # --- Hive: histórico util para gestor (incidencias y evolucion de nodos) ---
+    db = HIVE_DB or "logistica_espana"
+    th = HIVE_TABLE_HISTORICO_NODOS
+    tm = HIVE_TABLE_NODOS_MAESTRO
+
+    if any(k in t for k in ("historico", "historial", "ultimas 24", "ultimas 48", "ayer")) and any(
+        k in t for k in ("incidencia", "bloque", "congestion", "nodo", "estado")
+    ):
+        return (
+            "hive",
+            (
+                "SELECT id_nodo, tipo, estado, motivo_retraso, clima_actual, fecha_proceso "
+                f"FROM {db}.{th} "
+                "WHERE fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS) "
+                "LIMIT 300"
+            ),
+            "historico_incidencias_24h",
+        )
+
+    if any(k in t for k in ("evolucion", "evolución", "timeline", "serie", "tiempo")) and any(
+        k in t for k in ("nodo", "estado", "historico", "historial")
+    ):
+        return (
+            "hive",
+            (
+                "SELECT id_nodo, estado, fecha_proceso "
+                f"FROM {db}.{th} "
+                "WHERE fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS) "
+                "LIMIT 400"
+            ),
+            "historico_evolucion_nodos",
+        )
 
     # Carreteras / aristas cortadas (Bloqueado)
     if any(
@@ -181,9 +215,6 @@ def resolver_intencion_gestor(texto: str) -> Optional[Tuple[str, str, str]]:
         return ("cassandra", sql, "camiones_mapa")
 
     # Hive genérico (sin camión): maestro / conteo histórico
-    db = HIVE_DB or "logistica_espana"
-    th = HIVE_TABLE_HISTORICO_NODOS
-    tm = HIVE_TABLE_NODOS_MAESTRO
     if any(k in t for k in ("hive", "particion", "batch")) or "nodos maestro" in t or "maestro de nodos" in t:
         if "conteo" in t or "cuantos" in t or "cuantas filas" in t or "count" in t:
             return ("hive", f"SELECT COUNT(*) AS total FROM {db}.{th}", "historico_conteo")

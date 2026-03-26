@@ -27,6 +27,8 @@ Documento funcional para la plataforma en modo standalone.
 | CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
 | CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
 | CU-12 | Desplegar clúster didáctico en GitHub Codespaces | Operador / Docente | Hadoop+Spark+Kafka+Jupyter en perfil aislado `*.codespaces.*` |
+| CU-13 | Generar informes a medida (plantillas + PDF) | Analista / Operador | Informe personalizado por tabla/campos/filtros y export PDF |
+| CU-14 | Navegar por buscador semántico del dashboard | Analista / Operador | Hallazgos rápidos y salto directo a secciones/pestañas |
 
 ## Detalle breve
 
@@ -96,6 +98,18 @@ Documento funcional para la plataforma en modo standalone.
 - **Postcondición:** clúster docente disponible sin alterar el `docker-compose.yml` principal.
 - **Documentación:** `docs/CODESPACES_CLUSTER.md`.
 
+### CU-13 — Informes a medida (Cassandra/Hive)
+
+- **Entrada:** selección de motor, tabla y campos (o `SELECT *`), filtros, orden y límite.
+- **Flujo:** el constructor genera consulta segura de lectura, muestra vista previa y permite guardar plantilla.
+- **Salida:** descarga de informe PDF y reutilización por plantilla.
+
+### CU-14 — Búsqueda semántica en cabecera
+
+- **Entrada:** texto libre (ej. “swagger”, “historico hive”, “rutas alternativas”).
+- **Flujo:** matching semántico sobre catálogo funcional y botón `Ir a ...`.
+- **Salida:** apertura directa de la sección objetivo en la navegación principal.
+
 ---
 
 ## Diagrama de casos de uso (Mermaid)
@@ -123,6 +137,8 @@ flowchart LR
     CU10[CU-10 Asistente de Flota]
     CU11[CU-11 Graph AI anomalías]
     CU12[CU-12 Cluster Codespaces]
+    CU13[CU-13 Informes a medida]
+    CU14[CU-14 Buscador semántico]
   end
   OP --> CU1
   OP --> CU2
@@ -141,4 +157,8 @@ flowchart LR
   AN --> CU11
   OP --> CU12
   PR --> CU12
+  OP --> CU13
+  AN --> CU13
+  OP --> CU14
+  AN --> CU14
 ```

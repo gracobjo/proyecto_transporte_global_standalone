@@ -27,6 +27,8 @@ flowchart TB
     UC10[CU-10 Asistente de Flota]
     UC11[CU-11 Graph AI anomalías]
     UC12[CU-12 Cluster Codespaces]
+    UC13[CU-13 Informes a medida]
+    UC14[CU-14 Buscador semántico]
   end
   OP --> UC1
   OP --> UC2
@@ -45,6 +47,10 @@ flowchart TB
   OP --> UC11
   AN --> UC11
   OP --> UC12
+  OP --> UC13
+  AN --> UC13
+  OP --> UC14
+  AN --> UC14
 ```
 
 ---
@@ -58,6 +64,7 @@ flowchart LR
     ST[Streamlit]
     N[NiFi UI]
     A[Airflow UI]
+    SW[Swagger UI]
   end
   subgraph UI_KDD[servicios kdd_*]
     VF[kdd_vista_ficheros]
@@ -79,6 +86,7 @@ flowchart LR
   U --> ST
   U --> N
   U --> A
+  U --> SW
   ST --> VF
   ST --> VR
   ST --> VG
@@ -95,6 +103,7 @@ flowchart LR
   P --> C
   P --> V
   ST --> C
+  ST --> SW
 ```
 
 ---
@@ -358,4 +367,46 @@ classDiagram
   FastAPI --> GraphProcessing
   GraphProcessing --> GraphPayload
   FastAPI --> AnalyzeGraphRequest
+```
+
+---
+
+## 12. Secuencia — Constructor de informes a medida
+
+```mermaid
+sequenceDiagram
+  participant U as Analista
+  participant ST as Streamlit Cuadro de mando
+  participant M as Metadata BD
+  participant DB as Cassandra/Hive
+  participant PDF as Generador PDF
+
+  U->>ST: Selecciona motor, tabla, campos o SELECT *
+  ST->>M: Listar tablas/columnas disponibles
+  M-->>ST: Metadatos
+  U->>ST: Define WHERE/ORDER/LIMIT y previsualiza
+  ST->>DB: Ejecuta consulta segura de lectura
+  DB-->>ST: Filas (DataFrame)
+  U->>ST: Descargar informe PDF
+  ST->>PDF: Render con plantilla + alias
+  PDF-->>U: Archivo .pdf
+```
+
+---
+
+## 13. Secuencia — Buscador semántico y salto de pestaña
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit Header
+  participant IDX as Catalogo semántico UI
+  participant NAV as Estado active_tab
+
+  U->>ST: Escribe término (ej. "swagger")
+  ST->>IDX: Buscar coincidencias por intención
+  IDX-->>ST: Lista de hallazgos
+  U->>ST: Click en "Ir a ..."
+  ST->>NAV: Set quick_open_tab/active_tab
+  NAV-->>U: Pestaña objetivo abierta
 ```
