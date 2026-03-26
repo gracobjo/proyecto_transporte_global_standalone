@@ -375,13 +375,28 @@ def main() -> None:
             disabled=st.session_state.ingesta_paso_automatico,
             help="Manual: se envía como PASO_15MIN. Desactivado si usas paso automático.",
         )
+        st.checkbox(
+            "Simular incidencias de tráfico (nodos/aristas)",
+            value=bool(st.session_state.get("simlog_simular_incidencias", True)),
+            key="simlog_simular_incidencias",
+            help=(
+                "Si lo desmarcas, la ingesta generará estados operativos estables (todo OK) "
+                "para nodos y aristas."
+            ),
+        )
 
         if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", width="stretch"):
             with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
                 if st.session_state.ingesta_paso_automatico:
-                    code, out, err = ejecutar_ingesta(None)
+                    code, out, err = ejecutar_ingesta(
+                        None,
+                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                    )
                 else:
-                    code, out, err = ejecutar_ingesta(int(st.session_state.paso_15min))
+                    code, out, err = ejecutar_ingesta(
+                        int(st.session_state.paso_15min),
+                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                    )
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if code == 0:
                 if st.session_state.ingesta_paso_automatico:
@@ -411,7 +426,10 @@ def main() -> None:
         if st.button("Avanzar paso + ingesta + procesamiento", width="stretch"):
             p = int(st.session_state.paso_15min)
             with st.spinner("Pipeline completo…"):
-                c1, o1, e1 = ejecutar_ingesta(p)
+                c1, o1, e1 = ejecutar_ingesta(
+                    p,
+                    simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                )
                 c2, o2, e2 = ejecutar_procesamiento()
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if c1 == 0 and c2 == 0:
@@ -502,7 +520,11 @@ def main() -> None:
                 width="stretch",
             ):
                 with st.spinner(f"Ejecutando fase {fase_actual.orden}…"):
-                    code, out, err = ejecutar_fase_kdd(fase_actual.orden, paso)
+                    code, out, err = ejecutar_fase_kdd(
+                        fase_actual.orden,
+                        paso,
+                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                    )
                 ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
                 if code == 0:
                     st.session_state.timeline.append(

@@ -80,7 +80,10 @@ def render_acciones_rapidas() -> None:
             auto = bool(st.session_state.get("ingesta_paso_automatico", False))
             paso_arg = None if auto else int(st.session_state.get("paso_15min", 0))
             with st.spinner("Ingesta…"):
-                code, out, err = ejecutar_ingesta(paso_arg)
+                code, out, err = ejecutar_ingesta(
+                    paso_arg,
+                    simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                )
             if code == 0:
                 st.success("Ingesta OK.")
                 st.session_state.timeline = st.session_state.get("timeline", []) + [
