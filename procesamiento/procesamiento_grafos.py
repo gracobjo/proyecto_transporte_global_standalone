@@ -29,6 +29,7 @@ from config import (
     KAFKA_BOOTSTRAP,
     TOPIC_TRANSPORTE,
     HIVE_DB,
+    HIVE_METASTORE_URIS,
 )
 
 # Pesos de penalización por clima/estado
@@ -82,6 +83,10 @@ def crear_spark():
         .config("spark.eventLog.enabled", "false")
         .config("spark.hadoop.dfs.client.use.datanode.hostname", "false")
     )
+    # Si hay metastore remoto (Thrift), usarlo: evita Derby embebido e incompatibilidades de versión.
+    # Exporta: HIVE_METASTORE_URIS=thrift://127.0.0.1:9083 (o el host/puerto que uses).
+    if (HIVE_METASTORE_URIS or "").strip():
+        base_builder = base_builder.config("spark.hadoop.hive.metastore.uris", HIVE_METASTORE_URIS.strip())
     enable_hive = os.environ.get("SIMLOG_ENABLE_HIVE", "0") == "1"
     if not enable_hive:
         return base_builder.getOrCreate()

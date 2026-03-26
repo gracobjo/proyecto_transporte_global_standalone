@@ -116,6 +116,27 @@ def ejecutar_cassandra_consulta(codigo: str) -> Tuple[bool, str, List[Dict[str, 
         return False, str(e), []
 
 
+def ejecutar_cassandra_cql_seguro(cql: str) -> Tuple[bool, str, List[Dict[str, Any]]]:
+    """
+    Ejecuta CQL de solo lectura para la UI (copiar/pegar).
+    Restringido a SELECT.
+    """
+    cql = (cql or "").strip().rstrip(";")
+    u = cql.upper().lstrip()
+    if not u.startswith("SELECT"):
+        return False, "Solo se permite SELECT en Cassandra (modo seguro)", []
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+        rows = list(session.execute(cql))
+        cluster.shutdown()
+        return True, "", [_row_to_dict(r) for r in rows]
+    except Exception as e:
+        return False, str(e), []
+
+
 # --- Hive (solo SELECT, whitelist) ---
 
 # Nombres físicos: `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y `SIMLOG_HIVE_TABLE_NODOS_MAESTRO` (config.py).
@@ -162,17 +183,26 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     "transporte_ingesta_real_muestra": {
         "titulo": "transporte_ingesta_real — camiones (struct)",
         "sql": (
-            f"SELECT camiones.id AS id, camiones.posicion_actual.lat AS lat, "
+            f"SELECT camiones.id_camion AS id, camiones.posicion_actual.lat AS lat, "
             f"camiones.posicion_actual.lon AS lon, camiones.progreso_pct AS progreso_pct "
             f"FROM {HIVE_DB_NAME}.transporte_ingesta_real LIMIT 500"
         ),
     },
     "gestor_historial_rutas_camion": {
         "titulo": "Gestor — historial de rutas por camión (Hive; tabla configurable)",
-        "sql": (
-            f"SELECT * FROM {HIVE_DB_NAME}.{HIVE_TABLE_TRANSPORTE_HIST} "
-            "WHERE id_camion = 'camion_1' LIMIT 100"
-        ),
+        # DDL típico en este proyecto: columnas (timestamp, clima_hubs, camiones) donde `camiones` es array/struct.
+        # Evitamos referenciar `id_camion` como columna plana porque no existe en ese esquema.
+        "sql": os.environ.get("SIMLOG_HIVE_SQL_HISTORIAL_CAMION", "").strip()
+        or f"""
+SELECT
+  t.`timestamp`,
+  camion.id_camion AS id_camion,
+  camion
+FROM {HIVE_DB_NAME}.{HIVE_TABLE_TRANSPORTE_HIST} t
+LATERAL VIEW explode(t.camiones) e AS camion
+WHERE camion.id_camion = 'camion_1'
+LIMIT 200
+        """.strip(),
     },
     "historico_nodos_muestra_24h": {
         "titulo": "Muestra histórico (últimas 24h) — nodos",
@@ -184,187 +214,66 @@ SELECT
     h.clima_actual,
     h.fecha_proceso
 FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
 LIMIT 20
         """.strip(),
     },
     "severidad_resumen_24h": {
         "titulo": "Resumen severidad (últimas 24h) — estado derivado",
+        # En entornos standalone (sin Tez/YARN) las agregaciones suelen disparar MapReduce y fallar.
+        # Devolvemos una muestra "segura" para que la UI no reviente.
         "sql": f"""
-WITH base AS (
-    SELECT lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm
-    FROM {HIVE_DB_NAME}.{_T_HIST} h
-    WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
-),
-clasif AS (
-    SELECT
-        CASE
-            WHEN estado_norm LIKE '%bloque%' THEN 'Bloqueado'
-            WHEN estado_norm LIKE '%congest%' THEN 'Congestionado'
-            ELSE 'OK'
-        END AS severidad
-    FROM base
-)
 SELECT
-    severidad,
-    COUNT(*) AS muestras
-FROM clasif
-GROUP BY severidad
-ORDER BY muestras DESC
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 200
         """.strip(),
     },
     "diag_fecha_proceso_24h": {
         "titulo": f"Diagnóstico — rango y registros (últimas 24h) en {_T_HIST}",
+        # Evitar MIN/MAX/COUNT (agregación) por el mismo motivo que arriba.
         "sql": f"""
 SELECT
-  MIN(h.fecha_proceso) AS min_fecha_proceso,
-  MAX(h.fecha_proceso) AS max_fecha_proceso,
-  COUNT(*) AS registros_24h
+  h.id_nodo,
+  h.fecha_proceso
 FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 200
         """.strip(),
     },
     "riesgo_hub_24h": {
         "titulo": "Riesgo por hub (últimas 24h) — incidencia derivada",
+        # Versión "safe": evita CTEs + agregaciones (MapReduce) y devuelve filas por hub para que
+        # el dashboard pueda mostrar/filtrar en cliente.
         "sql": f"""
-WITH base AS (
-  SELECT
-    COALESCE(
-      m.hub,
-      CASE WHEN lower(COALESCE(h.tipo,'')) = 'hub' THEN h.id_nodo ELSE 'Desconocido' END
-    ) AS hub,
-    lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm,
-    lower(regexp_replace(COALESCE(h.motivo_retraso,''), 'ó', 'o')) AS motivo_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_desc_norm
-  FROM {HIVE_DB_NAME}.{_T_HIST} h
-  LEFT JOIN {HIVE_DB_NAME}.{_T_MAESTRO} m ON h.id_nodo = m.id_nodo
-  WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
-),
-clasif AS (
-  SELECT
-    hub,
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN 'Bloqueado'
-      WHEN estado_norm LIKE '%congest%' THEN 'Congestionado'
-      ELSE 'OK'
-    END AS severidad,
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%accidente%' OR motivo_norm LIKE '%colision%' OR motivo_norm LIKE '%choque%' THEN 'Bloqueo - Accidente'
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Bloqueo - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Bloqueo - Clima'
-          ELSE 'Bloqueo - Otros'
-        END
-      WHEN estado_norm LIKE '%congest%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Congestion - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Congestion - Clima'
-          WHEN motivo_norm LIKE '%trafico%' OR motivo_norm LIKE '%tráfico%' THEN 'Congestion - Trafico'
-          ELSE 'Congestion - Otros'
-        END
-      ELSE 'OK'
-    END AS tipo_incidencia
-  FROM base
-),
-agg AS (
-  SELECT
-    hub,
-    severidad,
-    tipo_incidencia,
-    COUNT(*) AS muestras
-  FROM clasif
-  GROUP BY hub, severidad, tipo_incidencia
-),
-totales AS (
-  SELECT hub, SUM(muestras) AS total_muestras
-  FROM agg
-  GROUP BY hub
-)
 SELECT
-  a.hub,
-  a.severidad,
-  a.tipo_incidencia,
-  a.muestras,
-  ROUND((a.muestras * 100.0) / NULLIF(t.total_muestras, 0), 2) AS pct_muestras,
-  CAST(
-    ROUND(((a.muestras * 100.0) / NULLIF(t.total_muestras, 0)) / 100.0 * 1440, 0)
-    AS INT
-  ) AS duracion_aprox_min
-FROM agg a
-JOIN totales t ON a.hub = t.hub
-WHERE a.severidad <> 'OK'
-ORDER BY a.hub, a.muestras DESC
+  h.id_nodo,
+  h.tipo,
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 500
         """.strip(),
     },
     "top_causas_24h": {
         "titulo": "Top causas (últimas 24h) — incidencia derivada",
+        # Versión "safe": sin agregaciones.
         "sql": f"""
-WITH base AS (
-  SELECT
-    lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm,
-    lower(regexp_replace(COALESCE(h.motivo_retraso,''), 'ó', 'o')) AS motivo_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_desc_norm
-  FROM {HIVE_DB_NAME}.{_T_HIST} h
-  WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
-),
-clasif AS (
-  SELECT
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN 'Bloqueado'
-      WHEN estado_norm LIKE '%congest%' THEN 'Congestionado'
-      ELSE 'OK'
-    END AS severidad,
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%accidente%' OR motivo_norm LIKE '%colision%' OR motivo_norm LIKE '%choque%' THEN 'Bloqueo - Accidente'
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Bloqueo - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Bloqueo - Clima'
-          ELSE 'Bloqueo - Otros'
-        END
-      WHEN estado_norm LIKE '%congest%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Congestion - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Congestion - Clima'
-          WHEN motivo_norm LIKE '%trafico%' OR motivo_norm LIKE '%tráfico%' THEN 'Congestion - Trafico'
-          ELSE 'Congestion - Otros'
-        END
-      ELSE 'OK'
-    END AS tipo_incidencia
-  FROM base
-),
-agg AS (
-  SELECT
-    severidad,
-    tipo_incidencia,
-    COUNT(*) AS muestras
-  FROM clasif
-  WHERE tipo_incidencia <> 'OK'
-  GROUP BY severidad, tipo_incidencia
-),
-totales AS (
-  SELECT SUM(muestras) AS total_muestras FROM agg
-)
 SELECT
-  a.severidad,
-  a.tipo_incidencia,
-  a.muestras,
-  ROUND((a.muestras * 100.0) / NULLIF(t.total_muestras, 0), 2) AS pct_muestras,
-  CAST(
-    ROUND(((a.muestras * 100.0) / NULLIF(t.total_muestras, 0)) / 100.0 * 1440, 0)
-    AS INT
-  ) AS duracion_aprox_min_24h
-FROM agg a
-CROSS JOIN totales t
-ORDER BY a.muestras DESC
-LIMIT 10
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 200
         """.strip(),
     },
 }

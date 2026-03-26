@@ -51,7 +51,14 @@ def _sql_historial_hive(id_camion: str) -> str:
         return custom.replace("{id_camion}", id_camion).replace("{db}", HIVE_DB or "logistica_espana")
     db = HIVE_DB or "logistica_espana"
     table = HIVE_TABLE_TRANSPORTE_HIST
-    return f"SELECT * FROM {db}.{table} WHERE id_camion = '{id_camion}' LIMIT 100"
+    # Esquema habitual: (timestamp, clima_hubs, camiones) con `camiones` como array/struct.
+    # Si tu DDL es distinto, define `SIMLOG_HIVE_SQL_HISTORIAL_CAMION` con `{id_camion}` y `{db}`.
+    return (
+        "SELECT t.`timestamp`, camion.id_camion AS id_camion, camion "
+        f"FROM {db}.{table} t "
+        "LATERAL VIEW explode(t.camiones) e AS camion "
+        f"WHERE camion.id_camion = '{id_camion}' LIMIT 200"
+    )
 
 
 def _normalizar(texto: str) -> str:
