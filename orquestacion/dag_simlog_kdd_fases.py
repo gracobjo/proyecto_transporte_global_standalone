@@ -150,7 +150,11 @@ with DAG(
 with DAG(
     dag_id="simlog_kdd_05_interpretacion",
     default_args=_DEFAULT,
-    description="SIMLOG KDD Fase 5: interpretación (persistencia) + informe",
+    description=(
+        "SIMLOG KDD Fase 5: Spark interpretación — fase_kdd_spark interpretacion → "
+        "procesamiento_grafos.main() (lee JSON en HDFS, Cassandra, Hive con SIMLOG_ENABLE_HIVE). "
+        "Un solo task Airflow; no hay sub-tareas separadas HDFS/Hive en el grafo."
+    ),
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,

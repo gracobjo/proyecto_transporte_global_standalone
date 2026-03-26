@@ -38,6 +38,21 @@ MOTIVOS = {
 }
 
 
+def _env_flag(key: str, default: bool = True) -> bool:
+    """
+    Interpreta un booleano desde entorno.
+    Valores aceptados: 1/0, true/false, yes/no, on/off (case-insensitive).
+    """
+    v = (os.environ.get(key, "") or "").strip().lower()
+    if not v:
+        return default
+    if v in ("1", "true", "yes", "si", "sí", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 def consulta_clima_hubs(api_key: str | None = None) -> dict:
     """
     Obtener clima actual de los 5 Hubs vía API OpenWeather.
@@ -262,14 +277,25 @@ def main(paso_15min=0):
     random.seed(semilla_simulacion(paso_15min))
 
     clima = consulta_clima_hubs()
-    estados_nodos = simular_incidentes_nodos()
-    estados_aristas = simular_incidentes_aristas()
+    sim_incid = _env_flag("SIMLOG_SIMULAR_INCIDENCIAS", True)
+    if sim_incid:
+        estados_nodos = simular_incidentes_nodos()
+        estados_aristas = simular_incidentes_aristas()
+    else:
+        # Incidencias desactivadas: estado operativo estable (todo OK).
+        nodos = get_nodos()
+        estados_nodos = {nid: {"estado": "OK", "motivo": None} for nid in nodos.keys()}
+        estados_aristas = {
+            f"{src}|{dst}": {"estado": "OK", "motivo": None, "distancia_km": dist}
+            for (src, dst, dist) in get_aristas()
+        }
     rutas = generar_rutas_camiones(5)
     posiciones = interpolacion_gps_15min(rutas, paso_15min)
 
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "paso_15min": paso_15min,
+        "simulacion_incidencias": sim_incid,
         "clima_hubs": clima,
         "nodos_estado": {
             n: {"estado": v["estado"], "motivo": v["motivo"]}

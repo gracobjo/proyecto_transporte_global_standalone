@@ -317,7 +317,10 @@ def _render_panel_simulacion_ventana(st, base: Path, widget_scope: str) -> None:
         prev, _ = _cargar_payload_ingesta(base)
         st.session_state[f"{ws}_snap_pre_ingesta"] = prev
         with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
-            code, out, err = ejecutar_ingesta(None if auto else int(st.session_state.paso_15min))
+            code, out, err = ejecutar_ingesta(
+                None if auto else int(st.session_state.paso_15min),
+                simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+            )
         st.session_state[f"{ws}_last_ingesta_code"] = code
         if code != 0:
             st.session_state[f"{ws}_last_ingesta_err"] = (err or out or "")[-3500:]

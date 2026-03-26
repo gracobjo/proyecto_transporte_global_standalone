@@ -87,6 +87,21 @@ CREATE TABLE IF NOT EXISTS pagerank_nodos (
     ultima_actualizacion TIMESTAMP
 );
 
+-- =============================================================================
+-- Tabla: graph_anomalies - Anomalías detectadas por Graph AI (snapshots periódicos)
+-- Se particiona por bucket temporal (15 minutos) + metric_type para consultas por ventana.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS graph_anomalies (
+    id UUID,
+    timestamp TIMESTAMP,
+    node_id TEXT,
+    anomaly_score DOUBLE,
+    metric_type TEXT,
+    metric_value DOUBLE,
+    ts_bucket BIGINT,
+    PRIMARY KEY ((ts_bucket, metric_type), timestamp, node_id, id)
+) WITH CLUSTERING ORDER BY (timestamp DESC);
+
 -- Índices secundarios (ejecutar solo si no existen)
 -- CREATE INDEX idx_nodos_estado ON nodos_estado (estado);
 -- CREATE INDEX idx_tracking_estado ON tracking_camiones (estado_ruta);

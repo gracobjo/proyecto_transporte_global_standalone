@@ -3,6 +3,8 @@ Widgets Streamlit: cuadro de mando, consultas supervisadas y slides de clima/ret
 """
 from __future__ import annotations
 
+import time
+
 from datetime import datetime, timezone
 from typing import List, Tuple
 
@@ -78,7 +80,10 @@ def render_acciones_rapidas() -> None:
             auto = bool(st.session_state.get("ingesta_paso_automatico", False))
             paso_arg = None if auto else int(st.session_state.get("paso_15min", 0))
             with st.spinner("Ingesta…"):
-                code, out, err = ejecutar_ingesta(paso_arg)
+                code, out, err = ejecutar_ingesta(
+                    paso_arg,
+                    simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                )
             if code == 0:
                 st.success("Ingesta OK.")
                 st.session_state.timeline = st.session_state.get("timeline", []) + [
@@ -102,6 +107,8 @@ def render_acciones_rapidas() -> None:
     with c3:
         if st.button("Refrescar datos clima (API)", key="cm_clima", width="stretch"):
             st.session_state["clima_refresh"] = datetime.now(timezone.utc).isoformat()
+            # Forzamos recarga de slides (OpenWeather) en el siguiente render
+            st.session_state["slides_clima_ready"] = False
             st.rerun()
 
 
@@ -130,17 +137,46 @@ def render_consultas_cassandra() -> None:
 def render_consultas_hive() -> None:
     st.subheader("Consultas supervisadas — Hive (histórico)")
     st.caption(
-        "Requiere **HiveServer2** y `beeline` en PATH. "
-        "Variable opcional: `HIVE_JDBC_URL` (ej. `jdbc:hive2://localhost:10000`). "
-        "Las tablas `historico_nodos` y `nodos_maestro` se crean al ejecutar el procesamiento Spark."
+        "Requiere **HiveServer2** (puerto **10000**). Las consultas usan **PyHive** (Thrift), no `beeline`. "
+        "Variables: `HIVE_JDBC_URL` o `HIVE_SERVER` (ej. `jdbc:hive2://localhost:10000`), "
+        "`SIMLOG_HIVE_BEELINE_USER` / usuario efectivo (`hadoop`). "
+        "Timeout: `HIVE_QUERY_TIMEOUT_SEC=300`. Si va lento, prueba `diag_smoke_hive` (SELECT 1). "
+        "El fallback Spark tras timeout suele fallar con metastore Derby; deja `SIMLOG_HIVE_EXEC_FALLBACK_SPARK=0`. "
+        "Por defecto se consultan `historico_nodos` y `nodos_maestro` (como escribe Spark). "
+        "Si tus tablas tienen otro nombre, define `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y "
+        "`SIMLOG_HIVE_TABLE_NODOS_MAESTRO` en el entorno o en `.env`."
     )
     claves = listar_claves_hive()
+    # Para evitar que el usuario no encuentre el diagnóstico (por scroll/visibilidad),
+    # priorizamos estas consultas 24h al principio de la lista.
+    claves_rapidas = [
+        "diag_smoke_hive",
+        "diag_fecha_proceso_24h",
+        "historico_nodos_muestra_24h",
+        "severidad_resumen_24h",
+    ]
+    claves_ordenadas = [k for k in claves_rapidas if k in claves] + [k for k in claves if k not in claves_rapidas]
     etiquetas = {k: f"{titulo_hive(k)} (`{k}`)" for k in claves}
-    sel = st.selectbox("Consulta", options=claves, format_func=lambda k: etiquetas[k], key="hive_sel")
+    # `st.selectbox` (dropdown) a veces no se navega bien con teclado/flechas.
+    # Usamos `st.radio` para una lista visible y accesible.
+    label_a_clave = {etiquetas[k]: k for k in claves_ordenadas}
+    sel_label = st.radio("Consulta", options=list(label_a_clave.keys()), key="hive_sel_radio")
+    sel = label_a_clave[sel_label]
     if st.button("Ejecutar consulta Hive", key="btn_hive", type="primary"):
-        ok, err, out = ejecutar_hive_consulta(sel)
+        t0 = time.monotonic()
+        with st.spinner("Ejecutando Hive (PyHive)…"):
+            ok, err, out = ejecutar_hive_consulta(sel)
+        elapsed = time.monotonic() - t0
         if ok:
-            st.text_area("Salida (TSV)", value=out, height=280)
+            out_s = out or ""
+            st.caption(f"Tiempo Hive: {elapsed:.1f}s")
+            st.caption(f"Salida TSV: {len(out_s)} caracteres.")
+            if not out_s.strip():
+                st.caption("La consulta se ejecutó pero Hive devolvió salida TSV vacía (posible: 0 filas en las últimas 24h).")
+                st.caption("Sugerencia: prueba `Resumen severidad (últimas 24h) — estado derivado` o `Muestra histórico (últimas 24h) — nodos`.")
+            else:
+                st.text_area("Salida (TSV)", value=out_s, height=280)
+                st.caption(f"Preview: {out_s[:300].replace(chr(10),' ')}")
         else:
             st.error(err)
             if out:
@@ -161,6 +197,19 @@ def render_slides_clima_retrasos() -> None:
         "lluvia, niebla, viento, visibilidad) con el **estado operativo** en Cassandra (atascos, "
         "obras, bloqueos simulados) para estimar un margen de retraso orientativo."
     )
+
+    # Evita que cada recarga del dashboard haga 5 llamadas HTTP + lecturas Cassandra.
+    # Esto hace que el tab "Cuadro de mando" sea rápido incluso si OpenWeather/Hive/Cassandra están lentos.
+    if not st.session_state.get("slides_clima_ready"):
+        st.caption(
+            "Para generar las slides (requiere OpenWeather y Cassandra), pulsa el botón. "
+            "Así la app carga rápido y no se bloquea al refrescar la página."
+        )
+        if st.button("Cargar clima y generar slides", key="slides_clima_load"):
+            st.session_state["slides_clima_ready"] = True
+            st.rerun()
+        return
+
     nodos = cargar_nodos_cassandra()
     clima = obtener_clima_todos_hubs_completo()
     hubs_order: List[str] = ["Madrid", "Barcelona", "Bilbao", "Vigo", "Sevilla"]

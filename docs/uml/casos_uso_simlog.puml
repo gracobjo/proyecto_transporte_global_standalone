@@ -11,7 +11,7 @@ rectangle "SIMLOG" {
   usecase "CU-01 Ejecutar ciclo KDD" as CU1
   usecase "CU-02 Supervisar servicios" as CU2
   usecase "CU-03 Visualizar estado de red" as CU3
-  usecase "CU-04 Consultar histórico" as CU4
+  usecase "CU-04 Consultar histórico analítico\n(riesgo por hub 24h + top causas 24h)" as CU4
   usecase "CU-05 Evaluar rutas híbridas" as CU5
   usecase "CU-09 Explorar KDD en dashboard\n(Streamlit)" as CU9
 }

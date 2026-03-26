@@ -51,6 +51,8 @@ from servicios.ui_servicios_web import render_sidebar_enlaces_ui
 from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
+from servicios.ui_asistente_flota import render_asistente_flota_tab
+from servicios.ui_gemelo_digital import render_gemelo_digital_sidebar, render_gemelo_digital_tab
 from servicios.mapa_rutas_hibridas import crear_mapa_planificacion_rutas
 from servicios.kdd_vista_grafo import render_bloque_grafo_fases_spark
 from servicios.kdd_reglas_ui import render_panel_reglas_grafo
@@ -355,6 +357,8 @@ def main() -> None:
 
         render_sidebar_enlaces_ui()
 
+        render_gemelo_digital_sidebar()
+
         st.divider()
         st.subheader("Línea temporal (simulación 15 min)")
         st.checkbox(
@@ -371,13 +375,28 @@ def main() -> None:
             disabled=st.session_state.ingesta_paso_automatico,
             help="Manual: se envía como PASO_15MIN. Desactivado si usas paso automático.",
         )
+        st.checkbox(
+            "Simular incidencias de tráfico (nodos/aristas)",
+            value=bool(st.session_state.get("simlog_simular_incidencias", True)),
+            key="simlog_simular_incidencias",
+            help=(
+                "Si lo desmarcas, la ingesta generará estados operativos estables (todo OK) "
+                "para nodos y aristas."
+            ),
+        )
 
         if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", width="stretch"):
             with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
                 if st.session_state.ingesta_paso_automatico:
-                    code, out, err = ejecutar_ingesta(None)
+                    code, out, err = ejecutar_ingesta(
+                        None,
+                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                    )
                 else:
-                    code, out, err = ejecutar_ingesta(int(st.session_state.paso_15min))
+                    code, out, err = ejecutar_ingesta(
+                        int(st.session_state.paso_15min),
+                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                    )
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if code == 0:
                 if st.session_state.ingesta_paso_automatico:
@@ -407,7 +426,10 @@ def main() -> None:
         if st.button("Avanzar paso + ingesta + procesamiento", width="stretch"):
             p = int(st.session_state.paso_15min)
             with st.spinner("Pipeline completo…"):
-                c1, o1, e1 = ejecutar_ingesta(p)
+                c1, o1, e1 = ejecutar_ingesta(
+                    p,
+                    simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                )
                 c2, o2, e2 = ejecutar_procesamiento()
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if c1 == 0 and c2 == 0:
@@ -425,12 +447,24 @@ def main() -> None:
             for ev in reversed(st.session_state.timeline[-8:]):
                 st.caption(ev)
 
-    tab_kdd, tab_resultados, tab_cuadro, tab_rutas, tab_servicios, tab_mapa, tab_verif = st.tabs(
+    (
+        tab_kdd,
+        tab_resultados,
+        tab_cuadro,
+        tab_asistente,
+        tab_rutas,
+        tab_gemelo,
+        tab_servicios,
+        tab_mapa,
+        tab_verif,
+    ) = st.tabs(
         [
             "Ciclo KDD",
             "Resultados pipeline",
             "Cuadro de mando",
+            "Asistente flota",
             "Rutas híbridas",
+            "Gemelo digital",
             "Servicios",
             "Mapa y métricas",
             "Verificación técnica",
@@ -486,7 +520,11 @@ def main() -> None:
                 width="stretch",
             ):
                 with st.spinner(f"Ejecutando fase {fase_actual.orden}…"):
-                    code, out, err = ejecutar_fase_kdd(fase_actual.orden, paso)
+                    code, out, err = ejecutar_fase_kdd(
+                        fase_actual.orden,
+                        paso,
+                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
+                    )
                 ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
                 if code == 0:
                     st.session_state.timeline.append(
@@ -515,8 +553,14 @@ def main() -> None:
     with tab_cuadro:
         render_cuadro_mando_tab()
 
+    with tab_asistente:
+        render_asistente_flota_tab()
+
     with tab_rutas:
         render_rutas_hibridas_tab()
+
+    with tab_gemelo:
+        render_gemelo_digital_tab()
 
     with tab_servicios:
         render_panel_gestion_servicios()

@@ -19,9 +19,12 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 | Data lake raw | Backup de snapshots y fuente de reproceso | HDFS |
 | Procesamiento | Limpieza, autosanación de grafo, analítica | Spark 3.5 + GraphFrames |
 | Estado operativo | Consulta rápida en tiempo casi real | Cassandra |
-| Histórico analítico | Consultas de tendencia y reporting | Hive |
+| Histórico analítico | Consultas de tendencia, reporting y analítica de incidencias (riesgo por hub 24h, top causas 24h) | Hive |
 | Orquestación | Programación y ejecución encadenada | Airflow |
-| Visualización | Operación, rutas/métricas y **guía del ciclo KDD** (fases, payload, topología vs mapa) | Streamlit + Folium + Altair (topología en pestaña KDD) |
+| Visualización | Operación, rutas/métricas y **guía del ciclo KDD** (fases, payload, topología vs mapa) + asistente de flota | Streamlit + Folium + Altair (topología en pestaña KDD) |
+| Asistente de Flota | Traducción lenguaje natural → consultas supervisadas (Cassandra/Hive) | Streamlit + cassandra-driver + PyHive |
+| Graph AI microservicio | Detección de anomalías y scoring por snapshot de grafo | FastAPI + NetworkX |
+| Persistencia de anomalías | Almacenamiento de resultados Graph AI para reporting | Cassandra (`graph_anomalies`) |
 
 ## Flujo de extremo a extremo
 
@@ -31,11 +34,12 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 4. Persistencia en Cassandra (estado actual) y Hive (histórico).
 5. Dashboard y API consumen Cassandra para operación diaria.
 6. La pestaña **Ciclo KDD** del dashboard enlaza fases con scripts y ficheros del repo, permite probar **OpenWeather** con clave opcional en sesión y muestra **una** vista topológica de la red para fases 3–5 (detalle en `docs/DASHBOARD_KDD_UI.md`).
+7. El **Asistente de Flota** (Streamlit) traduce lenguaje natural a consultas supervisadas (Cassandra/Hive) y muestra resultados como tablas; y un pipeline periódico ejecuta **Graph AI** para registrar anomalías en `graph_anomalies`.
 
 ## Decisiones de diseño
 
 - **Cassandra como estado operativo**: lectura rápida para UI/API.
-- **Hive como histórico**: análisis temporal y agregados.
+- **Hive como histórico**: análisis temporal, agregados y derivación de incidencias para reporting 24h.
 - **HDFS como origen auditable**: replay/reproceso de snapshots.
 - **Limpieza previa a persistencia**: nulos, duplicados y estados no canónicos.
 - **Standalone-first**: menos fricción en desarrollo; compatible con salto a YARN.

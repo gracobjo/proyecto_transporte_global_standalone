@@ -53,7 +53,11 @@ def _run_subprocess(
         return 124, out or "", msg
 
 
-def ejecutar_ingesta(paso_15min: Optional[int] = None) -> Tuple[int, str, str]:
+def ejecutar_ingesta(
+    paso_15min: Optional[int] = None,
+    *,
+    simular_incidencias: Optional[bool] = None,
+) -> Tuple[int, str, str]:
     """
     Si `paso_15min` es None, no se define PASO_15MIN y la ingesta usa el paso automático
     por reloj (`ingesta/trigger_paso.py`) — útil para alinearse con cron/trigger.
@@ -63,6 +67,10 @@ def ejecutar_ingesta(paso_15min: Optional[int] = None) -> Tuple[int, str, str]:
         env["PASO_15MIN"] = str(paso_15min)
     else:
         env.pop("PASO_15MIN", None)
+    if simular_incidencias is None:
+        env.pop("SIMLOG_SIMULAR_INCIDENCIAS", None)
+    else:
+        env["SIMLOG_SIMULAR_INCIDENCIAS"] = "1" if simular_incidencias else "0"
     t = _timeout_ingesta()
     return _run_subprocess(
         [sys.executable, "-m", "ingesta.ingesta_kdd"],
@@ -99,7 +107,12 @@ def ejecutar_subfase_spark(subfase: str, paso_15min: int | None = None) -> Tuple
     )
 
 
-def ejecutar_fase_kdd(orden: int, paso_15min: int) -> Tuple[int, str, str]:
+def ejecutar_fase_kdd(
+    orden: int,
+    paso_15min: int,
+    *,
+    simular_incidencias: Optional[bool] = None,
+) -> Tuple[int, str, str]:
     """
     Ejecuta la fase KDD indicada (orden 1–5, alineado con `servicios.kdd_fases.FASES_KDD`).
 
@@ -108,7 +121,7 @@ def ejecutar_fase_kdd(orden: int, paso_15min: int) -> Tuple[int, str, str]:
     - 5: procesamiento completo (`procesamiento_grafos`) → Cassandra/Hive y dashboard.
     """
     if orden in (1, 2):
-        return ejecutar_ingesta(paso_15min)
+        return ejecutar_ingesta(paso_15min, simular_incidencias=simular_incidencias)
     if orden == 3:
         return ejecutar_subfase_spark("transformacion", paso_15min)
     if orden == 4:

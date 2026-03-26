@@ -4,8 +4,13 @@ SIMLOG España — orquestación Airflow (pipeline compacto, legacy)
 Preferir el flujo por fases KDD: `dag_simlog_kdd_fases.py` (un DAG por fase, informes y cadena TriggerDagRun).
 
 Este DAG sigue siendo válido para ejecución periódica cada 15 min (ingesta + procesamiento en un solo grafo).
+
+Procesamiento: debe ejecutar `procesamiento/procesamiento_grafos.py` (Spark lee JSON en HDFS, escribe
+Cassandra y, con SIMLOG_ENABLE_HIVE=1, Hive en `logistica_espana`). El script suelto `procesamiento_grafos.py`
+en la raíz es legacy y no equivale a este pipeline.
 """
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -69,17 +74,30 @@ def ejecutar_ingesta(**context):
     if r.returncode != 0:
         raise RuntimeError(f"Ingesta falló: {r.stderr or r.stdout}")
 
+def _python_ejecucion() -> str:
+    """Python del proyecto (venv si existe) o el mismo intérprete que Airflow."""
+    venv_py = BASE / "venv_transporte" / "bin" / "python"
+    if venv_py.is_file():
+        return str(venv_py)
+    return sys.executable
+
+
 def ejecutar_procesamiento(**context):
-    """Spark debe cerrarse con spark.stop() - no solapar con ingesta."""
+    """
+    Spark: `procesamiento/procesamiento_grafos.main()` — lee JSON desde HDFS (backup ingesta),
+    enriquece con Hive (`nodos_maestro`) si aplica, persiste Cassandra + tablas Hive histórico.
+    Requiere SIMLOG_ENABLE_HIVE=1 para enableHiveSupport() (histórico particionado).
+    """
     import subprocess
-    import os
+
+    script = BASE / "procesamiento" / "procesamiento_grafos.py"
     r = subprocess.run(
-        [f"{BASE}/venv_transporte/bin/python", str(BASE / "procesamiento_grafos.py")],
-        env=os.environ,
+        [_python_ejecucion(), str(script)],
+        env={**os.environ, "SIMLOG_ENABLE_HIVE": "1"},
         capture_output=True,
         text=True,
         cwd=str(BASE),
-        timeout=180,
+        timeout=int(os.environ.get("SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC", "900")),
     )
     if r.returncode != 0:
         raise RuntimeError(f"Procesamiento falló: {r.stderr or r.stdout}")
@@ -99,12 +117,15 @@ default_args = {
 with DAG(
     dag_id="simlog_pipeline_maestro",
     default_args=default_args,
-    description="SIMLOG España — Ingesta y procesamiento Spark (intervalo vía SIMLOG_INGESTA_INTERVAL_MINUTES)",
+    description=(
+        "SIMLOG — Ingesta + Spark (lee HDFS backup, Cassandra + Hive logistica_espana). "
+        "Una sola tarea Python agrupa Spark; no hay sub-tarea separada «Hive» en la UI."
+    ),
     schedule=timedelta(minutes=_INGESTA_INTERVAL_MIN),
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
-    tags=["simlog", "logistica", "transporte", "spain"],
+    tags=["simlog", "logistica", "transporte", "spain", "hdfs", "hive", "spark"],
 ) as dag:
 
     check_hdfs = PythonOperator(
@@ -126,7 +147,7 @@ with DAG(
     )
 
     procesamiento = PythonOperator(
-        task_id="ejecutar_procesamiento",
+        task_id="spark_procesamiento_hdfs_cassandra_hive",
         python_callable=ejecutar_procesamiento,
     )
 

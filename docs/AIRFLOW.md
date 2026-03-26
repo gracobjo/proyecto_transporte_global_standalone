@@ -30,16 +30,17 @@ En `~/airflow/airflow.cfg`, la seccion `[api]` debe tener `base_url` y `port` al
 
 ## DAGs operativos (pipeline backend)
 
-Los DAGs de operacion viven bajo `~/airflow/dags/` en **dos carpetas** (Airflow 3 **DAG bundles**), para que en la UI queden agrupados por proyecto sin depender solo del nombre del DAG:
+Los DAGs de operacion viven bajo `~/airflow/dags/` en **subcarpetas** (Airflow 3 **DAG bundles**), para que en la UI queden agrupados por proyecto sin depender solo del nombre del DAG:
 
 | Bundle (nombre en UI) | Carpeta | Contenido |
 |----------------------|---------|-----------|
+| `dags-folder` | `~/airflow/dags/` | Raíz: mismo path que `[core] dags_folder`. Airflow 3 usa este nombre por defecto; debe figurar en `dag_bundle_config_list` además de `simlog`/`smart_grid`, o las ejecuciones antiguas (o DagVersions en BD) que referencian `dags-folder` fallan con `Requested bundle 'dags-folder' is not configured`. |
 | `simlog` | `~/airflow/dags/simlog/` | Arranque / parada / comprobación stack, fases KDD `simlog_kdd_*` |
 | `smart_grid` | `~/airflow/dags/smart_grid/` | DAGs legacy del otro proyecto (`*_smart_grid`, fases KDD antiguas, etc.) |
 
 Además, cada DAG lleva etiquetas **`proyecto_simlog`** o **`proyecto_smart_grid`** para **filtrar por tag** en el listado de DAGs.
 
-La configuración está en `~/airflow/airflow.cfg`, clave `[dag_processor]` → `dag_bundle_config_list` (dos `LocalDagBundle` con `path` a esas carpetas).
+La configuración está en `~/airflow/airflow.cfg`, clave `[dag_processor]` → `dag_bundle_config_list` (tres `LocalDagBundle`: raíz `dags-folder` + `simlog` + `smart_grid`).
 
 El codigo Python de los DAGs sigue apoyandose en el repo (`servicios/gestion_servicios.py`, `orquestacion/kdd_ejecucion.py`, etc.).
 
@@ -84,6 +85,7 @@ airflow dags trigger dag_arranque_servicios_smart_grid
 
 ## Troubleshooting rapido
 
+- **`ValueError: Requested bundle 'dags-folder' is not configured`**: en `[dag_processor] dag_bundle_config_list` añade un bundle con `"name": "dags-folder"` y `"path"` igual a `[core] dags_folder` (normalmente `~/airflow/dags`). Reinicia **scheduler** y **api-server** (o `dag-processor` si lo usas separado).
 - Tareas en **queued** sin arrancar: revisa `[api] base_url` y `port` (8088) y reinicia **api-server** y **scheduler**; o exporta `AIRFLOW__API__BASE_URL=http://127.0.0.1:8088` antes de lanzarlos.
 - Si no ves DAGs nuevos: ejecuta `airflow dags reserialize` y refresca la UI.
 - Si un DAG falla por rutas/entorno: verifica `AIRFLOW_HOME`, `HADOOP_HOME`, `KAFKA_HOME`, `SPARK_HOME`, `HIVE_HOME`, `NIFI_HOME`.

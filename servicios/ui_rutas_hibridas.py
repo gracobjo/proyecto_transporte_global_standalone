@@ -185,11 +185,11 @@ def render_rutas_hibridas_tab() -> None:
                 st.metric("Coste total estimado (€)", f"{eur}" if eur is not None else "—")
 
             ve = res.get("vehiculos_afectados") or []
-            st.markdown("##### Vehículos afectados (cruce con tracking)")
+            st.markdown("##### Vehículos afectados (origen→destino seleccionado)")
             if ve:
                 st.dataframe(pd.DataFrame(ve), width="stretch", hide_index=True)
             else:
-                st.caption("Ningún camión con ruta que intersecte estos nodos (o sin datos en `tracking_camiones`).")
+                st.caption("Ningún camión del cruce origen→destino elegido con datos en `tracking_camiones` que se pueda asociar a esta ruta.")
 
             alts = res.get("alternativas") or []
             st.markdown("##### Rutas alternativas (ante caída de tramo o nodo intermedio)")

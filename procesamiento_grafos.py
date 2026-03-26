@@ -14,12 +14,10 @@ from pyspark.sql.functions import col, lit, udf, from_json, to_json, struct
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, ArrayType, MapType
 from graphframes import GraphFrame
 
+from config import CASSANDRA_HOST, KEYSPACE
 from config_nodos import RED, get_nodos, get_aristas
 
 SPARK_MASTER = "local[*]"
-
-CASSANDRA_HOSTS = ["localhost"]
-CASSANDRA_KEYSPACE = "logistica"
 
 HIVE_DB = "logistica_db"
 HIVE_TABLE_EVENTOS = "eventos_historico"
@@ -283,89 +281,76 @@ def persistir_cassandra(
     pagerank: Dict,
     rutas_alternativas: Dict
 ) -> None:
-    """Persiste estado actual en Cassandra."""
+    """
+    Persiste estado en Cassandra según `cassandra/esquema_logistica.cql`.
+    Columnas: `lat`/`lon`/`ultima_posicion` (no latitud/longitud/progreso_pct en tracking_camiones).
+    """
     try:
+        from datetime import timezone
+
         from cassandra.cluster import Cluster
-        
-        cluster = Cluster(CASSANDRA_HOSTS)
-        session = cluster.connect(HIVE_DB)
-        
-        session.execute("""
-            CREATE TABLE IF NOT EXISTS nodos_estado (
-                nombre text PRIMARY KEY,
-                tipo text,
-                lat double,
-                lon double,
-                estado text,
-                motivo text,
-                pagerank double,
-                timestamp text
-            )
-        """)
-        
-        session.execute("""
-            CREATE TABLE IF NOT EXISTS tracking_camiones (
-                id_camion text PRIMARY KEY,
-                ruta list<text>,
-                distancia_total_km double,
-                lat_actual double,
-                lon_actual double,
-                nodo_actual text,
-                progreso_pct double,
-                ruta_alternativa list<text>,
-                distancia_alternativa double,
-                timestamp text
-            )
-        """)
-        
-        timestamp = datos.get("timestamp", datetime.now().isoformat())
-        
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+
+        ts = datetime.now(timezone.utc)
+        nodos_map = get_nodos()
+
         for nodo, estado_info in datos.get("estados_nodos", {}).items():
-            nodos = get_nodos()
-            pr_value = pagerank.get(nodo, {}).get("pagerank", 0.0)
-            
-            session.execute("""
-                INSERT INTO nodos_estado (nombre, tipo, lat, lon, estado, motivo, pagerank, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                nodo,
-                nodos.get(nodo, {}).get("tipo", "secundario"),
-                nodos.get(nodo, {}).get("lat", 0.0),
-                nodos.get(nodo, {}).get("lon", 0.0),
-                estado_info.get("estado", "ok"),
-                estado_info.get("motivo", ""),
-                pr_value,
-                timestamp
-            ))
-        
+            nd = nodos_map.get(nodo, {})
+            session.execute(
+                """
+                INSERT INTO nodos_estado (
+                    id_nodo, lat, lon, tipo, estado, motivo_retraso, clima_actual,
+                    temperatura, humedad, viento_velocidad, ultima_actualizacion
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    nodo,
+                    float(nd.get("lat", 0.0)),
+                    float(nd.get("lon", 0.0)),
+                    nd.get("tipo", "secundario"),
+                    estado_info.get("estado", "ok"),
+                    estado_info.get("motivo", ""),
+                    None,
+                    None,
+                    None,
+                    None,
+                    ts,
+                ),
+            )
+
         for camion in datos.get("camiones", []):
-            cam_id = camion.get("id", "UNKNOWN")
-            ruta_alt = rutas_alternativas.get(cam_id, {}).get("ruta", [])
-            dist_alt = rutas_alternativas.get(cam_id, {}).get("distancia", 0.0)
-            
-            pos = camion.get("posicion_actual", {})
-            
-            session.execute("""
-                INSERT INTO tracking_camiones 
-                (id_camion, ruta, distancia_total_km, lat_actual, lon_actual, 
-                 nodo_actual, progreso_pct, ruta_alternativa, distancia_alternativa, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                cam_id,
-                list(camion.get("ruta", [])),
-                camion.get("distancia_total_km", 0.0),
-                pos.get("lat", 0.0),
-                pos.get("lon", 0.0),
-                camion.get("nodo_actual", ""),
-                camion.get("progreso_pct", 0.0),
-                ruta_alt,
-                dist_alt,
-                timestamp
-            ))
-        
+            cam_id = camion.get("id_camion") or camion.get("id", "UNKNOWN")
+            pos = camion.get("posicion_actual") or {}
+            lat = float(pos.get("lat", camion.get("lat", 0.0)))
+            lon = float(pos.get("lon", camion.get("lon", 0.0)))
+            ruta = camion.get("ruta") or camion.get("ruta_sugerida") or []
+            ruta_list = ruta if isinstance(ruta, list) else []
+
+            session.execute(
+                """
+                INSERT INTO tracking_camiones (
+                    id_camion, lat, lon, ruta_origen, ruta_destino, ruta_sugerida,
+                    estado_ruta, motivo_retraso, ultima_posicion
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    cam_id,
+                    lat,
+                    lon,
+                    ruta_list[0] if ruta_list else "",
+                    ruta_list[-1] if ruta_list else "",
+                    ruta_list,
+                    camion.get("estado_ruta", "En ruta"),
+                    camion.get("motivo_retraso"),
+                    ts,
+                ),
+            )
+
         cluster.shutdown()
-        print(f"Actualizado estado en Cassandra")
-        
+        print("Actualizado estado en Cassandra")
+
     except Exception as e:
         print(f"Error persistiendo en Cassandra: {e}")
 
