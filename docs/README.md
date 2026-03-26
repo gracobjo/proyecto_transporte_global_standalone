@@ -10,11 +10,13 @@
 | [DISENO_ARQUITECTURA.md](DISENO_ARQUITECTURA.md) | Arquitectura, componentes y decisiones |
 | [DISENO_SISTEMA.md](DISENO_SISTEMA.md) | Diseño lógico, restricciones, diagramas Mermaid integrados |
 | [CASOS_DE_USO.md](CASOS_DE_USO.md) | Actores, catálogo CU-01…CU-09, diagrama Mermaid |
+| [MEMORIA_PROYECTO_SIMLOG.md](MEMORIA_PROYECTO_SIMLOG.md) | Documento único “en papel” para presentación formal (índice + consolidación documental) |
 | [DASHBOARD_KDD_UI.md](DASHBOARD_KDD_UI.md) | **Diseño** de la pestaña Ciclo KDD (Streamlit): módulos, fases 1–2 / 3–5, seguridad API |
 | [FLUJO_DATOS_Y_REQUISITOS.md](FLUJO_DATOS_Y_REQUISITOS.md) | Flujo de datos, JSON, Hive/Cassandra, **RF/RNF dashboard KDD** (§7–8) |
 | [REQUIREMENTS_CHECKLIST.md](REQUIREMENTS_CHECKLIST.md) | Checklist frente al PDF del enunciado |
 | [AIRFLOW.md](AIRFLOW.md) | Airflow sin Streamlit, DAGs, troubleshooting (colas, `base_url`) |
 | [YARN_Y_SPARK.md](YARN_Y_SPARK.md) | YARN vs Spark local |
+| [CODESPACES_CLUSTER.md](CODESPACES_CLUSTER.md) | Perfil separado para montar clúster Big Data en Codespaces sin mezclar con el stack principal |
 | [DIAGRAMAS_MERMAID.md](DIAGRAMAS_MERMAID.md) | **Diagramas UML en Mermaid** (casos de uso, componentes, secuencia, despliegue) |
 
 ## Diagramas
