@@ -1,5 +1,9 @@
 # SIMLOG España
 
+<p align="center">
+  <img src="logo.png" alt="Logo SIMLOG" width="220" />
+</p>
+
 **SIMLOG** (*Sistema Integrado de Monitorización y Simulación Logística*) — plataforma de **simulación y monitorización** de red de transporte en España. Stack Apache (HDFS, Kafka, Spark 3.5 con GraphFrames, Hive, Cassandra) para ingesta, procesamiento con grafos, persistencia y visualización en tiempo cuasi real.
 
 > Nombre y constantes de marca: [`BRANDING.md`](BRANDING.md). Despliegue operativo: [`README_SIMLOG.md`](README_SIMLOG.md).

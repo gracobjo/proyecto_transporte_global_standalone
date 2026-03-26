@@ -17,6 +17,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 BASE = Path(__file__).resolve().parent
+LOGO_PATH = BASE / "logo.png"
 sys.path.insert(0, str(BASE))
 
 from config_nodos import get_nodos, get_aristas
@@ -262,8 +263,10 @@ def _render_fase_kdd_card(
 
 
 def main() -> None:
+    page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else "🚛"
     st.set_page_config(
         page_title=f"{PROJECT_DISPLAY_NAME} — KDD",
+        page_icon=page_icon,
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -274,7 +277,12 @@ def main() -> None:
     if "timeline" not in st.session_state:
         st.session_state.timeline = []
 
-    st.title(PROJECT_DISPLAY_NAME)
+    h1, h2 = st.columns([1, 8])
+    with h1:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width=96)
+    with h2:
+        st.title(PROJECT_DISPLAY_NAME)
     st.caption(PROJECT_TAGLINE)
     st.markdown(
         f"{PROJECT_DESCRIPTION} Ciclo **KDD** con stack Apache: **ingesta**, "
