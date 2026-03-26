@@ -134,14 +134,18 @@ def render_consultas_cassandra() -> None:
 def render_consultas_hive() -> None:
     st.subheader("Consultas supervisadas — Hive (histórico)")
     st.caption(
-        "Requiere **HiveServer2** y `beeline` en PATH. "
-        "Variable opcional: `HIVE_JDBC_URL` (ej. `jdbc:hive2://localhost:10000`). "
+        "Requiere **HiveServer2** (puerto **10000**). Las consultas usan **PyHive** (Thrift), no `beeline`. "
+        "Variables: `HIVE_JDBC_URL` o `HIVE_SERVER` (ej. `jdbc:hive2://localhost:10000`), "
+        "`SIMLOG_HIVE_BEELINE_USER` / usuario efectivo (`hadoop`). "
+        "Timeout: `HIVE_QUERY_TIMEOUT_SEC=300`. Si va lento, prueba `diag_smoke_hive` (SELECT 1). "
+        "El fallback Spark tras timeout suele fallar con metastore Derby; deja `SIMLOG_HIVE_EXEC_FALLBACK_SPARK=0`. "
         "Las tablas `historico_nodos` y `nodos_maestro` se crean al ejecutar el procesamiento Spark."
     )
     claves = listar_claves_hive()
     # Para evitar que el usuario no encuentre el diagnóstico (por scroll/visibilidad),
     # priorizamos estas consultas 24h al principio de la lista.
     claves_rapidas = [
+        "diag_smoke_hive",
         "diag_fecha_proceso_24h",
         "historico_nodos_muestra_24h",
         "severidad_resumen_24h",
@@ -155,7 +159,7 @@ def render_consultas_hive() -> None:
     sel = label_a_clave[sel_label]
     if st.button("Ejecutar consulta Hive", key="btn_hive", type="primary"):
         t0 = time.monotonic()
-        with st.spinner("Ejecutando Hive (beeline)…"):
+        with st.spinner("Ejecutando Hive (PyHive)…"):
             ok, err, out = ejecutar_hive_consulta(sel)
         elapsed = time.monotonic() - t0
         if ok:

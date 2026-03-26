@@ -196,14 +196,40 @@ def ejecutar_fase_spark(subfase: str, **context) -> Dict[str, Any]:
 
     script = BASE / "procesamiento" / "fase_kdd_spark.py"
     paso = _paso_desde_context(**context)
+    # Hive es opcional en el proyecto; para la subfase de interpretación (fase 5)
+    # necesitamos que Spark habilite soporte Hive para que se creen/actualicen
+    # tablas en `logistica_espana` y el frontend pueda consultarlas con beeline.
+    env_extra: Dict[str, str] = {}
+    detener_hive = False
+    if subfase == "interpretacion":
+        env_extra["SIMLOG_ENABLE_HIVE"] = "1"
+        detener_hive = True
+        # En modo local, HiveServer2 usa metastore Derby embebido. Si Spark intenta
+        # habilitar Hive al mismo tiempo, falla con ERROR XSDB6 (lock de Derby).
+        # Por eso, se para HS2 antes de ejecutar Spark y se reinicia al final.
+        try:
+            from servicios.gestion_servicios import parar_hive
+
+            parar_hive()
+        except Exception:
+            # Si no se puede parar, Spark volverá a fallar con el lock; lo dejamos
+            # continuar para que el error sea visible en los logs del task.
+            pass
     r = subprocess.run(
         [sys.executable, str(script), "--fase", subfase],
         cwd=str(BASE),
         capture_output=True,
         text=True,
         timeout=900,
-        env={**os.environ, "PASO_15MIN": str(paso)},
+        env={**os.environ, "PASO_15MIN": str(paso), **env_extra},
     )
+    if detener_hive:
+        try:
+            from servicios.gestion_servicios import iniciar_hive
+
+            iniciar_hive()
+        except Exception:
+            pass
     inicio = {"subfase": subfase, "paso_15min": paso}
     resultado: Dict[str, Any] = {
         "returncode": r.returncode,

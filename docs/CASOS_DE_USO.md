@@ -24,6 +24,8 @@ Documento funcional para la plataforma en modo standalone.
 | CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
 | CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
 | CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather; simulación por paso; topología sin duplicar mapas |
+| CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
+| CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
 
 ## Detalle breve
 
@@ -73,6 +75,19 @@ Documento funcional para la plataforma en modo standalone.
 - **Postcondiciones:** comprensión del alineamiento fase–script–datos sin exigir lectura directa de todo el código.
 - **Diseño:** `docs/DASHBOARD_KDD_UI.md`.
 
+### CU-10 — Asistente de Flota (lenguaje natural → SQL supervisado)
+
+- **Entrada:** usuario pregunta en lenguaje natural (ej. “¿Dónde está el camión 1?”).
+- **Flujo:** `resolver_intencion_gestor()` traduce keywords a consultas preaprobadas (whitelist) y ejecuta contra Cassandra (tiempo real) o Hive (histórico).
+- **Salida:** tabla `st.dataframe` + opción “Ver consulta SQL”.
+- **Restricción clave:** no se ejecuta SQL arbitrario del usuario; solo plantillas alineadas al esquema real.
+
+### CU-11 — Graph AI anomalías (microservicio desacoplado)
+
+- **Entrada:** snapshot del grafo (nodos/aristas) materializado en Cassandra.
+- **Flujo:** Airflow llama al microservicio FastAPI `/analyze-graph` (NetworkX) y persiste los resultados en Cassandra (`graph_anomalies`).
+- **Salida:** anomalías por nodo con `anomaly_score` y métricas asociadas; opcional Kafka `graph_anomalies`.
+
 ---
 
 ## Diagrama de casos de uso (Mermaid)
@@ -97,6 +112,8 @@ flowchart LR
     CU7[CU-07 Airflow]
     CU8[CU-08 NiFi]
     CU9[CU-09 Explorar KDD en UI]
+    CU10[CU-10 Asistente de Flota]
+    CU11[CU-11 Graph AI anomalías]
   end
   OP --> CU1
   OP --> CU2
@@ -106,8 +123,11 @@ flowchart LR
   AN --> CU4
   AN --> CU5
   AN --> CU9
+  AN --> CU10
   PL --> CU6
   PR --> CU1
   PR --> CU7
   PR --> CU8
+  OP --> CU11
+  AN --> CU11
 ```

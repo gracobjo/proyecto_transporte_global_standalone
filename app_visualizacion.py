@@ -51,6 +51,8 @@ from servicios.ui_servicios_web import render_sidebar_enlaces_ui
 from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
+from servicios.ui_asistente_flota import render_asistente_flota_tab
+from servicios.ui_gemelo_digital import render_gemelo_digital_sidebar, render_gemelo_digital_tab
 from servicios.mapa_rutas_hibridas import crear_mapa_planificacion_rutas
 from servicios.kdd_vista_grafo import render_bloque_grafo_fases_spark
 from servicios.kdd_reglas_ui import render_panel_reglas_grafo
@@ -355,6 +357,8 @@ def main() -> None:
 
         render_sidebar_enlaces_ui()
 
+        render_gemelo_digital_sidebar()
+
         st.divider()
         st.subheader("Línea temporal (simulación 15 min)")
         st.checkbox(
@@ -425,12 +429,24 @@ def main() -> None:
             for ev in reversed(st.session_state.timeline[-8:]):
                 st.caption(ev)
 
-    tab_kdd, tab_resultados, tab_cuadro, tab_rutas, tab_servicios, tab_mapa, tab_verif = st.tabs(
+    (
+        tab_kdd,
+        tab_resultados,
+        tab_cuadro,
+        tab_asistente,
+        tab_rutas,
+        tab_gemelo,
+        tab_servicios,
+        tab_mapa,
+        tab_verif,
+    ) = st.tabs(
         [
             "Ciclo KDD",
             "Resultados pipeline",
             "Cuadro de mando",
+            "Asistente flota",
             "Rutas híbridas",
+            "Gemelo digital",
             "Servicios",
             "Mapa y métricas",
             "Verificación técnica",
@@ -515,8 +531,14 @@ def main() -> None:
     with tab_cuadro:
         render_cuadro_mando_tab()
 
+    with tab_asistente:
+        render_asistente_flota_tab()
+
     with tab_rutas:
         render_rutas_hibridas_tab()
+
+    with tab_gemelo:
+        render_gemelo_digital_tab()
 
     with tab_servicios:
         render_panel_gestion_servicios()

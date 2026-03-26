@@ -111,6 +111,10 @@ HDFS_BACKUP_PATH = os.environ.get("HDFS_BACKUP_PATH", "/user/hadoop/transporte_b
 # Hive (para histórico; en Docker usar HIVE_METASTORE_URIS si aplica)
 # Debe coincidir con `procesamiento_grafos.py` (histórico Hive en logistica_espana).
 HIVE_DB = os.environ.get("HIVE_DB", "logistica_espana")
+# Tabla Hive de histórico de ingesta/rutas (DDL propio; por defecto nombre pedido en integraciones gestor)
+HIVE_TABLE_TRANSPORTE_HIST = os.environ.get(
+    "SIMLOG_HIVE_TABLA_TRANSPORTE", "transporte_ingesta_completa"
+)
 HIVE_METASTORE_URIS = os.environ.get("HIVE_METASTORE_URIS", "")  # ej: thrift://hive-metastore:9083
 HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 para JDBC/beeline
 # JDBC para beeline / clientes (cuadro de mando, integraciones)

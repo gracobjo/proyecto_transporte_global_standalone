@@ -12,8 +12,8 @@ spark = SparkSession.builder \
 # Fase I: Esquema de sensores GPS [cite: 19]
 gpsSchema = StructType() \
     .add("id_vehiculo", StringType()) \
-    .add("latitud", DoubleType()) \
-    .add("longitud", DoubleType()) \
+    .add("lat", DoubleType()) \
+    .add("lon", DoubleType()) \
     .add("timestamp", TimestampType()) \
     .add("velocidad", DoubleType())
 
@@ -26,7 +26,7 @@ rawStream = spark.readStream \
 
 # Fase II: Limpieza y Normalización [cite: 23]
 cleanDF = rawStream.selectExpr("CAST(value AS STRING) as json") \
-    .select(from_json(col("json"), gpsSchema).as("data")) \
+    .select(from_json(col("json"), gpsSchema).alias("data")) \
     .select("data.*") \
     .filter(col("id_vehiculo").isNotNull())
 

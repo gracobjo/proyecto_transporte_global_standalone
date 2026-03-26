@@ -93,6 +93,23 @@ def hdfs_listado_json(ruta: str, max_items: int = 8, timeout: int = 20) -> Dict[
     }
 
 
+def _kafka_topics_executable() -> str:
+    """Ruta a kafka-topics.sh (KAFKA_HOME/bin o PATH)."""
+    nombres = ("kafka-topics.sh", "kafka-topics")
+    kh = os.environ.get("KAFKA_HOME", "").strip()
+    if kh:
+        b = Path(kh) / "bin"
+        for n in nombres:
+            p = b / n
+            if p.is_file():
+                return str(p)
+    for n in nombres:
+        w = which(n)
+        if w:
+            return w
+    return "kafka-topics.sh"
+
+
 def _kafka_ejecutable_offsets() -> List[str]:
     """Rutas a kafka-get-offsets (la distribución Apache usa *.sh en bin/)."""
     nombres = ("kafka-get-offsets.sh", "kafka-get-offsets")
@@ -212,6 +229,52 @@ def _obtener_offsets_kafka(bootstrap: str, topic: str) -> Tuple[Optional[str], s
     return None, " ".join(diag)
 
 
+def kafka_crear_topic_si_falta(
+    bootstrap: str,
+    topic: str,
+    *,
+    partitions: int = 2,
+    replication: int = 1,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """
+    Crea el topic si no existe (Kafka 2.4+: --if-not-exists; si falla, intenta sin él).
+    """
+    exe = _kafka_topics_executable()
+    common_tail = [
+        "--topic",
+        topic,
+        "--bootstrap-server",
+        bootstrap,
+        "--partitions",
+        str(partitions),
+        "--replication-factor",
+        str(replication),
+    ]
+
+    def _ya_existe(texto: str) -> bool:
+        t = texto.lower()
+        return "already exists" in t or "topicexistsexception" in t
+
+    code, out, err = _run(
+        [exe, "--create", "--if-not-exists", *common_tail],
+        timeout=timeout,
+    )
+    texto = (out or "") + (err or "")
+    if code == 0:
+        return {"ok": True, "mensaje": f"Topic `{topic}` creado o ya existía (--if-not-exists)."}
+    if _ya_existe(texto):
+        return {"ok": True, "mensaje": f"Topic `{topic}` ya existía."}
+
+    code2, out2, err2 = _run([exe, "--create", *common_tail], timeout=timeout)
+    texto2 = (out2 or "") + (err2 or "")
+    if code2 == 0:
+        return {"ok": True, "mensaje": f"Topic `{topic}` creado."}
+    if _ya_existe(texto2):
+        return {"ok": True, "mensaje": f"Topic `{topic}` ya existía."}
+    return {"ok": False, "mensaje": (texto2 or texto)[:800]}
+
+
 def kafka_resumen_topic(
     bootstrap: str,
     topic: str,
@@ -220,16 +283,25 @@ def kafka_resumen_topic(
     timeout_list: int = 15,
 ) -> Dict[str, Any]:
     """Describe el topic y, en `modo="completo"`, intenta offsets por partición."""
-    out: Dict[str, Any] = {"bootstrap": bootstrap, "topic": topic, "topic_existe": False}
+    exe = _kafka_topics_executable()
+    out: Dict[str, Any] = {
+        "bootstrap": bootstrap,
+        "topic": topic,
+        "topic_existe": False,
+        "kafka_topics_bin": exe,
+    }
     code, stdout, stderr = _run(
-        ["kafka-topics.sh", "--describe", "--topic", topic, "--bootstrap-server", bootstrap],
+        [exe, "--describe", "--topic", topic, "--bootstrap-server", bootstrap],
         timeout=timeout_describe,
     )
     out["describe_ok"] = code == 0
     out["describe_salida"] = (stdout or stderr or "")[:1200]
+    # Si describe responde OK, el topic existe (no depender solo de --list, que puede hacer timeout).
+    if code == 0:
+        out["topic_existe"] = True
 
     code2, out2, err2 = _run(
-        ["kafka-topics.sh", "--list", "--bootstrap-server", bootstrap],
+        [exe, "--list", "--bootstrap-server", bootstrap],
         timeout=timeout_list,
     )
     if code2 == 0 and topic in out2:
@@ -305,7 +377,7 @@ def cassandra_resumen_tablas(host: str, keyspace: str, modo: str = "completo") -
 
 
 def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
-    """SHOW TABLES + muestra de conteos vía consultas whitelist (beeline)."""
+    """SHOW TABLES + muestra de conteos vía consultas whitelist (PyHive → HiveServer2)."""
     from servicios.consultas_cuadro_mando import ejecutar_hive_consulta
 
     out: Dict[str, Any] = {"tablas": None, "conteos": {}}
@@ -333,7 +405,7 @@ def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
         )
     if "impersonate" in blob_err.lower() and "anonymous" in blob_err.lower():
         out["hint_impersonacion"] = (
-            "HiveServer2 intenta impersonar al usuario del cliente; sin usuario, beeline va como "
+            "HiveServer2 intenta impersonar al usuario del cliente; sin usuario, la sesión puede ir como "
             "«anonymous». Define `SIMLOG_HIVE_BEELINE_USER` (p. ej. hadoop) o deja que use `USER`. "
             "En el cluster: reglas `hadoop.proxyuser.hadoop.*` en `core-site.xml` si aplica."
         )
@@ -351,6 +423,8 @@ def obtener_snapshot_pipeline(
     kafka_modo: str = "completo",
     hdfs_max_items: int = 8,
     hdfs_timeout: int = 20,
+    kafka_timeout_describe: int = 20,
+    kafka_timeout_list: int = 15,
 ) -> Dict[str, Any]:
     """
     Un solo dict con todo lo necesario para la pestaña de resultados.
@@ -358,13 +432,19 @@ def obtener_snapshot_pipeline(
     return {
         "ingesta_local": leer_ultima_ingesta(),
         "hdfs_backup": hdfs_listado_json(hdfs_path, max_items=hdfs_max_items, timeout=hdfs_timeout),
-        "kafka": kafka_resumen_topic(kafka_bootstrap, topic, modo=kafka_modo),
+        "kafka": kafka_resumen_topic(
+            kafka_bootstrap,
+            topic,
+            modo=kafka_modo,
+            timeout_describe=kafka_timeout_describe,
+            timeout_list=kafka_timeout_list,
+        ),
         "cassandra": cassandra_resumen_tablas(cassandra_host, keyspace, modo=cassandra_modo),
         "hive": hive_resumen() if incluir_hive else {
             "tablas": None,
             "conteos": {},
             "show_tables_ok": False,
-            "error_tablas": "Hive omitido en modo rápido (para evitar beeline lento).",
+            "error_tablas": "Hive omitido en modo rápido (para evitar consultas lentas a HiveServer2).",
             "omitido_modo_rapido": True,
             "hint": "Si necesitas el histórico Hive, pulsa dentro de la pestaña «Resultados del pipeline KDD» el botón de cargar Hive."
         },

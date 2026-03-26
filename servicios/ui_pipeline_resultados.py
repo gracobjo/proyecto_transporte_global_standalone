@@ -14,10 +14,12 @@ from config import (
     HIVE_DB,
     KAFKA_BOOTSTRAP,
     KEYSPACE,
+    TOPIC_RAW,
     TOPIC_TRANSPORTE,
 )
 from servicios.pipeline_verificacion import (
     hive_resumen,
+    kafka_crear_topic_si_falta,
     obtener_snapshot_pipeline,
 )
 
@@ -27,10 +29,30 @@ def render_pipeline_resultados_tab() -> None:
     st.caption(
         "Comprueba **fase a fase** que la ingesta generó datos, que hay copia en **HDFS**, "
         "que **Kafka** tiene el topic activo, que **Spark** ha dejado estado en **Cassandra** "
-        "y que el **histórico Hive** está accesible (si Beeline/HiveServer2 están en marcha)."
+        "y que el **histórico Hive** está accesible (si HiveServer2 está en marcha; la UI usa PyHive al puerto 10000)."
     )
 
-    if st.button("🔄 Actualizar comprobaciones", type="primary", key="btn_refresh_pipeline"):
+    c_btn, c_topics = st.columns([1, 2])
+    with c_btn:
+        refresh = st.button("🔄 Actualizar comprobaciones", type="primary", key="btn_refresh_pipeline")
+    with c_topics:
+        crear_topics = st.button(
+            "Crear temas Kafka (raw + filtered) si faltan",
+            key="btn_kafka_create_topics",
+            help="Ejecuta kafka-topics --create (usa KAFKA_HOME si está definido).",
+        )
+
+    if crear_topics:
+        with st.spinner("Creando topics en Kafka…"):
+            r1 = kafka_crear_topic_si_falta(KAFKA_BOOTSTRAP, TOPIC_RAW)
+            r2 = kafka_crear_topic_si_falta(KAFKA_BOOTSTRAP, TOPIC_TRANSPORTE)
+        for label, r in (("transporte_raw", r1), ("transporte_filtered", r2)):
+            if r.get("ok"):
+                st.success(f"{label}: {r.get('mensaje', 'OK')}")
+            else:
+                st.error(f"{label}: {r.get('mensaje', 'error')}")
+
+    if refresh:
         with st.spinner("Consultando servicios y ficheros…"):
             st.session_state["pipeline_snapshot_kdd"] = obtener_snapshot_pipeline(
                 hdfs_path=HDFS_BACKUP_PATH,
@@ -42,7 +64,9 @@ def render_pipeline_resultados_tab() -> None:
                 incluir_hive=False,
                 kafka_modo="rapido",
                 hdfs_max_items=3,
-                hdfs_timeout=8,
+                hdfs_timeout=28,
+                kafka_timeout_describe=25,
+                kafka_timeout_list=22,
             )
 
     snap = st.session_state.get("pipeline_snapshot_kdd")
@@ -84,10 +108,15 @@ def render_pipeline_resultados_tab() -> None:
     with st.expander("**Kafka + HDFS** (mensajes y backup JSON)", expanded=True):
         k = snap["kafka"]
         st.markdown(f"**Bootstrap:** `{k['bootstrap']}` · **Topic:** `{k['topic']}`")
+        if k.get("kafka_topics_bin"):
+            st.caption(f"Cliente: `{k['kafka_topics_bin']}`")
         if k.get("topic_existe"):
-            st.success("Topic presente en el clúster Kafka.")
+            st.success("Topic presente en el clúster Kafka (describe o listado).")
         else:
-            st.warning("No se confirmó el topic en el listado; crea el topic si hace falta.")
+            st.warning(
+                "No se confirmó el topic (describe/list fallaron o hicieron timeout). "
+                "Pulsa «Crear temas Kafka» arriba o `bash sql/crear_temas_kafka.sh`."
+            )
         if k.get("describe_ok"):
             st.text_area("Describe topic", k.get("describe_salida", ""), height=120, disabled=True, key="kafka_desc")
         if k.get("offsets"):
@@ -107,7 +136,13 @@ def render_pipeline_resultados_tab() -> None:
             else:
                 st.caption("No se encontraron ficheros `.json` en esa ruta (¿primera ingesta?)")
         else:
-            st.error(h.get("detalle", "Error HDFS"))
+            det = h.get("detalle", "Error HDFS")
+            st.error(det)
+            if "timeout" in str(det).lower():
+                st.info(
+                    "Si HDFS responde lento, sube el tiempo de espera en código "
+                    "(`hdfs_timeout` en `obtener_snapshot_pipeline`) o revisa el NameNode."
+                )
 
     # --- Spark → Cassandra ---
     with st.expander("**3–5 · Spark → Cassandra** (estado actual del gemelo)", expanded=True):
@@ -136,11 +171,11 @@ def render_pipeline_resultados_tab() -> None:
             "(o variable `HIVE_BEELINE_BIN`)."
         )
         hv = snap["hive"]
-        # En modo rápido omitimos Hive para no bloquear la UI por beeline/HiveServer2.
+        # En modo rápido omitimos Hive para no bloquear la UI por HiveServer2.
         if hv.get("omitido_modo_rapido"):
             st.warning(hv.get("error_tablas", "Hive omitido en modo rápido."))
             if st.button("Cargar Hive (histórico)", key="btn_load_hive_fast", type="secondary"):
-                with st.spinner("Consultando Hive (beeline)…"):
+                with st.spinner("Consultando Hive (PyHive)…"):
                     snap["hive"] = hive_resumen()
                     st.session_state["pipeline_snapshot_kdd"] = snap
                     st.rerun()
@@ -149,7 +184,7 @@ def render_pipeline_resultados_tab() -> None:
                 st.success("SHOW TABLES ejecutado.")
                 st.text_area("Tablas", hv.get("tablas") or "", height=180, disabled=True, key="hive_tabs")
             else:
-                st.warning(hv.get("error_tablas", "Hive no disponible o error Beeline."))
+                st.warning(hv.get("error_tablas", "Hive no disponible o error de conexión (PyHive)."))
 
             for codigo, bloque in (hv.get("conteos") or {}).items():
                 st.markdown(f"**{codigo}**")

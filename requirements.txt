@@ -12,6 +12,12 @@ kafka-python>=2.0.2
 # Cassandra (driver para app Streamlit)
 cassandra-driver>=3.25.0
 
+# HiveServer2 (cuadro de mando Streamlit — sin beeline/subprocess)
+pyhive>=0.7.0
+thrift>=0.16.0
+# PyHive con auth NONE usa TSaslClientTransport; instalar evita «No module named thrift_sasl»
+thrift_sasl>=0.4.3
+
 # Config / YAML (catálogo de rutas)
 PyYAML>=6.0
 

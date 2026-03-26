@@ -24,6 +24,8 @@ flowchart TB
     UC7[CU-07 Airflow]
     UC8[CU-08 NiFi]
     UC9[CU-09 Explorar KDD UI]
+    UC10[CU-10 Asistente de Flota]
+    UC11[CU-11 Graph AI anomalías]
   end
   OP --> UC1
   OP --> UC2
@@ -33,10 +35,13 @@ flowchart TB
   AN --> UC4
   AN --> UC5
   AN --> UC9
+  AN --> UC10
   PL --> UC6
   SCH --> UC1
   SCH --> UC7
   SCH --> UC8
+  OP --> UC11
+  AN --> UC11
 ```
 
 ---
@@ -208,3 +213,118 @@ sequenceDiagram
 ## Nota sobre PlantUML
 
 Los ficheros `docs/uml/*.puml` se mantienen como referencia alternativa (actualizados en paralelo con CU-09 y módulos UI KDD); la documentación principal usa **Mermaid** en este archivo y en `DISENO_SISTEMA.md` y `CASOS_DE_USO.md`.
+
+---
+
+## 8. Secuencia — Asistente de Flota (lenguaje natural → SQL)
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit (Asistente flota)
+  participant G as Gestor SQL (whitelist)
+  participant C as Cassandra (CQL)
+  participant HV as HiveServer2 (PyHive)
+
+  U->>ST: Escribe pregunta (ej. “¿Dónde está el camión 1?”)
+  ST->>G: resolver_intencion_gestor(pregunta)
+  G-->>ST: (motor, sql, intención)
+  alt Cassandra (tiempo real)
+    ST->>C: ejecutar_consulta_asistente(CQL)
+    C-->>ST: filas (DataFrame)
+  else Hive (histórico)
+    ST->>HV: ejecutar_hive_sql_seguro(HiveQL)
+    HV-->>ST: TSV (parse a DataFrame)
+  end
+  ST-->>U: st.dataframe + toggle “Ver consulta SQL”
+```
+
+---
+
+## 9. Componentes — Integración Asistente de Flota + Graph AI
+
+```mermaid
+flowchart LR
+  subgraph UI
+    ST[Streamlit UI]
+  end
+
+  subgraph Backend_SQL
+    GSQL[Gestor consultas (whitelist)]
+  end
+
+  subgraph Datos
+    CS[Cassandra keyspace]
+    HV[Hive (histórico)]
+  end
+
+  subgraph Graph_AI
+    FAPI[FastAPI Graph AI]
+    NX[NetworkX (metrics + scoring)]
+  end
+
+  subgraph Orquestación
+    DAG[Airflow DAG: simlog_graph_ai_anomalias]
+  end
+
+  ST --> GSQL
+  GSQL --> CS
+  GSQL --> HV
+
+  DAG --> CS
+  DAG --> FAPI
+  FAPI --> NX
+  FAPI --> CS
+```
+
+---
+
+## 10. Secuencia — Graph AI análisis (Airflow → FastAPI → Cassandra)
+
+```mermaid
+sequenceDiagram
+  participant AF as Airflow
+  participant CS as Cassandra
+  participant API as FastAPI Graph AI
+  participant NX as NetworkX
+  participant STORE as Cassandra graph_anomalies
+
+  AF->>CS: fetch_graph (nodos_estado, aristas_estado)
+  AF->>API: POST /analyze-graph (graph payload)
+  API->>NX: build_nx_graph + compute_centralities
+  API->>NX: detect_anomalies + anomaly_score
+  API-->>AF: anomalías (por nodo) + métricas
+  AF->>STORE: INSERT graph_anomalies
+```
+
+---
+
+## 11. Diagrama (modelo conceptual) — Graph AI
+
+```mermaid
+classDiagram
+  class AnalyzeGraphRequest{
+    degree_z_threshold
+    edge_z_threshold
+    structural_change_threshold
+    anomaly_score_threshold
+  }
+  class GraphPayload{
+    nodes
+    edges
+    directed
+  }
+  class GraphProcessing{
+    build_nx_graph()
+    compute_centralities()
+    detect_anomalies()
+  }
+  class FastAPI{
+    POST /analyze-graph
+    POST /compare-graphs
+  }
+
+  FastAPI --> GraphProcessing
+  GraphProcessing --> GraphPayload
+  FastAPI --> AnalyzeGraphRequest
+```
