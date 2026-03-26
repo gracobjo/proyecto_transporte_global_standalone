@@ -26,6 +26,7 @@ Documento de **diseño** de las funcionalidades añadidas en la pestaña **Ciclo
 ## Fases 3–5: flujo de UI
 
 - **Reglas**: un expander con texto **común** (grafo base + autosanación) y subapartados por fase; indicador **«Estás aquí»** según fase seleccionada.
+- **Reglas**: un expander con texto **común** (grafo base + autosanación) y, en la sección de “Esta fase añade”, se muestra **solo** el contenido específico de la fase seleccionada (evita repetición 3 vs 4 vs 5).
 - **Grafo**: un subtítulo fijo que deja claro que es la **misma** red; título de gráfico estable; leyenda de color (Cassandra) y tamaño (PageRank a partir de datos disponibles).
 - **Mapas geográficos**: no se duplican aquí; se remite a **Mapa y métricas** y **Rutas híbridas**.
 

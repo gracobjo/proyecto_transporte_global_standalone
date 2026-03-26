@@ -8,11 +8,11 @@ spark = SparkSession.builder \
     .enableHiveSupport() \
     .getOrCreate()
 
-# 2. Definir el esquema del GPS que viene de Kafka
+# 2. Esquema GPS (nombres alineados con Cassandra: lat / lon; el JSON del topic debe usar estas claves)
 schema = StructType([
     StructField("id_vehiculo", StringType()),
-    StructField("latitud", DoubleType()),
-    StructField("longitud", DoubleType()),
+    StructField("lat", DoubleType()),
+    StructField("lon", DoubleType()),
     StructField("timestamp", StringType())
 ])
 

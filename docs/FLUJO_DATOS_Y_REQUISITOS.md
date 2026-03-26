@@ -205,3 +205,57 @@ Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMEN
 | RNF-KDD-04 | **Consistencia visual**: no sugerir tres grafos distintos cuando el layout topológico es el mismo | Título de gráfico y subtítulos alineados a «una red, varias fases» |
 
 Diseño detallado: **`docs/DASHBOARD_KDD_UI.md`**.
+
+---
+
+## 9. Requisitos funcionales — Cuadro de mando (Hive histórico 24h)
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-CM-HIVE-01 | En el **Cuadro de mando**, permitir consultas Hive supervisadas para analizar **incidencias** del histórico en una ventana temporal de **24 horas** | `servicios/consultas_cuadro_mando.py` (whitelist) + `render_consultas_hive()` en `servicios/cuadro_mando_ui.py` |
+| RF-CM-HIVE-02 | Calcular un informe **Riesgo por hub (últimas 24h)** derivando un tipo de incidencia a partir de `estado`, `motivo_retraso` y `clima_actual` (clasificación: OK/Congestionado/Bloqueado + subtipos) | Query Hive `riesgo_hub_24h` (deriva severidad/tipo y agrega top 3 por hub) |
+| RF-CM-HIVE-03 | Calcular un informe **Top causas (últimas 24h)** que agregue los tipos derivados de incidencia y devuelva el ranking de causas con su share y una **duración aproximada** sobre 24h | Query Hive `top_causas_24h` (top 10 por muestras) |
+
+## 10. Requisitos no funcionales — Cuadro de mando (Hive histórico 24h)
+
+| ID | Requisito | Notas |
+|----|-----------|-------|
+| RNF-CM-HIVE-01 | Las consultas Hive usadas en el UI deben ser agregadas y filtradas por ventana temporal (24h) para evitar bloqueos de la interfaz | SQL agregadas con `WHERE fecha_proceso >= ...` + límites/ranking |
+
+Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analítica y diagramas UML en `docs/uml/`.
+
+---
+
+## 11. Requisitos funcionales — Asistente de Flota (lenguaje natural → CQL/HiveSQL)
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-AF-01 | En la UI, permitir preguntas en lenguaje natural (chat) del tipo «¿Dónde está el camión 1?» | `servicios/ui_asistente_flota.py` con `st.chat_input` |
+| RF-AF-02 | Traducir palabras clave a consultas supervisadas (no SQL arbitrario) | `servicios/gestor_consultas_sql.py` (diccionario + heurísticas por keywords) |
+| RF-AF-03 | Ejecutar consultas de tiempo real sobre Cassandra | `cassandra-driver` leyendo `tracking_camiones` / `nodos_estado` / `aristas_estado` |
+| RF-AF-04 | Ejecutar consultas de histórico sobre Hive sin depender del beeline de consola | `ejecutar_hive_sql_seguro()` usando PyHive contra HiveServer2 (`HIVE_SERVER` / `HIVE_JDBC_URL`) |
+| RF-AF-05 | Mostrar resultados en un `st.dataframe` y permitir transparencia del SQL | `st.toggle("Ver consulta SQL")` + `st.code(..., language='sql')` |
+| RF-AF-06 | Mantener consistencia con el esquema real (ej. `id_camion/lat/lon`, sin `nodo_actual`) | SQL/CQL ajustados a `cassandra/esquema_logistica.cql` |
+
+## 12. Requisitos funcionales — Graph AI (FastAPI + NetworkX) para detección de anomalías
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-GAI-01 | Microservicio Graph AI con endpoints de análisis y comparación de snapshots | `graph_ai/api.py`: `POST /analyze-graph`, `POST /compare-graphs` |
+| RF-GAI-02 | Construcción de grafo con NetworkX a partir de JSON `nodes/edges` | `graph_ai/graph_processing.py`: `build_nx_graph()` |
+| RF-GAI-03 | Métricas por nodo: degree centrality, betweenness centrality y PageRank | `compute_centralities()` |
+| RF-GAI-04 | Detección de anomalías: aislados, outliers por grado y outliers por peso de aristas + cambios estructurales opcionales | `detect_anomalies()` (incluye comparación con snapshot anterior si se aporta `previous_graph`) |
+| RF-GAI-05 | Sistema de scoring por nodo con umbral y lista de anomalías | `anomaly_score_threshold` + `anomalous_nodes` |
+| RF-GAI-06 | Persistir anomalías en Cassandra en la tabla `graph_anomalies` | DAG `orquestacion/dag_graph_ai_anomalias.py` |
+| RF-GAI-07 | Orquestación periódica cada 15 minutos | Airflow DAG `simlog_graph_ai_anomalias` (schedule `timedelta(minutes=15)`) |
+
+## 13. Requisitos no funcionales — Graph AI
+
+| ID | Requisito | Notas |
+|----|-----------|-------|
+| RNF-GAI-01 | Low-resource (8GB RAM) | Se limita el coste de betweenness (aproximación con `k` cuando el grafo es grande) y se evita ML pesado |
+| RNF-GAI-02 | Modular y desacoplado de Spark | El microservicio consume grafo ya materializado (Cassandra) o JSON vía API |
+| RNF-GAI-03 | Tolerancia a fallos | El DAG captura fallos de red/consultas y permite reintentos de Airflow |
+| RNF-GAI-04 | Consistencia de esquema | `graph_anomalies` se alinea a `cassandra/esquema_logistica.cql` |
+
+Diseño / diagramas: nuevos bloques añadidos en `docs/DIAGRAMAS_MERMAID.md` (diagramas Asistente de Flota + Graph AI + DAG Airflow).

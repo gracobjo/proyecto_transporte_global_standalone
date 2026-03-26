@@ -14,7 +14,7 @@ component "Spark\nprocesamiento_grafos.py" as Spark
 database "Kafka\nraw/filtered" as Kafka
 database "HDFS\nbackup" as HDFS
 database "Cassandra\noperacional" as Cas
-database "Hive\nhistórico" as Hive
+database "Hive\nhistórico + analítica incidencias 24h" as Hive
 
 User --> UI
 User --> NiFi

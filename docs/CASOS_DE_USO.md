@@ -19,11 +19,13 @@ Documento funcional para la plataforma en modo standalone.
 | CU-02 | Supervisar y gobernar el stack | Operador | Servicios coherentes (puertos / estado) |
 | CU-03 | Gestionar stack vía script CLI | Operador | `simlog_stack.py start/status/stop` |
 | CU-04 | Visualizar estado de red y camiones | Analista | Dashboard Streamlit / mapa |
-| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado |
+| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado (+ analítica Hive 24h: riesgo por hub y top causas) |
 | CU-06 | Evaluar rutas híbridas | Planificador | Rutas y métricas en UI de planificación |
 | CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
 | CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
 | CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather; simulación por paso; topología sin duplicar mapas |
+| CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
+| CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
 
 ## Detalle breve
 
@@ -50,6 +52,9 @@ Documento funcional para la plataforma en modo standalone.
 
 - **Entrada:** Hive (`logistica_db` u otra base definida en el proyecto).
 
+- **Enfoque analítico 24h:** consultar incidencias derivadas en Hive sobre `logistica_espana.historico_nodos`, clasificando por `estado`, `motivo_retraso` y `clima_actual`.
+- **Resultados para el gestor:** informes (1) **Riesgo por hub (últimas 24h)** y (2) **Top causas (últimas 24h)**.
+
 ### CU-06 — Rutas híbridas
 
 - **UI:** vistas de planificación / mapa híbrido en el proyecto.
@@ -69,6 +74,19 @@ Documento funcional para la plataforma en modo standalone.
 - **Flujo principal:** abrir pestaña **Ciclo KDD** → elegir fase (◀ ▶ o desplegable) → leer reglas / vistas previas / grafo topológico según fase → en 1–2 ajustar paso, ejecutar ingesta o guardar instantánea y comparar payload → en 1–2 opcionalmente introducir API key y consultar OpenWeather.
 - **Postcondiciones:** comprensión del alineamiento fase–script–datos sin exigir lectura directa de todo el código.
 - **Diseño:** `docs/DASHBOARD_KDD_UI.md`.
+
+### CU-10 — Asistente de Flota (lenguaje natural → SQL supervisado)
+
+- **Entrada:** usuario pregunta en lenguaje natural (ej. “¿Dónde está el camión 1?”).
+- **Flujo:** `resolver_intencion_gestor()` traduce keywords a consultas preaprobadas (whitelist) y ejecuta contra Cassandra (tiempo real) o Hive (histórico).
+- **Salida:** tabla `st.dataframe` + opción “Ver consulta SQL”.
+- **Restricción clave:** no se ejecuta SQL arbitrario del usuario; solo plantillas alineadas al esquema real.
+
+### CU-11 — Graph AI anomalías (microservicio desacoplado)
+
+- **Entrada:** snapshot del grafo (nodos/aristas) materializado en Cassandra.
+- **Flujo:** Airflow llama al microservicio FastAPI `/analyze-graph` (NetworkX) y persiste los resultados en Cassandra (`graph_anomalies`).
+- **Salida:** anomalías por nodo con `anomaly_score` y métricas asociadas; opcional Kafka `graph_anomalies`.
 
 ---
 
@@ -94,6 +112,8 @@ flowchart LR
     CU7[CU-07 Airflow]
     CU8[CU-08 NiFi]
     CU9[CU-09 Explorar KDD en UI]
+    CU10[CU-10 Asistente de Flota]
+    CU11[CU-11 Graph AI anomalías]
   end
   OP --> CU1
   OP --> CU2
@@ -103,8 +123,11 @@ flowchart LR
   AN --> CU4
   AN --> CU5
   AN --> CU9
+  AN --> CU10
   PL --> CU6
   PR --> CU1
   PR --> CU7
   PR --> CU8
+  OP --> CU11
+  AN --> CU11
 ```

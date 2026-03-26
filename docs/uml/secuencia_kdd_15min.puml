@@ -17,7 +17,7 @@ S -> H: Lee backup / staging
 S -> C: Escribe estado operativo
 S -> HV: Escribe histórico
 UI -> C: Lee estado actual
-UI -> HV: Consulta histórico (opcional)
+UI -> HV: Consulta histórico (opcional)\n(riesgo por hub 24h / top causas 24h)
 
 == Exploración didáctica (CU-09, opcional) ==
 UI -> ING: consulta_clima_hubs(api_key sesión)

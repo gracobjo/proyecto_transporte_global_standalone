@@ -63,15 +63,28 @@ def markdown_panel_reglas_unificado(orden_fase: int) -> str:
 - Persistencia **Cassandra** (nodos, aristas, tracking, PageRank) y **Hive** opcional (`SIMLOG_ENABLE_HIVE=1`).
 - Mapa geográfico y métricas en otras pestañas; **abajo** solo topología lógica (misma red).
 """
+
+    selected = {3: f3, 4: f4, 5: f5}.get(orden_fase, "")
+    despues = ""
+    if orden_fase == 3:
+        despues = (
+            "- Próxima fase 4: **minería** (PageRank y rutas alternativas ponderadas).\n"
+            "- Próxima fase 5: **interpretación** (persistencia Cassandra/Hive y cierre del circuito)."
+        )
+    elif orden_fase == 4:
+        despues = "- Próxima fase 5: **interpretación** (persistencia Cassandra/Hive y métricas para el operador/gestor)."
+    else:
+        despues = "- Ya estás en la fase de **interpretación**: persiste y habilita explotación en el dashboard."
+
     return (
         f"_Fase seleccionada en el selector: **{orden_fase}**._\n\n"
         "### Común a las fases 3, 4 y 5\n"
         + base
         + auto
-        + "### Qué añade cada fase\n"
-        + f3
-        + f4
-        + f5
+        + "\n### Esta fase añade\n"
+        + selected
+        + "\n### Vista rápida (qué viene después)\n"
+        + despues
     )
 
 

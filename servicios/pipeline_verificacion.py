@@ -61,9 +61,9 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
     return out
 
 
-def hdfs_listado_json(ruta: str, max_items: int = 8) -> Dict[str, Any]:
+def hdfs_listado_json(ruta: str, max_items: int = 8, timeout: int = 20) -> Dict[str, Any]:
     """Lista JSON en HDFS (backup ingesta) con nombre y tamaño aproximado."""
-    code, stdout, stderr = _run(["hdfs", "dfs", "-ls", ruta], timeout=20)
+    code, stdout, stderr = _run(["hdfs", "dfs", "-ls", ruta], timeout=timeout)
     if code != 0:
         return {
             "ok": False,
@@ -91,6 +91,23 @@ def hdfs_listado_json(ruta: str, max_items: int = 8) -> Dict[str, Any]:
         "total_json_listados": len(filas),
         "ultimos": filas[:max_items],
     }
+
+
+def _kafka_topics_executable() -> str:
+    """Ruta a kafka-topics.sh (KAFKA_HOME/bin o PATH)."""
+    nombres = ("kafka-topics.sh", "kafka-topics")
+    kh = os.environ.get("KAFKA_HOME", "").strip()
+    if kh:
+        b = Path(kh) / "bin"
+        for n in nombres:
+            p = b / n
+            if p.is_file():
+                return str(p)
+    for n in nombres:
+        w = which(n)
+        if w:
+            return w
+    return "kafka-topics.sh"
 
 
 def _kafka_ejecutable_offsets() -> List[str]:
@@ -212,22 +229,87 @@ def _obtener_offsets_kafka(bootstrap: str, topic: str) -> Tuple[Optional[str], s
     return None, " ".join(diag)
 
 
-def kafka_resumen_topic(bootstrap: str, topic: str) -> Dict[str, Any]:
-    """Describe el topic y, si es posible, offsets finales por partición."""
-    out: Dict[str, Any] = {"bootstrap": bootstrap, "topic": topic, "topic_existe": False}
+def kafka_crear_topic_si_falta(
+    bootstrap: str,
+    topic: str,
+    *,
+    partitions: int = 2,
+    replication: int = 1,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """
+    Crea el topic si no existe (Kafka 2.4+: --if-not-exists; si falla, intenta sin él).
+    """
+    exe = _kafka_topics_executable()
+    common_tail = [
+        "--topic",
+        topic,
+        "--bootstrap-server",
+        bootstrap,
+        "--partitions",
+        str(partitions),
+        "--replication-factor",
+        str(replication),
+    ]
+
+    def _ya_existe(texto: str) -> bool:
+        t = texto.lower()
+        return "already exists" in t or "topicexistsexception" in t
+
+    code, out, err = _run(
+        [exe, "--create", "--if-not-exists", *common_tail],
+        timeout=timeout,
+    )
+    texto = (out or "") + (err or "")
+    if code == 0:
+        return {"ok": True, "mensaje": f"Topic `{topic}` creado o ya existía (--if-not-exists)."}
+    if _ya_existe(texto):
+        return {"ok": True, "mensaje": f"Topic `{topic}` ya existía."}
+
+    code2, out2, err2 = _run([exe, "--create", *common_tail], timeout=timeout)
+    texto2 = (out2 or "") + (err2 or "")
+    if code2 == 0:
+        return {"ok": True, "mensaje": f"Topic `{topic}` creado."}
+    if _ya_existe(texto2):
+        return {"ok": True, "mensaje": f"Topic `{topic}` ya existía."}
+    return {"ok": False, "mensaje": (texto2 or texto)[:800]}
+
+
+def kafka_resumen_topic(
+    bootstrap: str,
+    topic: str,
+    modo: str = "completo",
+    timeout_describe: int = 20,
+    timeout_list: int = 15,
+) -> Dict[str, Any]:
+    """Describe el topic y, en `modo="completo"`, intenta offsets por partición."""
+    exe = _kafka_topics_executable()
+    out: Dict[str, Any] = {
+        "bootstrap": bootstrap,
+        "topic": topic,
+        "topic_existe": False,
+        "kafka_topics_bin": exe,
+    }
     code, stdout, stderr = _run(
-        ["kafka-topics.sh", "--describe", "--topic", topic, "--bootstrap-server", bootstrap],
-        timeout=20,
+        [exe, "--describe", "--topic", topic, "--bootstrap-server", bootstrap],
+        timeout=timeout_describe,
     )
     out["describe_ok"] = code == 0
     out["describe_salida"] = (stdout or stderr or "")[:1200]
+    # Si describe responde OK, el topic existe (no depender solo de --list, que puede hacer timeout).
+    if code == 0:
+        out["topic_existe"] = True
 
     code2, out2, err2 = _run(
-        ["kafka-topics.sh", "--list", "--bootstrap-server", bootstrap],
-        timeout=15,
+        [exe, "--list", "--bootstrap-server", bootstrap],
+        timeout=timeout_list,
     )
     if code2 == 0 and topic in out2:
         out["topic_existe"] = True
+
+    if modo == "rapido":
+        out["nota_offsets"] = "Offsets omitidos en modo rápido (para mantener la UI responsiva)."
+        return out
 
     off_text, diag = _obtener_offsets_kafka(bootstrap, topic)
     if off_text:
@@ -243,14 +325,27 @@ def kafka_resumen_topic(bootstrap: str, topic: str) -> Dict[str, Any]:
     return out
 
 
-def cassandra_resumen_tablas(host: str, keyspace: str) -> Dict[str, Any]:
-    """Conteos aproximados en tablas operativas del gemelo (Cassandra)."""
-    tablas = [
-        ("nodos_estado", "SELECT COUNT(*) FROM nodos_estado"),
-        ("aristas_estado", "SELECT COUNT(*) FROM aristas_estado"),
-        ("tracking_camiones", "SELECT COUNT(*) FROM tracking_camiones"),
-        ("pagerank_nodos", "SELECT COUNT(*) FROM pagerank_nodos"),
-    ]
+def cassandra_resumen_tablas(host: str, keyspace: str, modo: str = "completo") -> Dict[str, Any]:
+    """
+    Resumen de tablas operativas en Cassandra.
+
+    - `modo="completo"`: usa `COUNT(*)` (puede ser lento en tablas grandes).
+    - `modo="rapido"`: solo valida existencia con `LIMIT 1` (mucho más ágil para UI).
+    """
+    if modo == "rapido":
+        tablas = [
+            ("nodos_estado", "SELECT id_nodo FROM nodos_estado LIMIT 1"),
+            ("aristas_estado", "SELECT src FROM aristas_estado LIMIT 1"),
+            ("tracking_camiones", "SELECT id_camion FROM tracking_camiones LIMIT 1"),
+            ("pagerank_nodos", "SELECT id_nodo FROM pagerank_nodos LIMIT 1"),
+        ]
+    else:
+        tablas = [
+            ("nodos_estado", "SELECT COUNT(*) FROM nodos_estado"),
+            ("aristas_estado", "SELECT COUNT(*) FROM aristas_estado"),
+            ("tracking_camiones", "SELECT COUNT(*) FROM tracking_camiones"),
+            ("pagerank_nodos", "SELECT COUNT(*) FROM pagerank_nodos"),
+        ]
     out: Dict[str, Any] = {"host": host, "keyspace": keyspace, "tablas": {}}
     try:
         from cassandra.cluster import Cluster
@@ -264,8 +359,13 @@ def cassandra_resumen_tablas(host: str, keyspace: str) -> Dict[str, Any]:
                 if row is None:
                     n = 0
                 else:
+                    # En modo rápido, la query es `LIMIT 1`:
+                    # convertimos cualquier valor a booleano "hay datos".
                     n = row[0]
-                out["tablas"][nombre] = {"filas": int(n) if n is not None else 0, "ok": True}
+                if modo == "rapido":
+                    out["tablas"][nombre] = {"filas": 1 if row is not None else 0, "ok": True}
+                else:
+                    out["tablas"][nombre] = {"filas": int(n) if n is not None else 0, "ok": True}
             except Exception as e:
                 out["tablas"][nombre] = {"ok": False, "error": str(e)[:120]}
         cluster.shutdown()
@@ -277,8 +377,9 @@ def cassandra_resumen_tablas(host: str, keyspace: str) -> Dict[str, Any]:
 
 
 def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
-    """SHOW TABLES + muestra de conteos vía consultas whitelist (beeline)."""
-    from servicios.consultas_cuadro_mando import ejecutar_hive_consulta
+    """SHOW TABLES + muestra de conteos vía consultas whitelist (PyHive → HiveServer2)."""
+    from config import HIVE_DB
+    from servicios.consultas_cuadro_mando import ejecutar_hive_consulta, ejecutar_hive_sql_internal
 
     out: Dict[str, Any] = {"tablas": None, "conteos": {}}
     ok, err, salida = ejecutar_hive_consulta("tablas_bd")
@@ -287,6 +388,40 @@ def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
         out["tablas"] = salida[:4000]
     else:
         out["error_tablas"] = err or salida
+
+    # ------------------------------------------------------------
+    # Alias Hive para compatibilidad de nombres
+    # historico_nodos  <-> historico_nodos_conteo
+    # nodos_maestro    <-> nodos_maestro_conteo
+    # ------------------------------------------------------------
+    db = (HIVE_DB or "").strip() or "logistica_espana"
+    tablas_en_hive: set[str] = set()
+    if ok and salida:
+        # Formato TSV: cabecera (tab_name) + una tabla por fila.
+        lineas = [l for l in (salida or "").splitlines() if l.strip()]
+        for l in lineas[1:]:
+            # p.ej: "debug_raw" o "tab_name<TAB>debug_raw"
+            partes = l.split("\t")
+            tablas_en_hive.add(partes[-1].strip())
+
+    def _crear_alias(src: str, dst: str) -> None:
+        if src in tablas_en_hive and dst not in tablas_en_hive:
+            sql = (
+                f"CREATE VIEW IF NOT EXISTS {db}.{dst} AS "
+                f"SELECT * FROM {db}.{src}"
+            )
+            ok_v, err_v, _ = ejecutar_hive_sql_internal(sql)
+            if ok_v:
+                tablas_en_hive.add(dst)
+            else:
+                # No rompemos el dashboard por vistas alias: solo guardamos hint.
+                out.setdefault("hint_alias_hive", "")
+                out["hint_alias_hive"] += f"[{dst}] {err_v or 'error'}; "
+
+    _crear_alias("historico_nodos_conteo", "historico_nodos")
+    _crear_alias("historico_nodos", "historico_nodos_conteo")
+    _crear_alias("nodos_maestro_conteo", "nodos_maestro")
+    _crear_alias("nodos_maestro", "nodos_maestro_conteo")
 
     for codigo in ("historico_nodos_conteo", "nodos_maestro_conteo"):
         ok2, err2, sal2 = ejecutar_hive_consulta(codigo)
@@ -305,7 +440,7 @@ def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
         )
     if "impersonate" in blob_err.lower() and "anonymous" in blob_err.lower():
         out["hint_impersonacion"] = (
-            "HiveServer2 intenta impersonar al usuario del cliente; sin usuario, beeline va como "
+            "HiveServer2 intenta impersonar al usuario del cliente; sin usuario, la sesión puede ir como "
             "«anonymous». Define `SIMLOG_HIVE_BEELINE_USER` (p. ej. hadoop) o deja que use `USER`. "
             "En el cluster: reglas `hadoop.proxyuser.hadoop.*` en `core-site.xml` si aplica."
         )
@@ -318,14 +453,34 @@ def obtener_snapshot_pipeline(
     topic: str,
     cassandra_host: str,
     keyspace: str,
+    cassandra_modo: str = "completo",
+    incluir_hive: bool = True,
+    kafka_modo: str = "completo",
+    hdfs_max_items: int = 8,
+    hdfs_timeout: int = 20,
+    kafka_timeout_describe: int = 20,
+    kafka_timeout_list: int = 15,
 ) -> Dict[str, Any]:
     """
     Un solo dict con todo lo necesario para la pestaña de resultados.
     """
     return {
         "ingesta_local": leer_ultima_ingesta(),
-        "hdfs_backup": hdfs_listado_json(hdfs_path),
-        "kafka": kafka_resumen_topic(kafka_bootstrap, topic),
-        "cassandra": cassandra_resumen_tablas(cassandra_host, keyspace),
-        "hive": hive_resumen(),
+        "hdfs_backup": hdfs_listado_json(hdfs_path, max_items=hdfs_max_items, timeout=hdfs_timeout),
+        "kafka": kafka_resumen_topic(
+            kafka_bootstrap,
+            topic,
+            modo=kafka_modo,
+            timeout_describe=kafka_timeout_describe,
+            timeout_list=kafka_timeout_list,
+        ),
+        "cassandra": cassandra_resumen_tablas(cassandra_host, keyspace, modo=cassandra_modo),
+        "hive": hive_resumen() if incluir_hive else {
+            "tablas": None,
+            "conteos": {},
+            "show_tables_ok": False,
+            "error_tablas": "Hive omitido en modo rápido (para evitar consultas lentas a HiveServer2).",
+            "omitido_modo_rapido": True,
+            "hint": "Si necesitas el histórico Hive, pulsa dentro de la pestaña «Resultados del pipeline KDD» el botón de cargar Hive."
+        },
     }
