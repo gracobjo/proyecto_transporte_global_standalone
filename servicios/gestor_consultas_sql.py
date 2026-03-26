@@ -14,7 +14,13 @@ import os
 import re
 from typing import Optional, Tuple
 
-from config import HIVE_DB, HIVE_TABLE_TRANSPORTE_HIST, KEYSPACE
+from config import (
+    HIVE_DB,
+    HIVE_TABLE_HISTORICO_NODOS,
+    HIVE_TABLE_NODOS_MAESTRO,
+    HIVE_TABLE_TRANSPORTE_HIST,
+    KEYSPACE,
+)
 
 # --- Plantillas SQL (mostradas en «Ver consulta SQL» / cuadro de mando) ---
 
@@ -169,10 +175,12 @@ def resolver_intencion_gestor(texto: str) -> Optional[Tuple[str, str, str]]:
 
     # Hive genérico (sin camión): maestro / conteo histórico
     db = HIVE_DB or "logistica_espana"
+    th = HIVE_TABLE_HISTORICO_NODOS
+    tm = HIVE_TABLE_NODOS_MAESTRO
     if any(k in t for k in ("hive", "particion", "batch")) or "nodos maestro" in t or "maestro de nodos" in t:
         if "conteo" in t or "cuantos" in t or "cuantas filas" in t or "count" in t:
-            return ("hive", f"SELECT COUNT(*) AS total FROM {db}.historico_nodos", "historico_conteo")
-        return ("hive", f"SELECT * FROM {db}.nodos_maestro LIMIT 50", "historico_maestro")
+            return ("hive", f"SELECT COUNT(*) AS total FROM {db}.{th}", "historico_conteo")
+        return ("hive", f"SELECT * FROM {db}.{tm} LIMIT 50", "historico_maestro")
 
     return None
 

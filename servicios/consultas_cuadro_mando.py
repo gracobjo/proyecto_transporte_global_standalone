@@ -16,6 +16,8 @@ from config import (
     HIVE_BEELINE_USER,
     HIVE_DB,
     HIVE_JDBC_URL,
+    HIVE_TABLE_HISTORICO_NODOS,
+    HIVE_TABLE_NODOS_MAESTRO,
     HIVE_TABLE_TRANSPORTE_HIST,
     KEYSPACE,
 )
@@ -116,8 +118,10 @@ def ejecutar_cassandra_consulta(codigo: str) -> Tuple[bool, str, List[Dict[str, 
 
 # --- Hive (solo SELECT, whitelist) ---
 
-# Spark escribe `historico_nodos` y `nodos_maestro` en esta BD (ver `procesamiento_grafos.py`).
+# Nombres físicos: `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y `SIMLOG_HIVE_TABLE_NODOS_MAESTRO` (config.py).
 HIVE_DB_NAME = HIVE_DB or "logistica_espana"
+_T_HIST = HIVE_TABLE_HISTORICO_NODOS
+_T_MAESTRO = HIVE_TABLE_NODOS_MAESTRO
 
 HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     "diag_smoke_hive": {
@@ -130,19 +134,19 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     },
     "historico_nodos_muestra": {
         "titulo": "Histórico de nodos (muestra; requiere tabla creada por Spark)",
-        "sql": f"SELECT * FROM {HIVE_DB_NAME}.historico_nodos LIMIT 50",
+        "sql": f"SELECT * FROM {HIVE_DB_NAME}.{_T_HIST} LIMIT 50",
     },
     "historico_nodos_conteo": {
         "titulo": "Conteo de registros en histórico de nodos",
-        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.historico_nodos",
+        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.{_T_HIST}",
     },
     "nodos_maestro": {
         "titulo": "Maestro de nodos (Hive)",
-        "sql": f"SELECT * FROM {HIVE_DB_NAME}.nodos_maestro LIMIT 100",
+        "sql": f"SELECT * FROM {HIVE_DB_NAME}.{_T_MAESTRO} LIMIT 100",
     },
     "nodos_maestro_conteo": {
         "titulo": "Conteo de nodos maestro",
-        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.nodos_maestro",
+        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.{_T_MAESTRO}",
     },
     "gemelo_red_nodos": {
         "titulo": "Gemelo digital — nodos (red estática)",
@@ -179,7 +183,7 @@ SELECT
     h.motivo_retraso,
     h.clima_actual,
     h.fecha_proceso
-FROM {HIVE_DB_NAME}.historico_nodos h
+FROM {HIVE_DB_NAME}.{_T_HIST} h
 WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
 LIMIT 20
         """.strip(),
@@ -189,7 +193,7 @@ LIMIT 20
         "sql": f"""
 WITH base AS (
     SELECT lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm
-    FROM {HIVE_DB_NAME}.historico_nodos h
+    FROM {HIVE_DB_NAME}.{_T_HIST} h
     WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
 ),
 clasif AS (
@@ -210,13 +214,13 @@ ORDER BY muestras DESC
         """.strip(),
     },
     "diag_fecha_proceso_24h": {
-        "titulo": "Diagnóstico — rango y registros (últimas 24h) en historico_nodos",
+        "titulo": f"Diagnóstico — rango y registros (últimas 24h) en {_T_HIST}",
         "sql": f"""
 SELECT
   MIN(h.fecha_proceso) AS min_fecha_proceso,
   MAX(h.fecha_proceso) AS max_fecha_proceso,
   COUNT(*) AS registros_24h
-FROM {HIVE_DB_NAME}.historico_nodos h
+FROM {HIVE_DB_NAME}.{_T_HIST} h
 WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
         """.strip(),
     },
@@ -233,8 +237,8 @@ WITH base AS (
     lower(regexp_replace(COALESCE(h.motivo_retraso,''), 'ó', 'o')) AS motivo_norm,
     lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_norm,
     lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_desc_norm
-  FROM {HIVE_DB_NAME}.historico_nodos h
-  LEFT JOIN {HIVE_DB_NAME}.nodos_maestro m ON h.id_nodo = m.id_nodo
+  FROM {HIVE_DB_NAME}.{_T_HIST} h
+  LEFT JOIN {HIVE_DB_NAME}.{_T_MAESTRO} m ON h.id_nodo = m.id_nodo
   WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
 ),
 clasif AS (
@@ -305,7 +309,7 @@ WITH base AS (
     lower(regexp_replace(COALESCE(h.motivo_retraso,''), 'ó', 'o')) AS motivo_norm,
     lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_norm,
     lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_desc_norm
-  FROM {HIVE_DB_NAME}.historico_nodos h
+  FROM {HIVE_DB_NAME}.{_T_HIST} h
   WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
 ),
 clasif AS (
@@ -444,6 +448,29 @@ def ejecutar_hive_sql_seguro(sql: str) -> Tuple[bool, str, str]:
     u = sql.upper().lstrip()
     if not (u.startswith("SHOW") or u.startswith("SELECT") or u.startswith("WITH")):
         return False, "Solo se permiten SHOW, SELECT o WITH", ""
+    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_ejecutar_hive_pyhive, sql)
+        try:
+            return fut.result(timeout=timeout)
+        except FuturesTimeout:
+            return False, f"Timeout PyHive ({timeout}s)", ""
+
+
+def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
+    """
+    Ejecuta HiveQL interno (para la UI) vía PyHive.
+
+    Limitado a operaciones controladas: hoy se usa para crear vistas alias
+    cuando existen tablas con nombre alternativo (p. ej. *_conteo).
+    """
+    sql = sql.strip().rstrip(";")
+    u = sql.upper().lstrip()
+    # Seguridad mínima: solo permitimos CREATE VIEW IF NOT EXISTS ... AS SELECT * FROM ...
+    if not u.startswith("CREATE VIEW IF NOT EXISTS"):
+        return False, "Solo se permiten CREATE VIEW IF NOT EXISTS para operaciones internas.", ""
+    if " AS SELECT * FROM " not in u:
+        return False, "CREATE VIEW interno restringido a 'AS SELECT * FROM ...'.", ""
     timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
     with ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(_ejecutar_hive_pyhive, sql)

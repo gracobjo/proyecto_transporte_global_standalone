@@ -17,6 +17,7 @@ from config import (
     TOPIC_RAW,
     TOPIC_TRANSPORTE,
 )
+from servicios.consultas_cuadro_mando import titulo_hive
 from servicios.pipeline_verificacion import (
     hive_resumen,
     kafka_crear_topic_si_falta,
@@ -187,13 +188,15 @@ def render_pipeline_resultados_tab() -> None:
                 st.warning(hv.get("error_tablas", "Hive no disponible o error de conexión (PyHive)."))
 
             for codigo, bloque in (hv.get("conteos") or {}).items():
-                st.markdown(f"**{codigo}**")
+                st.markdown(f"**{titulo_hive(codigo)}** (`{codigo}`)")
                 if bloque.get("ok"):
                     st.code(bloque.get("salida", "")[:1200], language="text")
                 else:
                     st.caption(f"⚠️ {bloque.get('error', 'error')}")
             if hv.get("hint"):
                 st.info(hv["hint"])
+            if hv.get("hint_alias_hive"):
+                st.warning(hv["hint_alias_hive"])
 
     st.divider()
     st.markdown(

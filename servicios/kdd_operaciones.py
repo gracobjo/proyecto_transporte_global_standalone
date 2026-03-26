@@ -97,7 +97,7 @@ OPERACIONES_POR_FASE: Tuple[Tuple[int, List[OperacionFase]], ...] = (
             OperacionFase(
                 "int_hive_hist",
                 "Histórico en Hive",
-                "Consultas de series sobre `historico_nodos` y maestros.",
+                "Consultas de series sobre histórico Hive (`SIMLOG_HIVE_TABLE_HISTORICO_NODOS`) y maestro.",
                 "consulta_hive",
             ),
             OperacionFase(

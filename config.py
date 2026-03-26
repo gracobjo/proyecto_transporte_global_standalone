@@ -115,6 +115,13 @@ HIVE_DB = os.environ.get("HIVE_DB", "logistica_espana")
 HIVE_TABLE_TRANSPORTE_HIST = os.environ.get(
     "SIMLOG_HIVE_TABLA_TRANSPORTE", "transporte_ingesta_completa"
 )
+# Histórico de nodos y maestro (Spark escribe sin sufijo; si tu clúster usa otro nombre, ajústalo aquí).
+HIVE_TABLE_HISTORICO_NODOS = os.environ.get(
+    "SIMLOG_HIVE_TABLE_HISTORICO_NODOS", "historico_nodos"
+)
+HIVE_TABLE_NODOS_MAESTRO = os.environ.get(
+    "SIMLOG_HIVE_TABLE_NODOS_MAESTRO", "nodos_maestro"
+)
 HIVE_METASTORE_URIS = os.environ.get("HIVE_METASTORE_URIS", "")  # ej: thrift://hive-metastore:9083
 HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 para JDBC/beeline
 # JDBC para beeline / clientes (cuadro de mando, integraciones)

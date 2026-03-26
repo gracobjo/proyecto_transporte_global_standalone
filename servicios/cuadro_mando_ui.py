@@ -139,7 +139,9 @@ def render_consultas_hive() -> None:
         "`SIMLOG_HIVE_BEELINE_USER` / usuario efectivo (`hadoop`). "
         "Timeout: `HIVE_QUERY_TIMEOUT_SEC=300`. Si va lento, prueba `diag_smoke_hive` (SELECT 1). "
         "El fallback Spark tras timeout suele fallar con metastore Derby; deja `SIMLOG_HIVE_EXEC_FALLBACK_SPARK=0`. "
-        "Las tablas `historico_nodos` y `nodos_maestro` se crean al ejecutar el procesamiento Spark."
+        "Por defecto se consultan `historico_nodos` y `nodos_maestro` (como escribe Spark). "
+        "Si tus tablas tienen otro nombre, define `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y "
+        "`SIMLOG_HIVE_TABLE_NODOS_MAESTRO` en el entorno o en `.env`."
     )
     claves = listar_claves_hive()
     # Para evitar que el usuario no encuentre el diagnóstico (por scroll/visibilidad),

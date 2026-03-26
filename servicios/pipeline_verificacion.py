@@ -378,7 +378,8 @@ def cassandra_resumen_tablas(host: str, keyspace: str, modo: str = "completo") -
 
 def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
     """SHOW TABLES + muestra de conteos vía consultas whitelist (PyHive → HiveServer2)."""
-    from servicios.consultas_cuadro_mando import ejecutar_hive_consulta
+    from config import HIVE_DB
+    from servicios.consultas_cuadro_mando import ejecutar_hive_consulta, ejecutar_hive_sql_internal
 
     out: Dict[str, Any] = {"tablas": None, "conteos": {}}
     ok, err, salida = ejecutar_hive_consulta("tablas_bd")
@@ -387,6 +388,40 @@ def hive_resumen(beeline_sql_show_tables: bool = True) -> Dict[str, Any]:
         out["tablas"] = salida[:4000]
     else:
         out["error_tablas"] = err or salida
+
+    # ------------------------------------------------------------
+    # Alias Hive para compatibilidad de nombres
+    # historico_nodos  <-> historico_nodos_conteo
+    # nodos_maestro    <-> nodos_maestro_conteo
+    # ------------------------------------------------------------
+    db = (HIVE_DB or "").strip() or "logistica_espana"
+    tablas_en_hive: set[str] = set()
+    if ok and salida:
+        # Formato TSV: cabecera (tab_name) + una tabla por fila.
+        lineas = [l for l in (salida or "").splitlines() if l.strip()]
+        for l in lineas[1:]:
+            # p.ej: "debug_raw" o "tab_name<TAB>debug_raw"
+            partes = l.split("\t")
+            tablas_en_hive.add(partes[-1].strip())
+
+    def _crear_alias(src: str, dst: str) -> None:
+        if src in tablas_en_hive and dst not in tablas_en_hive:
+            sql = (
+                f"CREATE VIEW IF NOT EXISTS {db}.{dst} AS "
+                f"SELECT * FROM {db}.{src}"
+            )
+            ok_v, err_v, _ = ejecutar_hive_sql_internal(sql)
+            if ok_v:
+                tablas_en_hive.add(dst)
+            else:
+                # No rompemos el dashboard por vistas alias: solo guardamos hint.
+                out.setdefault("hint_alias_hive", "")
+                out["hint_alias_hive"] += f"[{dst}] {err_v or 'error'}; "
+
+    _crear_alias("historico_nodos_conteo", "historico_nodos")
+    _crear_alias("historico_nodos", "historico_nodos_conteo")
+    _crear_alias("nodos_maestro_conteo", "nodos_maestro")
+    _crear_alias("nodos_maestro", "nodos_maestro_conteo")
 
     for codigo in ("historico_nodos_conteo", "nodos_maestro_conteo"):
         ok2, err2, sal2 = ejecutar_hive_consulta(codigo)
