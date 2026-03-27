@@ -50,6 +50,7 @@ from servicios.cuadro_mando_ui import render_cuadro_mando_tab
 from servicios.ui_gestion_servicios import render_panel_gestion_servicios
 from servicios.ui_servicios_web import render_sidebar_enlaces_ui
 from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
+from servicios.gestion_servicios import ORDEN_SERVICIOS, PORT_AIRFLOW, PORT_API, PORT_CASSANDRA, PORT_FAQ_IA, PORT_HDFS, PORT_HIVE, PORT_KAFKA, PORT_NIFI_HTTP, PORT_NIFI_HTTPS, PORT_SPARK_MASTER
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
 from servicios.ui_asistente_flota import render_asistente_flota_tab
@@ -58,6 +59,10 @@ from servicios.mapa_rutas_hibridas import crear_mapa_planificacion_rutas
 from servicios.kdd_vista_grafo import render_bloque_grafo_fases_spark
 from servicios.kdd_reglas_ui import render_panel_reglas_grafo
 from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
+from servicios.ui_faq_ia import render_faq_ia_panel
+from servicios.ui_pruebas_ingesta import render_pruebas_ingesta_tab
+from servicios.pruebas_ingesta import registrar_prueba_ingesta
+from servicios.pipeline_verificacion import leer_ultima_ingesta
 
 COLORES_ESTADO = {
     "ok": "green",
@@ -68,6 +73,80 @@ COLORES_ESTADO = {
     "Bloqueado": "red",
     "BLOQUEADO": "red",
 }
+
+
+TAB_LABELS = [
+    "Ciclo KDD",
+    "Resultados pipeline",
+    "Pruebas",
+    "Cuadro de mando",
+    "Asistente flota",
+    "Rutas híbridas",
+    "Gemelo digital",
+    "Servicios",
+    "Mapa y métricas",
+    "Verificación técnica",
+]
+
+
+def _render_resumen_dgt_ui() -> None:
+    ing = leer_ultima_ingesta()
+    if not ing.get("disponible"):
+        st.caption("Sin snapshot local todavía para mostrar el estado DGT.")
+        return
+
+    alerta = ing.get("alerta_bloqueos") or {}
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Modo DGT", str(ing.get("dgt_source_mode") or "disabled"))
+    c2.metric("Incidencias DGT", str(ing.get("dgt_incidencias_totales", 0)))
+    c3.metric("Nodos DGT", str(ing.get("dgt_nodos_afectados", 0)))
+    c4.metric("Bloqueos", str(alerta.get("bloqueados", 0)))
+
+    if alerta:
+        ratio = alerta.get("ratio_bloqueados", alerta.get("ratio", 0))
+        msg = (
+            f"Alerta operativa: `{alerta.get('nivel', 'normal')}` · "
+            f"bloqueados `{alerta.get('bloqueados', 0)}` · ratio `{ratio}`"
+        )
+        if str(alerta.get("nivel", "")).lower() in ("alta", "critica"):
+            st.warning(msg)
+        else:
+            st.info(msg)
+
+
+def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    catalogo = [
+        {"tab": "Servicios", "titulo": "Levantar/parar stack y Swagger", "keywords": "servicios iniciar parar swagger api faq ia airflow nifi kafka hive cassandra spark hdfs"},
+        {"tab": "Cuadro de mando", "titulo": "Consultas supervisadas Cassandra/Hive", "keywords": "consulta sql cql hive cassandra dashboard cuadro mando"},
+        {"tab": "Cuadro de mando", "titulo": "Informes a medida + PDF", "keywords": "informe pdf plantilla campos select tabla where order"},
+        {"tab": "Asistente flota", "titulo": "Preguntas en lenguaje natural", "keywords": "asistente flota lenguaje natural camion rutas"},
+        {"tab": "Servicios", "titulo": "FAQ IA para dudas rápidas", "keywords": "faq ia preguntas frecuentes ayuda soporte"},
+        {"tab": "Rutas híbridas", "titulo": "Planificación origen-destino y alternativas", "keywords": "ruta hibrida alternativa origen destino bfs"},
+        {"tab": "Mapa y métricas", "titulo": "Mapa operativo y PageRank", "keywords": "mapa metrica pagerank nodos aristas tracking"},
+        {"tab": "Resultados pipeline", "titulo": "Resultado de fases y persistencia", "keywords": "pipeline resultado fases ingesta spark"},
+        {"tab": "Resultados pipeline", "titulo": "Estado DGT y alertas de bloqueos", "keywords": "dgt datex2 live cache disabled alertas bloqueos provenance"},
+        {"tab": "Pruebas", "titulo": "Registro de pruebas y trazabilidad", "keywords": "pruebas test evidencias nifi airflow script ingesta historico"},
+        {"tab": "Verificación técnica", "titulo": "Checks rápidos HDFS/Kafka/Cassandra", "keywords": "verificacion tecnica hdfs kafka cassandra checks"},
+        {"tab": "Ciclo KDD", "titulo": "Fases KDD y ejecución por fase", "keywords": "kdd fases seleccion preprocesamiento transformacion mineria interpretacion"},
+        {"tab": "Gemelo digital", "titulo": "Visualización del gemelo y red", "keywords": "gemelo digital red nodos aristas"},
+    ]
+    q_tokens = [t for t in q.replace("—", " ").replace("-", " ").split() if t]
+    res: List[Dict[str, str]] = []
+    for it in catalogo:
+        text = f"{it['titulo']} {it['keywords']} {it['tab']}".lower()
+        score = 0
+        for t in q_tokens:
+            if t in text:
+                score += 1
+        if q in text:
+            score += 2
+        if score > 0:
+            res.append({**it, "score": str(score)})
+    res.sort(key=lambda x: int(x["score"]), reverse=True)
+    return res[:6]
 
 
 def crear_mapa(
@@ -277,20 +356,42 @@ def main() -> None:
     if "timeline" not in st.session_state:
         st.session_state.timeline = []
 
-    h1, h2 = st.columns([1, 8])
+    h1, h2, h3 = st.columns([1, 4, 3])
     with h1:
         if LOGO_PATH.exists():
-            st.image(str(LOGO_PATH), width=96)
+            st.image(str(LOGO_PATH), width=88)
     with h2:
         st.title(PROJECT_DISPLAY_NAME)
-    st.caption(PROJECT_TAGLINE)
-    st.markdown(
-        f"{PROJECT_DESCRIPTION} Ciclo **KDD** con stack Apache: **ingesta**, "
-        "**Spark + GraphFrames**, **interpretación** (Cassandra + este dashboard)."
-    )
+        st.caption(PROJECT_TAGLINE)
+    with h3:
+        with st.container(border=True):
+            st.markdown("**Ir rápido a una sección**")
+            q = st.text_input(
+                "Buscar sección o función",
+                value="",
+                placeholder="Ej.: servicios, hive, informe, rutas",
+                key="ui_sem_search",
+            ).strip()
+            st.caption("Atajos útiles: `servicios`, `hive`, `informes`, `rutas`, `swagger`.")
+            hits = _buscar_semantico_ui(q)
+            if hits:
+                for i, h in enumerate(hits[:3]):
+                    if st.button(f"{h['tab']} · {h['titulo']}", key=f"hit_{i}_{h['tab']}", width="stretch"):
+                        st.session_state["quick_open_tab"] = h["tab"]
+                        st.rerun()
+            elif q:
+                st.caption("Sin coincidencias. Prueba con términos más cortos.")
+
+    st.caption(PROJECT_DESCRIPTION)
+    st.caption("Flujo principal: ingesta, Spark/GraphFrames y visualización operativa en el dashboard.")
 
     # --- Sidebar: servicios + paso temporal + acciones ---
     with st.sidebar:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width=56)
+        st.markdown(f"**{PROJECT_DISPLAY_NAME}**")
+        st.caption(PROJECT_TAGLINE)
+        st.divider()
         st.subheader("Estado de servicios")
         estado_stack = estado_servicios()
         for nombre, etiqueta in estado_stack.items():
@@ -301,9 +402,12 @@ def main() -> None:
         )
 
         st.caption(
-            "Resumen **stack completo** (7 componentes). "
-            f"Puertos típicos: `9870` HDFS · `9092` Kafka · `9042` Cassandra (`{CASSANDRA_HOST}`) · "
-            "`7077` Spark · `10000` Hive · `8088` Airflow · `8443`/`8080` NiFi."
+            f"Resumen **stack completo** ({len(ORDEN_SERVICIOS)} componentes). "
+            f"Puertos típicos: `{PORT_HDFS}` HDFS · `{PORT_KAFKA}` Kafka · "
+            f"`{PORT_CASSANDRA}` Cassandra (`{CASSANDRA_HOST}`) · `{PORT_SPARK_MASTER}` Spark · "
+            f"`{PORT_HIVE}` Hive · `{PORT_AIRFLOW}` Airflow · `{PORT_API}` Swagger API · "
+            f"`{PORT_FAQ_IA}` FAQ IA API · "
+            f"`{PORT_NIFI_HTTPS}`/`{PORT_NIFI_HTTP}` NiFi."
         )
         st.caption("Controles por servicio (iniciar/parar) en la pestaña **Servicios**.")
 
@@ -329,8 +433,8 @@ def main() -> None:
                     st.session_state["last_arranque_msgs"] = msgs
                     st.rerun()
 
-                st.caption("Stack completo: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
-                if st.button("Ejecutar arranque completo (7 servicios)", key="btn_arrancar_todos"):
+                st.caption("Stack completo: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → API → FAQ IA → NiFi.")
+                if st.button(f"Ejecutar arranque completo ({len(ORDEN_SERVICIOS)} servicios)", key="btn_arrancar_todos"):
                     with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
                         msgs = arrancar_todos_servicios()
                     st.session_state["last_arranque_msgs"] = msgs
@@ -349,8 +453,8 @@ def main() -> None:
                 st.session_state["last_arranque_msgs"] = msgs
                 st.rerun()
 
-            with st.expander("Arrancar stack completo (7 servicios)", expanded=False):
-                st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → NiFi.")
+            with st.expander(f"Arrancar stack completo ({len(ORDEN_SERVICIOS)} servicios)", expanded=False):
+                st.caption("Orden: HDFS → Cassandra → Kafka → Spark → Hive → Airflow → API → FAQ IA → NiFi.")
                 if st.button("Ejecutar arranque completo", key="btn_arrancar_todos"):
                     with st.spinner("Arrancando todos los servicios (puede tardar varios minutos)…"):
                         msgs = arrancar_todos_servicios()
@@ -409,10 +513,25 @@ def main() -> None:
             if code == 0:
                 if st.session_state.ingesta_paso_automatico:
                     st.session_state.timeline.append(f"{ts} — Ingesta OK (paso automático)")
+                    detalle_prueba = "Ingesta ejecutada desde Streamlit con paso automático."
                 else:
                     st.session_state.timeline.append(f"{ts} — Ingesta OK (paso {st.session_state.paso_15min})")
+                    detalle_prueba = f"Ingesta ejecutada desde Streamlit en el paso {st.session_state.paso_15min}."
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="OK",
+                    detalle=detalle_prueba,
+                )
                 st.success("Ingesta terminada.")
             else:
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="FAIL",
+                    detalle=f"Ingesta lanzada desde Streamlit terminó con código {code}.",
+                    observaciones=(err[-1000:] or out[-1000:]),
+                )
                 st.error(f"Código {code}")
                 st.code(err[-2000:] or out[-2000:])
             st.session_state.last_ingesta_out = out
@@ -443,8 +562,21 @@ def main() -> None:
             if c1 == 0 and c2 == 0:
                 st.session_state.paso_15min = p + 1
                 st.session_state.timeline.append(f"{ts} — Pipeline completo (ingesta paso {p})")
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="OK",
+                    detalle=f"Pipeline completo desde Streamlit con ingesta en paso {p} y procesamiento Spark posterior.",
+                )
                 st.success("Pipeline OK.")
             else:
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="FAIL",
+                    detalle=f"Pipeline completo desde Streamlit falló (ingesta {c1} | procesamiento {c2}).",
+                    observaciones=((e1 or o1) + "\n---\n" + (e2 or o2))[-1500:],
+                )
                 st.error(f"Ingesta {c1} | Procesamiento {c2}")
                 st.code((e1 or o1) + "\n---\n" + (e2 or o2))
             st.rerun()
@@ -455,36 +587,30 @@ def main() -> None:
             for ev in reversed(st.session_state.timeline[-8:]):
                 st.caption(ev)
 
-    (
-        tab_kdd,
-        tab_resultados,
-        tab_cuadro,
-        tab_asistente,
-        tab_rutas,
-        tab_gemelo,
-        tab_servicios,
-        tab_mapa,
-        tab_verif,
-    ) = st.tabs(
-        [
-            "Ciclo KDD",
-            "Resultados pipeline",
-            "Cuadro de mando",
-            "Asistente flota",
-            "Rutas híbridas",
-            "Gemelo digital",
-            "Servicios",
-            "Mapa y métricas",
-            "Verificación técnica",
-        ]
+    pref_tab = st.session_state.get("quick_open_tab")
+    if "active_tab" not in st.session_state:
+        st.session_state["active_tab"] = TAB_LABELS[0]
+    if pref_tab in TAB_LABELS:
+        st.session_state["active_tab"] = pref_tab
+        st.session_state["quick_open_tab"] = None
+
+    active_tab = st.radio(
+        "Navegación",
+        options=TAB_LABELS,
+        horizontal=True,
+        key="active_tab",
+        label_visibility="collapsed",
     )
 
-    with tab_kdd:
+    if active_tab == "Ciclo KDD":
         _render_kdd_title_and_selector()
         st.info(
             "Las fases **1–2** se realizan en `ingesta/ingesta_kdd.py`. "
             "Las fases **3–5** se concentran en `procesamiento/procesamiento_grafos.py` (Spark)."
         )
+        with st.container(border=True):
+            st.markdown("**Estado actual de la fuente DGT**")
+            _render_resumen_dgt_ui()
         idx = _render_kdd_prev_next()
         fase_actual = FASES_KDD[idx]
 
@@ -555,25 +681,30 @@ def main() -> None:
                     mostrar_vista_previa=False,
                 )
 
-    with tab_resultados:
+    if active_tab == "Resultados pipeline":
         render_pipeline_resultados_tab()
 
-    with tab_cuadro:
+    if active_tab == "Pruebas":
+        render_pruebas_ingesta_tab()
+
+    if active_tab == "Cuadro de mando":
         render_cuadro_mando_tab()
 
-    with tab_asistente:
+    if active_tab == "Asistente flota":
         render_asistente_flota_tab()
 
-    with tab_rutas:
+    if active_tab == "Rutas híbridas":
         render_rutas_hibridas_tab()
 
-    with tab_gemelo:
+    if active_tab == "Gemelo digital":
         render_gemelo_digital_tab()
 
-    with tab_servicios:
+    if active_tab == "Servicios":
         render_panel_gestion_servicios()
+        st.divider()
+        render_faq_ia_panel()
 
-    with tab_mapa:
+    if active_tab == "Mapa y métricas":
         modo_mapa = st.radio(
             "Vista del mapa",
             options=["operativo", "planificacion"],
@@ -647,6 +778,9 @@ def main() -> None:
                     st.caption("Sin datos de PageRank. Ejecuta procesamiento Spark.")
 
                 st.divider()
+                st.markdown("**Estado DGT y alertas**")
+                _render_resumen_dgt_ui()
+                st.divider()
                 st.caption("Leyenda aristas: verde OK · naranja congestión · rojo bloqueo")
             else:
                 st.subheader("Resumen de la última ruta")
@@ -662,7 +796,7 @@ def main() -> None:
                 else:
                     st.caption("Sin datos hasta calcular una ruta en **Rutas híbridas**.")
 
-    with tab_verif:
+    if active_tab == "Verificación técnica":
         st.subheader("Comprobaciones rápidas")
         c1, c2 = st.columns(2)
         with c1:

@@ -21,6 +21,7 @@ La app es un dashboard **Streamlit** para supervisión y análisis del ciclo **K
    ```
 
 2. Si servicios no están activos, usa el menú lateral (sidebar) o la pestaña **Servicios**.
+3. Si tienes dudas de uso, en la pestaña **Servicios** encontrarás el bloque **FAQ IA** para preguntas frecuentes del proyecto.
 
 ## 3. Sidebar global (qué controles hay y qué hace)
 
@@ -28,11 +29,11 @@ En la **barra lateral izquierda** verás:
 
 ### 3.1 Estado de servicios
 
-- Botón **“🔄 Actualizar estado”**: revisa si HDFS/Kafka/Cassandra/Spark/Hive/Airflow/NiFi responden por puerto.
+- Botón **“🔄 Actualizar estado”**: revisa si HDFS/Kafka/Cassandra/Spark/Hive/Airflow/API(Swagger)/NiFi responden por puerto.
 - Si todo está OK: puedes usar **“Reiniciar arranque”** (opcional).
 - Si falta algo: puedes usar:
   - **“▶ Arrancar base (HDFS + Cassandra + Kafka)”**
-  - **“Ejecutar arranque completo (7 servicios)”**
+  - **“Ejecutar arranque completo (8 servicios)”**
 
 **Resultado esperado**: servicios levantados y listos para ingesta/procesamiento.
 
@@ -49,7 +50,7 @@ Controles:
 
 **Resultado esperado**:
 
-- Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado), se publica en Kafka y se guarda JSON en HDFS.
+- Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado). Si la DGT DATEX2 responde, el snapshot se enriquece con incidencias reales; si falla, puede usar caché o continuar solo con simulación. Después se publica en Kafka y se guarda JSON en HDFS.
 - Tras Spark: se estructura y persiste el “estado operativo” en Cassandra, y (si está configurado) se actualiza histórico Hive.
 
 ### 3.3 Enlace a “Gemelo digital — incidencias”
@@ -106,6 +107,7 @@ Controles:
 Secciones:
 
 - **Ingesta (clima + GPS simulado)**: vista del último snapshot local (compatible con el flujo de Spark).
+- **Señal DGT**: el snapshot indica si la fuente operó en modo `live`, `cache` o `disabled` y cuántos nodos quedaron afectados.
 - **Kafka + HDFS**: confirma accesibilidad y muestra ficheros `.json` en HDFS.
 - **Spark → Cassandra**: lista de tablas y número de filas.
 - **Hive (histórico opcional)**: muestra `SHOW TABLES` y conteos (si HiveServer2 está OK).
@@ -131,13 +133,20 @@ Qué incluye:
    - Pulsas **“Ejecutar consulta Cassandra”**.
    - Se muestra un `st.dataframe`.
    - (Siempre puedes ver la CQL exacta en el expander “CQL ejecutado”.)
+   - También dispones de un bloque **“CQL (copiar / pegar / ejecutar)”** para consultas `SELECT` directas.
 5. **Consultas supervisadas — Hive (histórico)**:
    - Igual que Cassandra, pero usando HiveServer2 con PyHive.
    - Se limita para evitar bloqueos del UI.
-6. **Slides — Clima y anticipación de retrasos**:
+   - También dispones de **“SQL (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.
+6. **Informes a medida (Cassandra/Hive)**:
+   - Selección por motor, tabla y campos (o modo `SELECT *`).
+   - Configuración de `WHERE`, `ORDER BY`, `LIMIT`.
+   - Guardado/carga de plantillas personalizadas.
+   - Exportación a PDF para visualización o impresión.
+7. **Slides — Clima y anticipación de retrasos**:
    - Genera una estimación orientativa por hub combinando variables meteorológicas y estados.
 
-**Resultado esperado**: tablas y métricas listadas sin necesidad de que el usuario escriba SQL.
+**Resultado esperado**: tablas y métricas listas para usuario final, con opción de consulta libre segura y generación de informes PDF.
 
 ---
 
@@ -220,8 +229,60 @@ Cómo usarla:
    - **Iniciar**
    - **Comprobar**
    - **Parar** (requiere confirmar en checkbox, porque puede cortar trabajos).
+3. En la parte inferior encontrarás **FAQ IA** para resolver dudas rápidas sobre operación, informes, NiFi, Swagger o uso general del dashboard.
 
-**Resultado esperado**: estados por servicio (OK/❌) y enlaces a consolas web si existen.
+**Resultado esperado**: estados por servicio (OK/❌), enlaces a consolas web si existen y un asistente de FAQ local para incidencias frecuentes.
+
+Si NiFi está activo, el linaje de la ingesta enriquecida se puede revisar en la UI de NiFi:
+
+- abrir `Data Provenance`
+- filtrar por `Merge_DGT_Into_Payload`
+- inspeccionar atributos `simlog.provenance.stage`, `simlog.provenance.sources`, `simlog.provenance.dgt_mode` y `simlog.provenance.dgt_incidents`
+
+## 5. Ejecución de la ingesta DGT
+
+### 5.1 Script standalone
+
+```bash
+venv_transporte/bin/python scripts/ejecutar_ingesta_dgt.py
+```
+
+Opciones útiles:
+
+- `--cache-only`: reutiliza la caché XML local de la DGT.
+- `--no-dgt`: desactiva la fuente DGT y usa solo simulación.
+- `--skip-processing`: ejecuta solo la ingesta y no lanza Spark.
+
+### 5.2 Qué cambia al usar DGT
+
+- El payload añade `incidencias_dgt` y `resumen_dgt`.
+- Los nodos afectados pasan a `source=dgt`.
+- La severidad real ajusta `peso_pagerank`, por lo que el ranking de criticidad puede cambiar.
+- Si hay muchos nodos bloqueados, aparece una alerta operativa en el snapshot.
+
+### FAQ IA dentro de “Servicios”
+
+Qué hace:
+
+- Consulta una base de conocimiento local del proyecto.
+- Devuelve una respuesta, una puntuación de confianza, la coincidencia principal y sugerencias relacionadas.
+- Guarda un historial corto de la sesión.
+
+Cómo usarlo:
+
+1. Asegúrate de que el servicio **FAQ IA API** está activo.
+2. Escribe una pregunta como:
+   - “¿Cómo genero un informe PDF?”
+   - “¿Por qué NiFi no aparece activo?”
+   - “¿Dónde veo Swagger?”
+3. Pulsa **“Preguntar al FAQ IA”**.
+
+Resultados esperados:
+
+- Respuesta operativa inmediata.
+- Métrica de confianza.
+- Sugerencias de preguntas cercanas.
+- Fuentes del repositorio utilizadas como referencia.
 
 ---
 

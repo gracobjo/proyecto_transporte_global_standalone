@@ -135,6 +135,20 @@ uvicorn servicios.api_simlog:app --host 0.0.0.0 --port 8090
 
 Guía: [`servicios/README_SERVICIOS_API.md`](servicios/README_SERVICIOS_API.md). Código: `servicios/api_simlog.py`; lógica compartida con el dashboard: `servicios/estado_y_datos.py`.
 
+### 6a.b FAQ IA API (preguntas frecuentes operativas)
+
+Servicio FastAPI ligero para resolver preguntas frecuentes del proyecto desde la pestaña **Servicios** o desde Swagger:
+
+```bash
+cd ~/proyecto_transporte_global && source venv_transporte/bin/activate
+uvicorn servicios.api_faq_ia:app --host 0.0.0.0 --port 8091
+```
+
+- **Swagger UI:** http://localhost:8091/docs
+- **OpenAPI JSON:** http://localhost:8091/openapi.json
+
+La base de conocimiento local está en `servicios/faq_knowledge_base.json` y el panel de consumo en `servicios/ui_faq_ia.py`.
+
 ### 6b. Apache NiFi (ingesta alternativa al script)
 
 Incluye el **grupo de procesadores** documentado (GPS sintético, `InvokeHTTP` OpenWeather, Kafka, HDFS, disparo Spark/YARN, Hive/Cassandra alineados con el PDF):
@@ -176,6 +190,9 @@ Si antes usabas el id `dag_maestro_transporte`, desactívalo en la UI y usa el D
 | `servicios/gestion_servicios.py` | Lógica iniciar/comprobar/parar stack |
 | `servicios/ui_gestion_servicios.py` | Panel Streamlit de servicios |
 | `servicios/ui_servicios_web.py` | URLs y credenciales de consolas web |
+| `servicios/ui_faq_ia.py` | Panel Streamlit de FAQ IA |
+| `servicios/api_faq_ia.py` | Microservicio FAQ IA + Swagger (`/docs`) |
+| `servicios/faq_knowledge_base.json` | Base local de preguntas frecuentes |
 | `servicios/red_hibrida_rutas.py` | BFS, retrasos, alternativas (red híbrida) |
 | `servicios/ui_rutas_hibridas.py` | Formulario rutas en Streamlit |
 | `simlog_ui.env.example` | Variables de ejemplo para UIs |

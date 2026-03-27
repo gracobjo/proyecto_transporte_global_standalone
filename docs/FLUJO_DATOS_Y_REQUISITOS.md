@@ -8,7 +8,7 @@ Documento que resume: (1) ejemplos concretos de datos (GPS, clima, rutas), (2) q
 
 ### 1.1 Datos que genera la ingesta (ejemplo de un “snapshot” de 15 min)
 
-La **ingesta** produce un único JSON que contiene tres bloques de datos: **clima**, **estados de nodos/aristas** (para rutas) y **camiones con GPS**.
+La **ingesta** produce un único JSON que contiene cuatro bloques de datos: **clima**, **incidencias DGT DATEX2**, **estados de nodos/aristas** (para rutas) y **camiones con GPS**.
 
 **Ejemplo – Clima (datos de tiempo por hub):**
 
@@ -49,9 +49,10 @@ La **ingesta** produce un único JSON que contiene tres bloques de datos: **clim
 
 - **GPS**: `id_camion`, `lat`, `lon`, `ruta`, `ruta_origen`, `ruta_destino`, `estado_ruta`.
 - **Tiempo**: `clima` (temperatura, humedad, descripción, visibilidad por ciudad).
-- **Rutas**: `estados_nodos` y `estados_aristas` (estado y motivo por nodo y por enlace).
+- **Incidencias reales**: `incidencias_dgt` y `resumen_dgt` (fuente `live|cache|disabled`, severidad, carretera, municipio, provincia, coordenadas y nodos afectados).
+- **Rutas**: `estados_nodos` y `estados_aristas` (estado y motivo por nodo y por enlace), ahora con `source`, `severity`, `peso_pagerank` e `id_incidencia` cuando la DGT pisa a la simulación.
 
-Ese JSON se envía a **Kafka** (temas `transporte_raw` y `transporte_filtered`) y se guarda como copia **raw** en **HDFS** en la ruta **`HDFS_BACKUP_PATH`** (`/user/hadoop/transporte_backup`). Esa misma ruta es la que usa el procesamiento Spark para leer los JSON, de modo que no hace falta duplicar rutas: la ingesta escribe donde Spark lee.
+Ese JSON se envía a **Kafka** (temas `transporte_dgt_raw`, `transporte_raw` y `transporte_filtered`) y se guarda como copia **raw** en **HDFS** en la ruta **`HDFS_BACKUP_PATH`** (`/user/hadoop/transporte_backup`). Esa misma ruta es la que usa el procesamiento Spark para leer los JSON, de modo que no hace falta duplicar rutas: la ingesta escribe donde Spark lee.
 
 ---
 
@@ -67,8 +68,8 @@ Ese JSON se envía a **Kafka** (temas `transporte_raw` y `transporte_filtered`) 
 | Dónde | Qué se guarda |
 |-------|----------------|
 | **HDFS** | La ingesta ya ha guardado aquí el JSON “en bruto”. Spark **no** vuelve a escribir en HDFS en este flujo; solo **lee** desde aquí. El warehouse de Hive (si se usa) suele estar en HDFS, así que lo que Spark escribe en Hive queda almacenado en HDFS. |
-| **Cassandra** (keyspace `logistica_espana`) | Spark **estructura** los datos y escribe en tablas: **nodos_estado**, **aristas_estado**, **tracking_camiones**, **pagerank_nodos**. Son los mismos datos que en el JSON (clima integrado en nodos, estados, camiones, etc.), pero normalizados y con tipos (float, timestamp, listas, etc.). |
-| **Hive** (opcional) | Spark puede escribir tablas de **histórico** (p. ej. `logistica_espana.historico_nodos` o tablas en `logistica_db` si se usa `persistencia_hive.py`). Esas tablas viven en el warehouse de Hive (típicamente en HDFS). |
+| **Cassandra** (keyspace `logistica_espana`) | Spark **estructura** los datos y escribe en tablas: **nodos_estado**, **aristas_estado**, **tracking_camiones**, **pagerank_nodos**. Son los mismos datos que en el JSON (clima integrado en nodos, estados, camiones, incidencias DGT priorizadas, etc.), pero normalizados y con tipos (float, timestamp, listas, etc.). |
+| **Hive** (opcional) | Spark escribe tablas de **histórico** (p. ej. `logistica_espana.historico_nodos`, `transporte_ingesta_completa`, `eventos_historico`, `clima_historico`) usando rutas externas compatibles con Hive 4. |
 
 Resumen: **HDFS** = JSON de ingesta (y warehouse Hive). **Cassandra** = mismos datos ya procesados y estructurados en tablas para consulta en tiempo (casi) real.
 
@@ -171,11 +172,13 @@ En el estado actual del proyecto:
 | **Procesamiento Big Data (Spark)** | Sí: GraphFrames, autosanación, PageRank, persistencia. |
 | **Almacenamiento NoSQL (Cassandra)** | Sí: keyspace operativo (nodos, aristas, camiones, PageRank). |
 | **Almacenamiento analítico (Hive)** | Sí: histórico y consultas supervisadas. |
-| **Cola de mensajes (Kafka)** | Sí: `transporte_raw` y `transporte_filtered`. |
+| **Cola de mensajes (Kafka)** | Sí: `transporte_dgt_raw`, `transporte_raw` y `transporte_filtered`. |
+| **Integración DATEX2 DGT** | Sí: feed real con fallback a caché y merge con prioridad sobre simulación. |
 | **Calidad de datos** | Sí: limpieza previa a persistencia en el pipeline Spark. |
 | **Visualización** | Sí: Streamlit + mapa. |
 | **Orquestación** | Sí: Airflow (DAGs) y/o trigger en NiFi; scripts `simlog_stack.py` para el stack. |
 | **NiFi** | Sí: flujo documentado y alineado al proyecto (`nifi/`). |
+| **FAQ IA operativa** | Sí: microservicio local + panel Streamlit para preguntas frecuentes sobre uso, stack e informes. |
 
 Conclusión: la arquitectura actual cubre el ciclo completo KDD con stack Apache en modo standalone.  
 Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMENTS_CHECKLIST.md`.
@@ -237,7 +240,27 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RF-AF-05 | Mostrar resultados en un `st.dataframe` y permitir transparencia del SQL | `st.toggle("Ver consulta SQL")` + `st.code(..., language='sql')` |
 | RF-AF-06 | Mantener consistencia con el esquema real (ej. `id_camion/lat/lon`, sin `nodo_actual`) | SQL/CQL ajustados a `cassandra/esquema_logistica.cql` |
 
-## 12. Requisitos funcionales — Graph AI (FastAPI + NetworkX) para detección de anomalías
+## 12. Requisitos funcionales — FAQ IA (microservicio local + panel Streamlit)
+
+| ID | Requisito | Implementación |
+|----|-----------|----------------|
+| RF-FAQ-01 | Exponer un microservicio FAQ accesible por HTTP para resolver preguntas frecuentes del proyecto | `servicios/api_faq_ia.py` con FastAPI en `SIMLOG_PORT_FAQ_IA` (default `8091`) |
+| RF-FAQ-02 | Resolver preguntas en lenguaje natural sin depender de un LLM externo ni de servicios cloud | Motor local `semantic-fallback-v1` basado en similitud léxica + `SequenceMatcher` |
+| RF-FAQ-03 | Mantener una base editable de preguntas/respuestas y fuentes | `servicios/faq_knowledge_base.json` |
+| RF-FAQ-04 | Permitir consulta interactiva desde la UI con historial de sesión y sugerencias | `servicios/ui_faq_ia.py` en la pestaña **Servicios** |
+| RF-FAQ-05 | Mostrar transparencia mínima: coincidencia principal, confianza, sugerencias y fuentes | Respuesta `FAQAskResponse` (`matched_question`, `confidence`, `suggestions`, `sources`) |
+| RF-FAQ-06 | Publicar documentación Swagger del FAQ para pruebas manuales e integración | `/docs`, `/redoc` y `/openapi.json` del servicio FAQ IA |
+
+## 13. Requisitos no funcionales — FAQ IA
+
+| ID | Requisito | Notas |
+|----|-----------|-------|
+| RNF-FAQ-01 | Operación offline/local | La recuperación semántica usa JSON local y librerías estándar de Python |
+| RNF-FAQ-02 | Latencia baja para soporte de uso | Búsqueda en memoria sobre una KB pequeña; sin llamadas a terceros |
+| RNF-FAQ-03 | Mantenibilidad documental | Nuevas preguntas se añaden editando `servicios/faq_knowledge_base.json` |
+| RNF-FAQ-04 | Trazabilidad | Cada respuesta puede citar ficheros fuente del proyecto |
+
+## 14. Requisitos funcionales — Graph AI (FastAPI + NetworkX) para detección de anomalías
 
 | ID | Requisito | Implementación |
 |----|-----------|----------------|
@@ -249,7 +272,7 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RF-GAI-06 | Persistir anomalías en Cassandra en la tabla `graph_anomalies` | DAG `orquestacion/dag_graph_ai_anomalias.py` |
 | RF-GAI-07 | Orquestación periódica cada 15 minutos | Airflow DAG `simlog_graph_ai_anomalias` (schedule `timedelta(minutes=15)`) |
 
-## 13. Requisitos no funcionales — Graph AI
+## 15. Requisitos no funcionales — Graph AI
 
 | ID | Requisito | Notas |
 |----|-----------|-------|
@@ -258,4 +281,4 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RNF-GAI-03 | Tolerancia a fallos | El DAG captura fallos de red/consultas y permite reintentos de Airflow |
 | RNF-GAI-04 | Consistencia de esquema | `graph_anomalies` se alinea a `cassandra/esquema_logistica.cql` |
 
-Diseño / diagramas: nuevos bloques añadidos en `docs/DIAGRAMAS_MERMAID.md` (diagramas Asistente de Flota + Graph AI + DAG Airflow).
+Diseño / diagramas: nuevos bloques añadidos en `docs/DIAGRAMAS_MERMAID.md` (FAQ IA, Asistente de Flota, Graph AI y DAG Airflow).

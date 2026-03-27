@@ -4,10 +4,13 @@ Compartido entre `app_visualizacion.py` y la API REST.
 """
 from __future__ import annotations
 
+import os
 import subprocess
+from pathlib import Path
+from shutil import which
 from typing import Any, Dict, List
 
-from config import CASSANDRA_HOST, HDFS_BACKUP_PATH, KEYSPACE, TOPIC_TRANSPORTE
+from config import CASSANDRA_HOST, HDFS_BACKUP_PATH, KAFKA_BOOTSTRAP, KEYSPACE, TOPIC_TRANSPORTE
 
 
 def estado_servicios() -> Dict[str, str]:
@@ -43,20 +46,46 @@ def verificar_hdfs_ruta(ruta: str) -> str:
 
 
 def verificar_kafka_topic(topic: str) -> str:
+    def _kafka_topics_exe() -> str:
+        nombres = ("kafka-topics.sh", "kafka-topics")
+        kh = (Path(__file__).resolve().parents[1] / "kafka" / "bin")
+        for n in nombres:
+            p = kh / n
+            if p.is_file():
+                return str(p)
+        env_kh = Path((os.environ.get("KAFKA_HOME", "")).strip() or ".")
+        for n in nombres:
+            p = env_kh / "bin" / n
+            if p.is_file():
+                return str(p)
+        for n in nombres:
+            w = which(n)
+            if w:
+                return w
+        return "kafka-topics.sh"
+
     try:
+        exe = _kafka_topics_exe()
+        bootstrap = (KAFKA_BOOTSTRAP or "localhost:9092").strip()
         r = subprocess.run(
-            ["kafka-topics.sh", "--list", "--bootstrap-server", "localhost:9092"],
+            [exe, "--list", "--bootstrap-server", bootstrap],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=45,
         )
         if r.returncode != 0:
-            return f"⚠️ Kafka: {r.stderr[:80] or 'error listando topics'}"
+            err = (r.stderr or r.stdout or "error listando topics").strip()
+            return f"⚠️ Kafka ({bootstrap}): {err[:140]}"
         if topic in r.stdout:
             return f"✅ Topic `{topic}` configurado en el proyecto"
-        return f"⚠️ Topic `{topic}` no listado (revisa creación del topic)"
+        return f"⚠️ Topic `{topic}` no listado en `{bootstrap}` (revisa creación del topic)"
+    except subprocess.TimeoutExpired:
+        return (
+            "⚠️ Kafka: timeout al listar topics. "
+            "El broker puede estar activo pero `kafka-topics` no respondió a tiempo."
+        )
     except FileNotFoundError:
-        return "⚠️ `kafka-topics.sh` no encontrado"
+        return "⚠️ `kafka-topics.sh` no encontrado (configura `KAFKA_HOME` o añade Kafka al PATH)"
     except Exception as e:
         return f"⚠️ Kafka: {str(e)[:80]}"
 

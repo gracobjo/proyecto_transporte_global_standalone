@@ -11,15 +11,12 @@ import streamlit as st
 from config import (
     CASSANDRA_HOST,
     HDFS_BACKUP_PATH,
-    HIVE_DB,
     KAFKA_BOOTSTRAP,
     KEYSPACE,
     TOPIC_RAW,
     TOPIC_TRANSPORTE,
 )
-from servicios.consultas_cuadro_mando import titulo_hive
 from servicios.pipeline_verificacion import (
-    hive_resumen,
     kafka_crear_topic_si_falta,
     obtener_snapshot_pipeline,
 )
@@ -90,12 +87,28 @@ def render_pipeline_resultados_tab() -> None:
                 c2.metric("Paso 15 min", str(ing["paso_15min"]))
             c3.metric("Hubs con clima", str(ing.get("hubs_clima", "—")))
             c4.metric("Camiones simulados", str(ing.get("camiones", "—")))
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Modo DGT", str(ing.get("dgt_source_mode") or "disabled"))
+            d2.metric("Incidencias DGT", str(ing.get("dgt_incidencias_totales", 0)))
+            d3.metric("Nodos afectados DGT", str(ing.get("dgt_nodos_afectados", 0)))
             if "meta" in ing:
                 m = ing["meta"]
                 st.write(
                     f"**Kafka publicado:** {'✅' if m.get('ok_kafka') else '❌'} · "
                     f"**HDFS backup:** {'✅' if m.get('ok_hdfs') else '❌'}"
                 )
+            alerta = ing.get("alerta_bloqueos")
+            if alerta:
+                nivel = str(alerta.get("nivel") or "normal").lower()
+                msg = (
+                    f"Alerta de bloqueos: nivel `{alerta.get('nivel')}` · "
+                    f"bloqueados `{alerta.get('bloqueados')}` · "
+                    f"ratio `{alerta.get('ratio_bloqueados') or alerta.get('ratio')}`"
+                )
+                if nivel in ("alta", "critica"):
+                    st.warning(msg)
+                else:
+                    st.info(msg)
             p = Path(ing["ruta_payload"])
             if p.exists():
                 with st.expander("Vista previa JSON (truncada)", expanded=False):
@@ -166,38 +179,6 @@ def render_pipeline_resultados_tab() -> None:
             st.error(cas.get("error", "No se pudo conectar a Cassandra."))
 
     # --- Hive histórico ---
-    with st.expander("**Hive** (histórico particionado — opcional)", expanded=False):
-        st.caption(
-            f"Base esperada: **`{HIVE_DB}`**. Requiere HiveServer2 y `beeline` en PATH "
-            "(o variable `HIVE_BEELINE_BIN`)."
-        )
-        hv = snap["hive"]
-        # En modo rápido omitimos Hive para no bloquear la UI por HiveServer2.
-        if hv.get("omitido_modo_rapido"):
-            st.warning(hv.get("error_tablas", "Hive omitido en modo rápido."))
-            if st.button("Cargar Hive (histórico)", key="btn_load_hive_fast", type="secondary"):
-                with st.spinner("Consultando Hive (PyHive)…"):
-                    snap["hive"] = hive_resumen()
-                    st.session_state["pipeline_snapshot_kdd"] = snap
-                    st.rerun()
-        else:
-            if hv.get("show_tables_ok"):
-                st.success("SHOW TABLES ejecutado.")
-                st.text_area("Tablas", hv.get("tablas") or "", height=180, disabled=True, key="hive_tabs")
-            else:
-                st.warning(hv.get("error_tablas", "Hive no disponible o error de conexión (PyHive)."))
-
-            for codigo, bloque in (hv.get("conteos") or {}).items():
-                st.markdown(f"**{titulo_hive(codigo)}** (`{codigo}`)")
-                if bloque.get("ok"):
-                    st.code(bloque.get("salida", "")[:1200], language="text")
-                else:
-                    st.caption(f"⚠️ {bloque.get('error', 'error')}")
-            if hv.get("hint"):
-                st.info(hv["hint"])
-            if hv.get("hint_alias_hive"):
-                st.warning(hv["hint_alias_hive"])
-
     st.divider()
     st.markdown(
         "**Flujo de referencia:** `ingesta` → Kafka + HDFS → Spark lee HDFS → "

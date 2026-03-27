@@ -39,17 +39,32 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
     if meta_p.exists():
         try:
             out["meta"] = json.loads(meta_p.read_text(encoding="utf-8"))
+            out["origen"] = out["meta"].get("origen")
+            out["canal_ingesta"] = out["meta"].get("canal_ingesta")
+            out["ejecutor_ingesta"] = out["meta"].get("ejecutor_ingesta")
             out["disponible"] = True
         except Exception as e:
             out["error_meta"] = str(e)
     if pay_p.exists():
         try:
             blob = json.loads(pay_p.read_text(encoding="utf-8"))
+            out["origen_payload"] = blob.get("origen")
             out["timestamp"] = blob.get("timestamp")
             out["paso_15min"] = blob.get("paso_15min")
             out["hubs_clima"] = len(blob.get("clima_hubs") or {})
             out["camiones"] = len(blob.get("camiones") or [])
             out["nodos_en_payload"] = len(blob.get("nodos_estado") or {})
+            resumen_dgt = blob.get("resumen_dgt") or {}
+            alertas = blob.get("alertas_operativas") or []
+            out["resumen_dgt"] = resumen_dgt
+            out["dgt_source_mode"] = resumen_dgt.get("source_mode")
+            out["dgt_incidencias_totales"] = resumen_dgt.get("incidencias_totales", 0)
+            out["dgt_nodos_afectados"] = resumen_dgt.get("nodos_afectados", 0)
+            out["alertas_operativas"] = alertas
+            out["alerta_bloqueos"] = next(
+                (a for a in alertas if isinstance(a, dict) and a.get("tipo_alerta") == "bloqueo_red"),
+                None,
+            )
             out["disponible"] = True
         except Exception as e:
             out["error_payload"] = str(e)

@@ -24,9 +24,12 @@ from config import (
     API_WEATHER_KEY,
     API_WEATHER_BASE,
     KAFKA_BOOTSTRAP,
+    TOPIC_DGT_RAW,
+    TOPIC_RAW,
     TOPIC_TRANSPORTE,
     HDFS_BACKUP_PATH,
 )
+from ingesta.ingesta_dgt_datex2 import fusionar_estados, obtener_incidencias_dgt
 from ingesta.trigger_paso import resolver_paso_ingesta, semilla_simulacion
 
 # Estados posibles
@@ -36,6 +39,15 @@ MOTIVOS = {
     "Congestionado": ["Niebla", "Tráfico", "Lluvia"],
     "Bloqueado": ["Incendio", "Nieve", "Accidente"],
 }
+
+
+def _severity_for_state(estado: str) -> str:
+    estado = (estado or "OK").strip().lower()
+    if estado == "bloqueado":
+        return "high"
+    if estado == "congestionado":
+        return "medium"
+    return "low"
 
 
 def _env_flag(key: str, default: bool = True) -> bool:
@@ -116,7 +128,13 @@ def simular_incidentes_nodos() -> dict:
     for nid, datos in nodos.items():
         estado = random.choices(ESTADOS, weights=[0.7, 0.2, 0.1])[0]
         motivo = random.choice(MOTIVOS[estado]) if MOTIVOS[estado] else None
-        estados_nodos[nid] = {"estado": estado, "motivo": motivo}
+        estados_nodos[nid] = {
+            "estado": estado,
+            "motivo": motivo,
+            "source": "simulacion",
+            "severity": _severity_for_state(estado),
+            "peso_pagerank": 1.0,
+        }
     return estados_nodos
 
 
@@ -128,7 +146,13 @@ def simular_incidentes_aristas() -> dict:
         key = f"{src}|{dst}"
         estado = random.choices(ESTADOS, weights=[0.75, 0.15, 0.1])[0]
         motivo = random.choice(MOTIVOS[estado]) if MOTIVOS[estado] else None
-        estados_aristas[key] = {"estado": estado, "motivo": motivo, "distancia_km": dist}
+        estados_aristas[key] = {
+            "estado": estado,
+            "motivo": motivo,
+            "distancia_km": dist,
+            "source": "simulacion",
+            "severity": _severity_for_state(estado),
+        }
     return estados_aristas
 
 
@@ -181,6 +205,46 @@ def generar_rutas_camiones(n=5):
     return rutas
 
 
+def distancia_total_ruta_km(ruta):
+    """Suma la distancia total de una ruta usando las aristas conocidas."""
+    if not ruta or len(ruta) < 2:
+        return 0.0
+    nodos = get_nodos()
+    distancias = {}
+    for src, dst, dist in get_aristas():
+        distancias[(src, dst)] = float(dist)
+        distancias[(dst, src)] = float(dist)
+    total = 0.0
+    for src, dst in zip(ruta, ruta[1:]):
+        tramo = distancias.get((src, dst))
+        if tramo is None:
+            n1 = nodos.get(src, {"lat": 40.4, "lon": -3.7})
+            n2 = nodos.get(dst, {"lat": 40.4, "lon": -3.7})
+            tramo = haversine_km(n1["lat"], n1["lon"], n2["lat"], n2["lon"])
+        total += float(tramo)
+    return round(total, 2)
+
+
+def clima_hubs_a_lista(clima_hubs: dict, timestamp: str) -> list[dict]:
+    """Convierte el mapa por hub en una lista homogénea para persistencia Hive."""
+    out = []
+    for hub, datos in (clima_hubs or {}).items():
+        if not isinstance(datos, dict):
+            continue
+        out.append(
+            {
+                "ciudad": hub,
+                "temperatura": datos.get("temp"),
+                "humedad": datos.get("humedad"),
+                "descripcion": datos.get("descripcion", ""),
+                "visibilidad": datos.get("visibilidad"),
+                "viento": datos.get("viento"),
+                "timestamp": timestamp,
+            }
+        )
+    return out
+
+
 def interpolacion_gps_15min(rutas, paso_15min=0):
     """
     Calcular posición exacta (lat, lon) para cada camión cada 15 min.
@@ -192,13 +256,26 @@ def interpolacion_gps_15min(rutas, paso_15min=0):
         if len(ruta) < 2:
             nodo = ruta[0] if ruta else list(nodos.keys())[0]
             d = nodos.get(nodo, {"lat": 40.4, "lon": -3.7})
+            distancia_total = distancia_total_ruta_km(ruta)
             posiciones.append({
                 "id_camion": f"camion_{i+1}",
+                "id": f"camion_{i+1}",
                 "lat": d["lat"],
                 "lon": d["lon"],
+                "posicion_actual": {"lat": d["lat"], "lon": d["lon"]},
                 "ruta": ruta,
+                "ruta_sugerida": ruta,
+                "ruta_origen": ruta[0] if ruta else nodo,
+                "ruta_destino": ruta[-1] if ruta else nodo,
                 "indice_tramo": 0,
+                "origen_tramo": nodo,
+                "destino_tramo": nodo,
                 "progreso": 0.0,
+                "progreso_pct": 0.0,
+                "distancia_total_km": distancia_total,
+                "nodo_actual": nodo,
+                "estado_ruta": "Sin movimiento",
+                "motivo_retraso": "",
             })
             continue
         # Asumimos 4 pasos de 15 min por tramo (1 hora por arista)
@@ -210,28 +287,51 @@ def interpolacion_gps_15min(rutas, paso_15min=0):
         d1 = nodos.get(n1, {"lat": 40.4, "lon": -3.7})
         d2 = nodos.get(n2, {"lat": 41.4, "lon": 2.17})
         lat, lon = interpolar_gps(d1["lat"], d1["lon"], d2["lat"], d2["lon"], progreso_tramo)
+        progreso_global = ((tramo + progreso_tramo) / max(total_tramos, 1)) * 100.0
+        distancia_total = distancia_total_ruta_km(ruta)
+        nodo_actual = n1 if progreso_tramo < 0.5 else n2
         posiciones.append({
             "id_camion": f"camion_{i+1}",
+            "id": f"camion_{i+1}",
             "lat": lat,
             "lon": lon,
+            "posicion_actual": {"lat": lat, "lon": lon},
             "ruta": ruta,
+            "ruta_sugerida": ruta,
+            "ruta_origen": ruta[0],
+            "ruta_destino": ruta[-1],
             "indice_tramo": tramo,
             "origen_tramo": n1,
             "destino_tramo": n2,
             "progreso": progreso_tramo,
+            "progreso_pct": round(progreso_global, 2),
+            "distancia_total_km": distancia_total,
+            "nodo_actual": nodo_actual,
+            "estado_ruta": "En ruta",
+            "motivo_retraso": "",
         })
     return posiciones
 
 
 def publicar_kafka(payload: dict) -> bool:
-    """Enviar JSON a Kafka topic transporte_status."""
+    """Enviar JSON del snapshot a topics raw/filtered y, si aplica, al raw DGT."""
     try:
         from kafka import KafkaProducer
         producer = KafkaProducer(
             bootstrap_servers=KAFKA_BOOTSTRAP.split(","),
             value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
         )
+        producer.send(TOPIC_RAW, value=payload)
         producer.send(TOPIC_TRANSPORTE, value=payload)
+        if payload.get("incidencias_dgt"):
+            producer.send(
+                TOPIC_DGT_RAW,
+                value={
+                    "timestamp": payload.get("timestamp"),
+                    "origen_dgt": payload.get("resumen_dgt", {}).get("source_mode"),
+                    "incidencias_dgt": payload.get("incidencias_dgt", []),
+                },
+            )
         producer.flush()
         producer.close()
         return True
@@ -272,12 +372,36 @@ def guardar_hdfs(payload: dict) -> bool:
         return False
 
 
+def evaluar_alerta_bloqueos(estados_nodos: dict) -> dict:
+    bloqueados = [nid for nid, info in (estados_nodos or {}).items() if (info or {}).get("estado") == "Bloqueado"]
+    total = len(estados_nodos or {})
+    ratio = round((len(bloqueados) / total), 3) if total else 0.0
+    if ratio >= 0.20 or len(bloqueados) >= 5:
+        nivel = "critica"
+    elif len(bloqueados) >= 3:
+        nivel = "alta"
+    else:
+        nivel = "normal"
+    return {
+        "tipo_alerta": "bloqueo_red",
+        "nivel": nivel,
+        "bloqueados": len(bloqueados),
+        "ratio_bloqueados": ratio,
+        "nodos_bloqueados": bloqueados,
+    }
+
+
 def main(paso_15min=0):
     # Misma ventana temporal → misma semilla (reproducible); ventana distinta → incidentes/rutas distintos
     random.seed(semilla_simulacion(paso_15min))
+    canal_ingesta = os.environ.get("SIMLOG_INGESTA_CANAL", "script_python").strip() or "script_python"
+    origen_ingesta = os.environ.get("SIMLOG_INGESTA_ORIGEN", "cli_script").strip() or "cli_script"
+    ejecutor_ingesta = os.environ.get("SIMLOG_INGESTA_EJECUTOR", "python -m ingesta.ingesta_kdd").strip()
 
     clima = consulta_clima_hubs()
     sim_incid = _env_flag("SIMLOG_SIMULAR_INCIDENCIAS", True)
+    use_dgt = _env_flag("SIMLOG_USE_DGT", True)
+    dgt_cache_only = _env_flag("SIMLOG_DGT_ONLY_CACHE", False)
     if sim_incid:
         estados_nodos = simular_incidentes_nodos()
         estados_aristas = simular_incidentes_aristas()
@@ -289,19 +413,69 @@ def main(paso_15min=0):
             f"{src}|{dst}": {"estado": "OK", "motivo": None, "distancia_km": dist}
             for (src, dst, dist) in get_aristas()
         }
+
+    info_dgt = {"source_mode": "disabled", "error": None, "incidencias": [], "mapeo_nodos": {}}
+    if use_dgt:
+        info_dgt = obtener_incidencias_dgt(use_cache_only=dgt_cache_only, allow_cache_fallback=True)
+        if info_dgt.get("mapeo_nodos"):
+            estados_nodos = fusionar_estados(estados_nodos, info_dgt["mapeo_nodos"])
+
     rutas = generar_rutas_camiones(5)
     posiciones = interpolacion_gps_15min(rutas, paso_15min)
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    clima_lista = clima_hubs_a_lista(clima, timestamp)
+    alerta_bloqueos = evaluar_alerta_bloqueos(estados_nodos)
 
     payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "origen": origen_ingesta,
+        "canal_ingesta": canal_ingesta,
+        "ejecutor_ingesta": ejecutor_ingesta,
+        "timestamp": timestamp,
         "paso_15min": paso_15min,
         "simulacion_incidencias": sim_incid,
+        "dgt_habilitado": use_dgt,
         "clima_hubs": clima,
+        "clima": clima_lista,
+        "incidencias_dgt": info_dgt.get("incidencias", []),
+        "resumen_dgt": {
+            "source_mode": info_dgt.get("source_mode", "disabled"),
+            "error": info_dgt.get("error"),
+            "incidencias_totales": len(info_dgt.get("incidencias", [])),
+            "nodos_afectados": len(info_dgt.get("mapeo_nodos", {})),
+        },
+        "alertas_operativas": [alerta_bloqueos],
         "nodos_estado": {
-            n: {"estado": v["estado"], "motivo": v["motivo"]}
+            n: {
+                "estado": v["estado"],
+                "motivo": v.get("motivo"),
+                "source": v.get("source", "simulacion"),
+                "severity": v.get("severity", _severity_for_state(v["estado"])),
+                "peso_pagerank": v.get("peso_pagerank", 1.0),
+                "id_incidencia": v.get("id_incidencia"),
+                "carretera": v.get("carretera"),
+                "municipio": v.get("municipio"),
+                "provincia": v.get("provincia"),
+                "descripcion": v.get("descripcion"),
+            }
+            for n, v in estados_nodos.items()
+        },
+        "estados_nodos": {
+            n: {
+                "estado": v["estado"],
+                "motivo": v.get("motivo"),
+                "source": v.get("source", "simulacion"),
+                "severity": v.get("severity", _severity_for_state(v["estado"])),
+                "peso_pagerank": v.get("peso_pagerank", 1.0),
+                "id_incidencia": v.get("id_incidencia"),
+                "carretera": v.get("carretera"),
+                "municipio": v.get("municipio"),
+                "provincia": v.get("provincia"),
+                "descripcion": v.get("descripcion"),
+            }
             for n, v in estados_nodos.items()
         },
         "aristas_estado": estados_aristas,
+        "estados_aristas": estados_aristas,
         "camiones": posiciones,
     }
 
@@ -317,8 +491,14 @@ def main(paso_15min=0):
             encoding="utf-8",
         )
         meta = {
+            "origen": origen_ingesta,
+            "canal_ingesta": canal_ingesta,
+            "ejecutor_ingesta": ejecutor_ingesta,
             "timestamp": payload["timestamp"],
             "paso_15min": paso_15min,
+            "dgt_source_mode": payload["resumen_dgt"]["source_mode"],
+            "dgt_incidencias_totales": payload["resumen_dgt"]["incidencias_totales"],
+            "dgt_nodos_afectados": payload["resumen_dgt"]["nodos_afectados"],
             "ok_kafka": ok_kafka,
             "ok_hdfs": ok_hdfs,
         }

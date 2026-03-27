@@ -98,7 +98,24 @@ API_WEATHER_BASE = "https://api.openweathermap.org/data/2.5/weather"
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
 TOPIC_RAW = "transporte_raw"           # Datos crudos (auditoría)
 TOPIC_FILTERED = "transporte_filtered" # Datos filtrados/validados para procesamiento
+TOPIC_DGT_RAW = os.environ.get("SIMLOG_TOPIC_DGT_RAW", "transporte_dgt_raw")
 TOPIC_TRANSPORTE = TOPIC_FILTERED      # Compatibilidad: consumidores usan filtrado
+
+# DATEX2 / DGT
+DGT_DATEX2_URL = os.environ.get(
+    "SIMLOG_DGT_DATEX2_URL",
+    "https://nap.dgt.es/datex2/v3/dgt/SituationPublication/datex2_v36.xml",
+)
+DGT_XML_CACHE_PATH = os.environ.get(
+    "SIMLOG_DGT_XML_CACHE_PATH",
+    os.path.join(BASE_PATH, "reports", "dgt_cache", "datex2_latest.xml"),
+)
+DGT_XML_META_PATH = os.environ.get(
+    "SIMLOG_DGT_XML_META_PATH",
+    os.path.join(BASE_PATH, "reports", "dgt_cache", "datex2_latest_meta.json"),
+)
+DGT_MAX_NODE_DISTANCE_KM = float(os.environ.get("SIMLOG_DGT_MAX_NODE_DISTANCE_KM", "100"))
+TOPIC_DGT_RAW = os.environ.get("SIMLOG_TOPIC_DGT_RAW", "transporte_dgt_raw")
 
 # Cassandra
 CASSANDRA_HOST = os.environ.get("CASSANDRA_HOST", "127.0.0.1")
@@ -108,9 +125,30 @@ KEYSPACE = "logistica_espana"
 HDFS_NAMENODE = os.environ.get("HDFS_NAMENODE", "127.0.0.1:9000")
 HDFS_BACKUP_PATH = os.environ.get("HDFS_BACKUP_PATH", "/user/hadoop/transporte_backup")
 
+# DATEX2 / DGT
+DATEX2_DGT_URL = os.environ.get(
+    "DATEX2_DGT_URL",
+    "https://nap.dgt.es/datex2/v3/dgt/SituationPublication/datex2_v36.xml",
+)
+DGT_CACHE_DIR = os.environ.get(
+    "SIMLOG_DGT_CACHE_DIR",
+    os.path.join(BASE_PATH, "reports", "dgt_cache"),
+)
+DGT_CACHE_FILE = os.environ.get(
+    "SIMLOG_DGT_CACHE_FILE",
+    os.path.join(DGT_CACHE_DIR, "datex2_latest.xml"),
+)
+DGT_CACHE_MAX_AGE_MINUTES = int(os.environ.get("SIMLOG_DGT_CACHE_MAX_AGE_MINUTES", "180"))
+DGT_MAX_NODE_DISTANCE_KM = float(os.environ.get("SIMLOG_DGT_MAX_NODE_DISTANCE_KM", "100"))
+
 # Hive (para histórico; en Docker usar HIVE_METASTORE_URIS si aplica)
 # Debe coincidir con `procesamiento_grafos.py` (histórico Hive en logistica_espana).
 HIVE_DB = os.environ.get("HIVE_DB", "logistica_espana")
+HIVE_CONF_DIR = os.environ.get(
+    "SIMLOG_HIVE_CONF_DIR",
+    os.environ.get("HIVE_CONF_DIR", os.path.join(BASE_PATH, "hive", "conf")),
+)
+HIVE_METASTORE_PORT = int(os.environ.get("SIMLOG_PORT_HIVE_METASTORE", "9083"))
 # Tabla Hive de histórico de ingesta/rutas (DDL propio; por defecto nombre pedido en integraciones gestor)
 HIVE_TABLE_TRANSPORTE_HIST = os.environ.get(
     "SIMLOG_HIVE_TABLA_TRANSPORTE", "transporte_ingesta_completa"
@@ -122,7 +160,10 @@ HIVE_TABLE_HISTORICO_NODOS = os.environ.get(
 HIVE_TABLE_NODOS_MAESTRO = os.environ.get(
     "SIMLOG_HIVE_TABLE_NODOS_MAESTRO", "nodos_maestro"
 )
-HIVE_METASTORE_URIS = os.environ.get("HIVE_METASTORE_URIS", "")  # ej: thrift://hive-metastore:9083
+HIVE_METASTORE_URIS = os.environ.get(
+    "HIVE_METASTORE_URIS",
+    f"thrift://127.0.0.1:{HIVE_METASTORE_PORT}",
+)  # ej: thrift://hive-metastore:9083
 HIVE_SERVER = os.environ.get("HIVE_SERVER", "127.0.0.1:10000")   # HiveServer2 para JDBC/beeline
 # JDBC para beeline / clientes (cuadro de mando, integraciones)
 HIVE_JDBC_URL = os.environ.get("HIVE_JDBC_URL", "jdbc:hive2://localhost:10000")

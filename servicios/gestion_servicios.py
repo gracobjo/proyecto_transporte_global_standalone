@@ -14,6 +14,9 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+import ssl
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -26,6 +29,8 @@ PORT_CASSANDRA = int(os.environ.get("SIMLOG_PORT_CASSANDRA", "9042"))
 PORT_HIVE = int(os.environ.get("SIMLOG_PORT_HIVE", "10000"))
 PORT_SPARK_MASTER = int(os.environ.get("SIMLOG_PORT_SPARK_MASTER", "7077"))
 PORT_AIRFLOW = int(os.environ.get("SIMLOG_PORT_AIRFLOW", "8088"))
+PORT_API = int(os.environ.get("SIMLOG_PORT_API", "8090"))
+PORT_FAQ_IA = int(os.environ.get("SIMLOG_PORT_FAQ_IA", "8091"))
 PORT_NIFI_HTTPS = int(os.environ.get("SIMLOG_PORT_NIFI_HTTPS", "8443"))
 PORT_NIFI_HTTP = int(os.environ.get("SIMLOG_PORT_NIFI_HTTP", "8080"))
 
@@ -126,7 +131,100 @@ def _cassandra_tail_system_log(max_chars: int = 2500) -> str:
 
 
 def _nifi_home() -> Path:
-    return Path(os.environ.get("NIFI_HOME", "/opt/nifi"))
+    # Este proyecto debe priorizar siempre su instalación local de NiFi.
+    # `nifi/` contiene documentación y flujos; el runtime arrancable está en
+    # directorios tipo `nifi-<version>` dentro del repo.
+    candidates: List[Path] = [BASE / "nifi-2.0.0"]
+    candidates.extend(sorted((p for p in BASE.glob("nifi-*") if p.is_dir()), reverse=True))
+
+    explicit = os.environ.get("SIMLOG_NIFI_HOME", "").strip() or os.environ.get("NIFI_HOME", "").strip()
+    if explicit:
+        explicit_path = Path(explicit).expanduser().resolve()
+        try:
+            explicit_path.relative_to(BASE.resolve())
+        except ValueError:
+            explicit_path = None  # type: ignore[assignment]
+        if explicit_path is not None:
+            candidates.insert(0, explicit_path)
+
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        if (p / "bin" / "nifi.sh").exists():
+            return p
+
+    # Fallback conservador: no salir del repo.
+    return BASE / "nifi-2.0.0"
+
+
+def _leer_properties(path: Path) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            out[key.strip()] = value.strip()
+    except OSError:
+        return {}
+    return out
+
+
+def _int_or_none(raw: Optional[str]) -> Optional[int]:
+    if not raw:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _nifi_web_config(nh: Optional[Path] = None) -> Dict[str, Any]:
+    nh = nh or _nifi_home()
+    props = _leer_properties(nh / "conf" / "nifi.properties")
+    has_props = bool(props)
+    http_port = _int_or_none(props.get("nifi.web.http.port"))
+    https_port = _int_or_none(props.get("nifi.web.https.port"))
+    return {
+        "http_host": props.get("nifi.web.http.host") or "127.0.0.1",
+        "http_port": http_port,
+        "https_host": props.get("nifi.web.https.host") or "localhost",
+        "https_port": https_port if has_props else PORT_NIFI_HTTPS,
+    }
+
+
+def _nifi_probe_targets(nh: Optional[Path] = None) -> List[Tuple[str, str, int]]:
+    cfg = _nifi_web_config(nh)
+    out: List[Tuple[str, str, int]] = []
+    seen: set[Tuple[str, str, int]] = set()
+
+    def add(scheme: str, host: str, port: Optional[int], extra_hosts: List[str]) -> None:
+        if not port:
+            return
+        for candidate in [host, *extra_hosts]:
+            item = (scheme, candidate, port)
+            if item not in seen:
+                seen.add(item)
+                out.append(item)
+
+    add("https", str(cfg["https_host"]), cfg["https_port"], ["localhost", "127.0.0.1"])
+    add("http", str(cfg["http_host"]), cfg["http_port"], ["127.0.0.1", "localhost"])
+    return out
+
+
+def _nifi_conflictos_puertos(nh: Optional[Path] = None) -> List[str]:
+    conflictos: List[str] = []
+    for scheme, host, port in _nifi_probe_targets(nh):
+        if not puerto_activo(host, port):
+            continue
+        url = f"{scheme}://{host}:{port}/nifi"
+        if not _endpoint_parece_nifi(url):
+            conflictos.append(f"{scheme.upper()} {host}:{port} ocupado por otro servicio")
+    return conflictos
 
 
 def _cassandra_bin() -> Path:
@@ -162,6 +260,47 @@ def _pkill_pattern(pattern: str) -> str:
     if r.returncode in (0, 1):
         return f"Procesos coincidentes con `{pattern}` terminados o no encontrados."
     return r.stderr or "pkill falló"
+
+
+def _proceso_nifi_corriendo() -> bool:
+    """True si existe una JVM de NiFi en ejecución."""
+    r = subprocess.run(
+        ["pgrep", "-f", "org.apache.nifi.NiFi"],
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+def _endpoint_parece_nifi(url: str, timeout: float = 2.0) -> bool:
+    """
+    Detecta firma básica de NiFi en la respuesta HTTP.
+    Evita falsos positivos cuando otro servicio ocupa el puerto (ej. Spark en 8080).
+    """
+    try:
+        req = urllib.request.Request(url, method="GET")
+        context = None
+        if url.startswith("https://"):
+            context = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
+            body = resp.read(2048).decode("utf-8", errors="ignore").lower()
+            headers = str(resp.headers).lower()
+            markers = ("nifi", "apache nifi", "x-frame-options")
+            return any(m in body for m in markers) or "nifi" in headers
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return False
+
+
+def _endpoint_http_ok(url: str, timeout: float = 2.0) -> bool:
+    """True si un endpoint HTTP(S) responde con código < 400."""
+    try:
+        req = urllib.request.Request(url, method="GET")
+        context = None
+        if url.startswith("https://"):
+            context = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
+            return int(getattr(resp, "status", 200)) < 400
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return False
 
 
 # --- Comprobar ---
@@ -225,27 +364,99 @@ def comprobar_hive() -> Dict[str, Any]:
 
 
 def comprobar_airflow() -> Dict[str, Any]:
-    ok = puerto_activo("127.0.0.1", PORT_AIRFLOW)
-    # Scheduler no expone puerto fijo; comprobamos API/web
+    port_ok = puerto_activo("127.0.0.1", PORT_AIRFLOW)
+    api_ok = _endpoint_http_ok(f"http://127.0.0.1:{PORT_AIRFLOW}/health")
+    ui_ok = _endpoint_http_ok(f"http://127.0.0.1:{PORT_AIRFLOW}/")
+    ok = port_ok and (api_ok or ui_ok)
+    detalle = (
+        f"Puerto {PORT_AIRFLOW}: {'abierto' if port_ok else 'cerrado'} · "
+        f"endpoint /health: {'ok' if api_ok else 'no'} · "
+        f"raíz /: {'ok' if ui_ok else 'no'}. "
+        "El scheduler es un proceso separado."
+    )
     return {
         "id": "airflow",
         "nombre": "Airflow (api-server / web)",
         "activo": ok,
-        "detalle": f"Puerto {PORT_AIRFLOW} (api-server). El scheduler es otro proceso.",
+        "detalle": detalle,
         "puerto": PORT_AIRFLOW,
     }
 
 
+def comprobar_api() -> Dict[str, Any]:
+    port_ok = puerto_activo("127.0.0.1", PORT_API)
+    docs_ok = _endpoint_http_ok(f"http://127.0.0.1:{PORT_API}/docs")
+    health_ok = _endpoint_http_ok(f"http://127.0.0.1:{PORT_API}/health")
+    ok = port_ok and (docs_ok or health_ok)
+    return {
+        "id": "api",
+        "nombre": "Swagger API (FastAPI)",
+        "activo": ok,
+        "detalle": (
+            f"Puerto {PORT_API}: {'abierto' if port_ok else 'cerrado'} · "
+            f"/docs: {'ok' if docs_ok else 'no'} · /health: {'ok' if health_ok else 'no'}"
+        ),
+        "puerto": PORT_API,
+    }
+
+
+def comprobar_faq_ia() -> Dict[str, Any]:
+    port_ok = puerto_activo("127.0.0.1", PORT_FAQ_IA)
+    docs_ok = _endpoint_http_ok(f"http://127.0.0.1:{PORT_FAQ_IA}/docs")
+    health_ok = _endpoint_http_ok(f"http://127.0.0.1:{PORT_FAQ_IA}/health")
+    ok = port_ok and (docs_ok or health_ok)
+    return {
+        "id": "faq_ia",
+        "nombre": "FAQ IA API (FastAPI)",
+        "activo": ok,
+        "detalle": (
+            f"Puerto {PORT_FAQ_IA}: {'abierto' if port_ok else 'cerrado'} · "
+            f"/docs: {'ok' if docs_ok else 'no'} · /health: {'ok' if health_ok else 'no'}"
+        ),
+        "puerto": PORT_FAQ_IA,
+    }
+
+
 def comprobar_nifi() -> Dict[str, Any]:
-    ok_https = puerto_activo("127.0.0.1", PORT_NIFI_HTTPS)
-    ok_http = puerto_activo("127.0.0.1", PORT_NIFI_HTTP)
-    ok = ok_https or ok_http
+    nh = _nifi_home()
+    cfg = _nifi_web_config(nh)
+    proceso = _proceso_nifi_corriendo()
+
+    encontrados: List[str] = []
+    ocupacion: List[str] = []
+    for scheme, host, port in _nifi_probe_targets(nh):
+        up = puerto_activo(host, port)
+        if not up:
+            continue
+        url = f"{scheme}://{host}:{port}/nifi"
+        if _endpoint_parece_nifi(url):
+            encontrados.append(f"{scheme.upper()} {host}:{port}")
+        else:
+            ocupacion.append(f"{scheme.upper()} {host}:{port} abierto sin firma NiFi")
+
+    ok = bool(encontrados)
+    if ok:
+        detalle = (
+            f"NiFi detectado en {', '.join(encontrados)} · proceso JVM: {'sí' if proceso else 'no'} · "
+            f"NIFI_HOME={nh}"
+        )
+    else:
+        cfg_txt = (
+            f"config HTTPS={cfg.get('https_host')}:{cfg.get('https_port') or 'off'} · "
+            f"HTTP={cfg.get('http_host')}:{cfg.get('http_port') or 'off'}"
+        )
+        extra = ("; ".join(ocupacion)) if ocupacion else "sin puertos NiFi en escucha"
+        detalle = (
+            f"No se detecta NiFi ({extra}). Proceso JVM NiFi: {'sí' if proceso else 'no'} · "
+            f"{cfg_txt} · NIFI_HOME={nh}"
+        )
+
     return {
         "id": "nifi",
         "nombre": "Apache NiFi",
         "activo": ok,
-        "detalle": f"HTTPS {PORT_NIFI_HTTPS}: {'sí' if ok_https else 'no'} · HTTP {PORT_NIFI_HTTP}: {'sí' if ok_http else 'no'}",
-        "puerto": PORT_NIFI_HTTPS,
+        "detalle": detalle,
+        "puerto": cfg.get("https_port") or cfg.get("http_port") or PORT_NIFI_HTTPS,
     }
 
 
@@ -256,16 +467,18 @@ COMPRUEBA: Dict[str, Callable[[], Dict[str, Any]]] = {
     "spark": comprobar_spark,
     "hive": comprobar_hive,
     "airflow": comprobar_airflow,
+    "api": comprobar_api,
+    "faq_ia": comprobar_faq_ia,
     "nifi": comprobar_nifi,
 }
 
-ORDEN_SERVICIOS: List[str] = ["hdfs", "kafka", "cassandra", "spark", "hive", "airflow", "nifi"]
+ORDEN_SERVICIOS: List[str] = ["hdfs", "kafka", "cassandra", "spark", "hive", "airflow", "api", "faq_ia", "nifi"]
 
 # Orden recomendado al arrancar todo el stack (HDFS y Cassandra antes que Kafka)
-ORDEN_ARRANQUE_TODOS: List[str] = ["hdfs", "cassandra", "kafka", "spark", "hive", "airflow", "nifi"]
+ORDEN_ARRANQUE_TODOS: List[str] = ["hdfs", "cassandra", "kafka", "spark", "hive", "airflow", "api", "faq_ia", "nifi"]
 
 # Parada inversa: clientes/orquestación antes que almacenamiento
-ORDEN_PARADA_TODOS: List[str] = ["nifi", "airflow", "hive", "spark", "kafka", "cassandra", "hdfs"]
+ORDEN_PARADA_TODOS: List[str] = ["nifi", "faq_ia", "api", "airflow", "hive", "spark", "kafka", "cassandra", "hdfs"]
 
 
 def comprobar_todos() -> List[Dict[str, Any]]:
@@ -522,16 +735,77 @@ def iniciar_airflow() -> str:
 
 
 def iniciar_nifi() -> str:
-    if puerto_activo("127.0.0.1", PORT_NIFI_HTTPS) or puerto_activo("127.0.0.1", PORT_NIFI_HTTP):
-        return "NiFi ya tiene un puerto en escucha."
     nh = _nifi_home()
     script = nh / "bin" / "nifi.sh"
     if not script.exists():
         return f"No se encontró {script}. Configura NIFI_HOME."
-    code, _, err = _run([str(script), "start"], cwd=nh, timeout=120)
-    if code != 0:
+
+    estado = comprobar_nifi()
+    if estado.get("activo"):
+        return "NiFi ya estaba activo."
+
+    conflictos = _nifi_conflictos_puertos(nh)
+    if conflictos:
+        return (
+            "NiFi no se puede iniciar porque sus puertos configurados están ocupados por otro servicio: "
+            + "; ".join(conflictos)
+        )
+
+    code, _, err = _run([str(script), "start"], cwd=nh, timeout=45)
+    if code not in (0, -1):
         return f"nifi.sh start: {err[-500:] if err else 'error'}"
-    return "NiFi: arranque solicitado (puede tardar 1–2 min)."
+
+    max_wait = max(90, int(os.environ.get("SIMLOG_NIFI_MAX_WAIT_SEC", "240")))
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < max_wait:
+        estado = comprobar_nifi()
+        if estado.get("activo"):
+            return str(estado.get("detalle") or "NiFi activo.")
+        time.sleep(3)
+
+    code_st, out_st, err_st = _run([str(script), "status"], cwd=nh, timeout=30)
+    status_txt = (out_st or err_st or f"código {code_st}").strip()
+    if "Status: UP" in status_txt or "Command Status [SUCCESS]" in status_txt:
+        return f"NiFi activo según bootstrap. {status_txt[-400:]}"
+    if _proceso_nifi_corriendo():
+        return (
+            "NiFi sigue arrancando en segundo plano; el proceso JVM ya existe pero la UI aún no responde. "
+            f"Estado bootstrap: {status_txt[-300:]}"
+        )
+    return (
+        "NiFi se lanzó pero no respondió a tiempo. "
+        f"Estado bootstrap: {status_txt[-400:]}"
+    )
+
+
+def iniciar_api() -> str:
+    if puerto_activo("127.0.0.1", PORT_API):
+        return f"Swagger API ya estaba activa en puerto {PORT_API}."
+    try:
+        cmd = [sys.executable, "-m", "uvicorn", "servicios.api_simlog:app", "--host", "0.0.0.0", "--port", str(PORT_API)]
+        subprocess.Popen(cmd, cwd=str(BASE), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(20):
+            if puerto_activo("127.0.0.1", PORT_API):
+                return f"Swagger API activa en puerto {PORT_API}."
+            time.sleep(1)
+        return f"Swagger API lanzada pero no abrió el puerto {PORT_API} a tiempo."
+    except Exception as e:
+        return f"No se pudo lanzar Swagger API: {e}"
+
+
+def iniciar_faq_ia() -> str:
+    if puerto_activo("127.0.0.1", PORT_FAQ_IA):
+        return f"FAQ IA API ya estaba activa en puerto {PORT_FAQ_IA}."
+    try:
+        cmd = [sys.executable, "-m", "uvicorn", "servicios.api_faq_ia:app", "--host", "0.0.0.0", "--port", str(PORT_FAQ_IA)]
+        subprocess.Popen(cmd, cwd=str(BASE), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(20):
+            if puerto_activo("127.0.0.1", PORT_FAQ_IA):
+                return f"FAQ IA API activa en puerto {PORT_FAQ_IA}."
+            time.sleep(1)
+        return f"FAQ IA API lanzada pero no abrió el puerto {PORT_FAQ_IA} a tiempo."
+    except Exception as e:
+        return f"No se pudo lanzar FAQ IA API: {e}"
 
 
 INICIA: Dict[str, Callable[[], str]] = {
@@ -541,6 +815,8 @@ INICIA: Dict[str, Callable[[], str]] = {
     "spark": iniciar_spark,
     "hive": iniciar_hive,
     "airflow": iniciar_airflow,
+    "api": iniciar_api,
+    "faq_ia": iniciar_faq_ia,
     "nifi": iniciar_nifi,
 }
 
@@ -662,6 +938,18 @@ def parar_nifi() -> str:
     return _pkill_pattern("nifi")
 
 
+def parar_api() -> str:
+    msg = _kill_port(PORT_API)
+    pk = _pkill_pattern("uvicorn servicios.api_simlog:app")
+    return f"{msg} · {pk}"
+
+
+def parar_faq_ia() -> str:
+    msg = _kill_port(PORT_FAQ_IA)
+    pk = _pkill_pattern("uvicorn servicios.api_faq_ia:app")
+    return f"{msg} · {pk}"
+
+
 PARA: Dict[str, Callable[[], str]] = {
     "hdfs": parar_hdfs,
     "kafka": parar_kafka,
@@ -669,6 +957,8 @@ PARA: Dict[str, Callable[[], str]] = {
     "spark": parar_spark,
     "hive": parar_hive,
     "airflow": parar_airflow,
+    "api": parar_api,
+    "faq_ia": parar_faq_ia,
     "nifi": parar_nifi,
 }
 

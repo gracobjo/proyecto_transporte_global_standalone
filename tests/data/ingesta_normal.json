@@ -1,0 +1,105 @@
+{
+  "timestamp": "2026-03-26T10:00:00Z",
+  "origen": "test_fixture",
+  "canal_ingesta": "script_python",
+  "ejecutor_ingesta": "pytest_fixture",
+  "paso_15min": 4,
+  "clima_hubs": {
+    "Madrid": {
+      "descripcion": "despejado",
+      "temp": 18.2,
+      "humedad": 41,
+      "viento": 3.2,
+      "visibilidad": 10000
+    },
+    "Barcelona": {
+      "descripcion": "nubes dispersas",
+      "temp": 19.4,
+      "humedad": 55,
+      "viento": 4.1,
+      "visibilidad": 9000
+    }
+  },
+  "clima": [
+    {
+      "ciudad": "Madrid",
+      "temperatura": 18.2,
+      "humedad": 41,
+      "descripcion": "despejado",
+      "visibilidad": 10000,
+      "timestamp": "2026-03-26T10:00:00Z"
+    },
+    {
+      "ciudad": "Barcelona",
+      "temperatura": 19.4,
+      "humedad": 55,
+      "descripcion": "nubes dispersas",
+      "visibilidad": 9000,
+      "timestamp": "2026-03-26T10:00:00Z"
+    }
+  ],
+  "nodos_estado": {
+    "Madrid": {
+      "estado": "OK",
+      "motivo": ""
+    },
+    "Barcelona": {
+      "estado": "Congestionado",
+      "motivo": "Tráfico"
+    }
+  },
+  "estados_nodos": {
+    "Madrid": {
+      "estado": "OK",
+      "motivo": ""
+    },
+    "Barcelona": {
+      "estado": "Congestionado",
+      "motivo": "Tráfico"
+    }
+  },
+  "aristas_estado": {
+    "Madrid|Barcelona": {
+      "estado": "Congestionado",
+      "motivo": "Lluvia",
+      "distancia_km": 621.4
+    }
+  },
+  "estados_aristas": {
+    "Madrid|Barcelona": {
+      "estado": "Congestionado",
+      "motivo": "Lluvia",
+      "distancia_km": 621.4
+    }
+  },
+  "camiones": [
+    {
+      "id_camion": "camion_1",
+      "id": "camion_1",
+      "lat": 40.41,
+      "lon": -3.70,
+      "posicion_actual": {
+        "lat": 40.41,
+        "lon": -3.70
+      },
+      "ruta": [
+        "Madrid",
+        "Barcelona"
+      ],
+      "ruta_sugerida": [
+        "Madrid",
+        "Zaragoza",
+        "Barcelona"
+      ],
+      "ruta_origen": "Madrid",
+      "ruta_destino": "Barcelona",
+      "nodo_actual": "Madrid",
+      "origen_tramo": "Madrid",
+      "destino_tramo": "Barcelona",
+      "progreso_pct": 22.5,
+      "distancia_total_km": 621.4,
+      "estado_ruta": "En ruta",
+      "motivo_retraso": "Tráfico"
+    }
+  ]
+}

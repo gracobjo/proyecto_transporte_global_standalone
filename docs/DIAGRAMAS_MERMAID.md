@@ -27,6 +27,11 @@ flowchart TB
     UC10[CU-10 Asistente de Flota]
     UC11[CU-11 Graph AI anomalías]
     UC12[CU-12 Cluster Codespaces]
+    UC13[CU-13 Informes a medida]
+    UC14[CU-14 Buscador semántico]
+    UC15[CU-15 FAQ IA]
+    UC16[CU-16 Integrar DATEX2 DGT]
+    UC17[CU-17 Auditar provenance NiFi]
   end
   OP --> UC1
   OP --> UC2
@@ -45,6 +50,15 @@ flowchart TB
   OP --> UC11
   AN --> UC11
   OP --> UC12
+  OP --> UC13
+  AN --> UC13
+  OP --> UC14
+  AN --> UC14
+  OP --> UC15
+  AN --> UC15
+  OP --> UC16
+  SCH --> UC16
+  OP --> UC17
 ```
 
 ---
@@ -58,6 +72,8 @@ flowchart LR
     ST[Streamlit]
     N[NiFi UI]
     A[Airflow UI]
+    SW[Swagger UI]
+    FQ[FAQ IA API]
   end
   subgraph UI_KDD[servicios kdd_*]
     VF[kdd_vista_ficheros]
@@ -65,20 +81,23 @@ flowchart LR
     VG[kdd_vista_grafo]
   end
   subgraph Pipeline
-    I[ingesta_kdd]
+    I[ingesta_kdd + ingesta_dgt_datex2]
     P[procesamiento_grafos]
   end
   subgraph Mensajería
-    K[Kafka raw/filtered]
+    K[Kafka dgt_raw/raw/filtered]
     H[HDFS backup]
   end
   subgraph Stores
     C[Cassandra]
     V[Hive]
+    KB[FAQ KB JSON]
   end
   U --> ST
   U --> N
   U --> A
+  U --> SW
+  U --> FQ
   ST --> VF
   ST --> VR
   ST --> VG
@@ -95,6 +114,9 @@ flowchart LR
   P --> C
   P --> V
   ST --> C
+  ST --> SW
+  ST --> FQ
+  FQ --> KB
 ```
 
 ---
@@ -105,6 +127,7 @@ flowchart LR
 sequenceDiagram
   participant T as Trigger NiFi/Airflow
   participant I as Ingesta
+  participant DGT as DGT DATEX2
   participant K as Kafka
   participant H as HDFS
   participant S as Spark
@@ -112,6 +135,8 @@ sequenceDiagram
   participant V as Hive
   participant D as Dashboard
   T->>I: Disparo periódico
+  I->>DGT: Descarga XML DATEX2
+  DGT-->>I: Incidencias reales / error
   I->>K: Publica raw + filtered
   I->>H: Backup JSON
   T->>S: Ejecuta procesamiento
@@ -141,6 +166,24 @@ sequenceDiagram
   OW-->>ING: JSON
   ING-->>ST: Tabla por hub
   Note over ST: Clave solo en session_state
+```
+
+---
+
+## 4.b Secuencia — NiFi provenance con DGT
+
+```mermaid
+sequenceDiagram
+  participant N as NiFi PG_SIMLOG_KDD
+  participant O as OpenWeather InvokeHTTP
+  participant G as DGT DATEX2 InvokeHTTP
+  participant M as Merge scripts
+  participant P as Data Provenance
+  N->>O: Snapshot sintético base
+  O-->>M: Atributo owm.response
+  M->>G: Payload con clima + provenance stage=weather_merged
+  G-->>M: Atributo dgt.response.xml
+  M-->>P: FlowFile con simlog.provenance.*\n(stage, sources, dgt_mode, dgt_incidents)
 ```
 
 ---
@@ -272,7 +315,25 @@ sequenceDiagram
 
 ---
 
-## 9. Componentes — Integración Asistente de Flota + Graph AI
+## 9. Secuencia — FAQ IA (panel Streamlit + microservicio local)
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit (Servicios)
+  participant API as FAQ IA FastAPI
+  participant KB as faq_knowledge_base.json
+
+  U->>ST: Escribe pregunta y pulsa "Preguntar al FAQ IA"
+  ST->>API: POST /api/v1/faq/ask
+  API->>KB: Carga KB local (question, keywords, answer, sources)
+  API-->>ST: answer + confidence + matched_question + suggestions + sources
+  ST-->>U: Respuesta, confianza, sugerencias e historial
+```
+
+---
+
+## 10. Componentes — Integración FAQ IA + Asistente de Flota + Graph AI
 
 ```mermaid
 flowchart LR
@@ -282,6 +343,11 @@ flowchart LR
 
   subgraph Backend_SQL
     GSQL[Gestor consultas (whitelist)]
+  end
+
+  subgraph FAQ_Local
+    FAQ[FAQ IA FastAPI]
+    KB[KB FAQ JSON]
   end
 
   subgraph Datos
@@ -301,6 +367,8 @@ flowchart LR
   ST --> GSQL
   GSQL --> CS
   GSQL --> HV
+  ST --> FAQ
+  FAQ --> KB
 
   DAG --> CS
   DAG --> FAPI
@@ -310,7 +378,7 @@ flowchart LR
 
 ---
 
-## 10. Secuencia — Graph AI análisis (Airflow → FastAPI → Cassandra)
+## 11. Secuencia — Graph AI análisis (Airflow → FastAPI → Cassandra)
 
 ```mermaid
 sequenceDiagram
@@ -330,7 +398,7 @@ sequenceDiagram
 
 ---
 
-## 11. Diagrama (modelo conceptual) — Graph AI
+## 12. Diagrama (modelo conceptual) — Graph AI
 
 ```mermaid
 classDiagram
@@ -358,4 +426,46 @@ classDiagram
   FastAPI --> GraphProcessing
   GraphProcessing --> GraphPayload
   FastAPI --> AnalyzeGraphRequest
+```
+
+---
+
+## 13. Secuencia — Constructor de informes a medida
+
+```mermaid
+sequenceDiagram
+  participant U as Analista
+  participant ST as Streamlit Cuadro de mando
+  participant M as Metadata BD
+  participant DB as Cassandra/Hive
+  participant PDF as Generador PDF
+
+  U->>ST: Selecciona motor, tabla, campos o SELECT *
+  ST->>M: Listar tablas/columnas disponibles
+  M-->>ST: Metadatos
+  U->>ST: Define WHERE/ORDER/LIMIT y previsualiza
+  ST->>DB: Ejecuta consulta segura de lectura
+  DB-->>ST: Filas (DataFrame)
+  U->>ST: Descargar informe PDF
+  ST->>PDF: Render con plantilla + alias
+  PDF-->>U: Archivo .pdf
+```
+
+---
+
+## 14. Secuencia — Buscador semántico y salto de pestaña
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit Header
+  participant IDX as Catalogo semántico UI
+  participant NAV as Estado active_tab
+
+  U->>ST: Escribe término (ej. "swagger")
+  ST->>IDX: Buscar coincidencias por intención
+  IDX-->>ST: Lista de hallazgos
+  U->>ST: Click en "Ir a ..."
+  ST->>NAV: Set quick_open_tab/active_tab
+  NAV-->>U: Pestaña objetivo abierta
 ```

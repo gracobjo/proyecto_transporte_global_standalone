@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from queue import Queue
+from threading import Thread
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import (
     CASSANDRA_HOST,
     HIVE_BEELINE_USER,
+    HIVE_CONF_DIR,
     HIVE_DB,
     HIVE_JDBC_URL,
+    HIVE_METASTORE_URIS,
     HIVE_TABLE_HISTORICO_NODOS,
     HIVE_TABLE_NODOS_MAESTRO,
     HIVE_TABLE_TRANSPORTE_HIST,
@@ -56,7 +59,10 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
     },
     "pagerank_top": {
         "titulo": "PageRank — criticidad de nodos",
-        "cql": "SELECT id_nodo, pagerank, ultima_actualizacion FROM pagerank_nodos LIMIT 100",
+        "cql": (
+            "SELECT id_nodo, pagerank, peso_pagerank, source, estado, ultima_actualizacion "
+            "FROM pagerank_nodos LIMIT 100"
+        ),
     },
     "eventos_recientes": {
         "titulo": "Eventos históricos (Cassandra, ventana TTL)",
@@ -82,7 +88,10 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
     },
     "gestor_nodo_critico_pagerank": {
         "titulo": "Gestor — nodo logístico más crítico (PageRank; ordenar en cliente)",
-        "cql": "SELECT id_nodo, pagerank, ultima_actualizacion FROM pagerank_nodos LIMIT 500",
+        "cql": (
+            "SELECT id_nodo, pagerank, peso_pagerank, source, estado, ultima_actualizacion "
+            "FROM pagerank_nodos LIMIT 500"
+        ),
     },
 }
 
@@ -116,12 +125,133 @@ def ejecutar_cassandra_consulta(codigo: str) -> Tuple[bool, str, List[Dict[str, 
         return False, str(e), []
 
 
+def ejecutar_cassandra_cql_seguro(cql: str) -> Tuple[bool, str, List[Dict[str, Any]]]:
+    """
+    Ejecuta CQL de solo lectura para la UI (copiar/pegar).
+    Restringido a SELECT.
+    """
+    cql = (cql or "").strip().rstrip(";")
+    u = cql.upper().lstrip()
+    if not u.startswith("SELECT"):
+        return False, "Solo se permite SELECT en Cassandra (modo seguro)", []
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+        rows = list(session.execute(cql))
+        cluster.shutdown()
+        return True, "", [_row_to_dict(r) for r in rows]
+    except Exception as e:
+        return False, str(e), []
+
+
+def listar_keyspaces_cassandra() -> Tuple[bool, str, List[str]]:
+    """Lista keyspaces Cassandra disponibles."""
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect()
+        meta = cluster.metadata
+        kss = sorted(list(meta.keyspaces.keys()))
+        session.shutdown()
+        cluster.shutdown()
+        return True, "", kss
+    except Exception as e:
+        return False, str(e), []
+
+
+def listar_tablas_cassandra(keyspace: Optional[str] = None) -> Tuple[bool, str, List[str]]:
+    """Descubre tablas del keyspace Cassandra indicado (o el configurado)."""
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect()
+        meta = cluster.metadata
+        ks_name = keyspace or KEYSPACE
+        ks = meta.keyspaces.get(ks_name)
+        if not ks:
+            session.shutdown()
+            cluster.shutdown()
+            return False, f"Keyspace no encontrado: {ks_name}", []
+        tablas = sorted(list(ks.tables.keys()))
+        session.shutdown()
+        cluster.shutdown()
+        return True, "", tablas
+    except Exception as e:
+        return False, str(e), []
+
+
+def listar_columnas_cassandra(tabla: str, keyspace: Optional[str] = None) -> Tuple[bool, str, List[str]]:
+    """Lista columnas de una tabla Cassandra en el keyspace indicado (o configurado)."""
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect()
+        meta = cluster.metadata
+        ks_name = keyspace or KEYSPACE
+        ks = meta.keyspaces.get(ks_name)
+        if not ks:
+            session.shutdown()
+            cluster.shutdown()
+            return False, f"Keyspace no encontrado: {ks_name}", []
+        tb = ks.tables.get(tabla)
+        if not tb:
+            session.shutdown()
+            cluster.shutdown()
+            return False, f"Tabla no encontrada: {ks_name}.{tabla}", []
+        cols = sorted(list(tb.columns.keys()))
+        session.shutdown()
+        cluster.shutdown()
+        return True, "", cols
+    except Exception as e:
+        return False, str(e), []
+
+
+def listar_tablas_hive() -> Tuple[bool, str, List[str]]:
+    """Lista tablas Hive de la DB configurada."""
+    ok, err, out = ejecutar_hive_sql_seguro(f"SHOW TABLES IN {HIVE_DB_NAME}")
+    if not ok:
+        return False, err or "Error Hive", []
+    lineas = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    if len(lineas) <= 1:
+        return True, "", []
+    tablas: List[str] = []
+    for ln in lineas[1:]:
+        partes = ln.split("\t")
+        tablas.append(partes[-1].strip())
+    return True, "", sorted(list({t for t in tablas if t}))
+
+
+def listar_columnas_hive(tabla: str) -> Tuple[bool, str, List[str]]:
+    """Lista columnas Hive con DESCRIBE, ignorando metadata extendida."""
+    ok, err, out = ejecutar_hive_sql_seguro(f"DESCRIBE {HIVE_DB_NAME}.{tabla}")
+    if not ok:
+        return False, err or "Error Hive", []
+    cols: List[str] = []
+    for ln in (out or "").splitlines():
+        if not ln.strip() or ln.lower().startswith("col_name"):
+            continue
+        partes = ln.split("\t")
+        c = (partes[0] if partes else "").strip()
+        if not c or c.startswith("#"):
+            continue
+        if c.lower().startswith("detailed table information"):
+            break
+        cols.append(c)
+    return True, "", cols
+
+
 # --- Hive (solo SELECT, whitelist) ---
 
 # Nombres físicos: `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y `SIMLOG_HIVE_TABLE_NODOS_MAESTRO` (config.py).
 HIVE_DB_NAME = HIVE_DB or "logistica_espana"
 _T_HIST = HIVE_TABLE_HISTORICO_NODOS
 _T_MAESTRO = HIVE_TABLE_NODOS_MAESTRO
+_T_TRANSP = HIVE_TABLE_TRANSPORTE_HIST
 
 HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     "diag_smoke_hive": {
@@ -160,19 +290,52 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
         "sql": f"SELECT src, dst, distancia_km FROM {HIVE_DB_NAME}.red_gemelo_aristas",
     },
     "transporte_ingesta_real_muestra": {
-        "titulo": "transporte_ingesta_real — camiones (struct)",
+        "titulo": "Transporte histórico — camiones normalizados",
         "sql": (
-            f"SELECT camiones.id AS id, camiones.posicion_actual.lat AS lat, "
-            f"camiones.posicion_actual.lon AS lon, camiones.progreso_pct AS progreso_pct "
-            f"FROM {HIVE_DB_NAME}.transporte_ingesta_real LIMIT 500"
+            f"SELECT id_camion AS id, lat, lon, progreso_pct, origen, destino, estado_ruta "
+            f"FROM {HIVE_DB_NAME}.{_T_TRANSP} LIMIT 500"
         ),
     },
     "gestor_historial_rutas_camion": {
-        "titulo": "Gestor — historial de rutas por camión (Hive; tabla configurable)",
-        "sql": (
-            f"SELECT * FROM {HIVE_DB_NAME}.{HIVE_TABLE_TRANSPORTE_HIST} "
-            "WHERE id_camion = 'camion_1' LIMIT 100"
-        ),
+        "titulo": "Gestor — histórico transporte (Hive; robusto con camiones raw)",
+        # En varios entornos `camiones` llega como STRING y no como array<struct>.
+        # Esta versión devuelve histórico util sin depender del parseo estructurado.
+        "sql": os.environ.get("SIMLOG_HIVE_SQL_HISTORIAL_CAMION", "").strip()
+        or f"""
+SELECT
+  t.`timestamp`,
+  t.camiones
+FROM {HIVE_DB_NAME}.{HIVE_TABLE_TRANSPORTE_HIST} t
+WHERE t.id_camion IS NOT NULL
+LIMIT 200
+        """.strip(),
+    },
+    "gestor_historico_incidencias_24h": {
+        "titulo": "Gestor — histórico incidencias nodos (24h)",
+        "sql": f"""
+SELECT
+  h.id_nodo,
+  h.tipo,
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 300
+        """.strip(),
+    },
+    "gestor_historico_evolucion_nodos_24h": {
+        "titulo": "Gestor — evolución estados por nodo (24h)",
+        "sql": f"""
+SELECT
+  h.id_nodo,
+  h.estado,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 400
+        """.strip(),
     },
     "historico_nodos_muestra_24h": {
         "titulo": "Muestra histórico (últimas 24h) — nodos",
@@ -184,187 +347,66 @@ SELECT
     h.clima_actual,
     h.fecha_proceso
 FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
 LIMIT 20
         """.strip(),
     },
     "severidad_resumen_24h": {
         "titulo": "Resumen severidad (últimas 24h) — estado derivado",
+        # En entornos standalone (sin Tez/YARN) las agregaciones suelen disparar MapReduce y fallar.
+        # Devolvemos una muestra "segura" para que la UI no reviente.
         "sql": f"""
-WITH base AS (
-    SELECT lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm
-    FROM {HIVE_DB_NAME}.{_T_HIST} h
-    WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
-),
-clasif AS (
-    SELECT
-        CASE
-            WHEN estado_norm LIKE '%bloque%' THEN 'Bloqueado'
-            WHEN estado_norm LIKE '%congest%' THEN 'Congestionado'
-            ELSE 'OK'
-        END AS severidad
-    FROM base
-)
 SELECT
-    severidad,
-    COUNT(*) AS muestras
-FROM clasif
-GROUP BY severidad
-ORDER BY muestras DESC
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 200
         """.strip(),
     },
     "diag_fecha_proceso_24h": {
         "titulo": f"Diagnóstico — rango y registros (últimas 24h) en {_T_HIST}",
+        # Evitar MIN/MAX/COUNT (agregación) por el mismo motivo que arriba.
         "sql": f"""
 SELECT
-  MIN(h.fecha_proceso) AS min_fecha_proceso,
-  MAX(h.fecha_proceso) AS max_fecha_proceso,
-  COUNT(*) AS registros_24h
+  h.id_nodo,
+  h.fecha_proceso
 FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 200
         """.strip(),
     },
     "riesgo_hub_24h": {
         "titulo": "Riesgo por hub (últimas 24h) — incidencia derivada",
+        # Versión "safe": evita CTEs + agregaciones (MapReduce) y devuelve filas por hub para que
+        # el dashboard pueda mostrar/filtrar en cliente.
         "sql": f"""
-WITH base AS (
-  SELECT
-    COALESCE(
-      m.hub,
-      CASE WHEN lower(COALESCE(h.tipo,'')) = 'hub' THEN h.id_nodo ELSE 'Desconocido' END
-    ) AS hub,
-    lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm,
-    lower(regexp_replace(COALESCE(h.motivo_retraso,''), 'ó', 'o')) AS motivo_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_desc_norm
-  FROM {HIVE_DB_NAME}.{_T_HIST} h
-  LEFT JOIN {HIVE_DB_NAME}.{_T_MAESTRO} m ON h.id_nodo = m.id_nodo
-  WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
-),
-clasif AS (
-  SELECT
-    hub,
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN 'Bloqueado'
-      WHEN estado_norm LIKE '%congest%' THEN 'Congestionado'
-      ELSE 'OK'
-    END AS severidad,
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%accidente%' OR motivo_norm LIKE '%colision%' OR motivo_norm LIKE '%choque%' THEN 'Bloqueo - Accidente'
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Bloqueo - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Bloqueo - Clima'
-          ELSE 'Bloqueo - Otros'
-        END
-      WHEN estado_norm LIKE '%congest%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Congestion - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Congestion - Clima'
-          WHEN motivo_norm LIKE '%trafico%' OR motivo_norm LIKE '%tráfico%' THEN 'Congestion - Trafico'
-          ELSE 'Congestion - Otros'
-        END
-      ELSE 'OK'
-    END AS tipo_incidencia
-  FROM base
-),
-agg AS (
-  SELECT
-    hub,
-    severidad,
-    tipo_incidencia,
-    COUNT(*) AS muestras
-  FROM clasif
-  GROUP BY hub, severidad, tipo_incidencia
-),
-totales AS (
-  SELECT hub, SUM(muestras) AS total_muestras
-  FROM agg
-  GROUP BY hub
-)
 SELECT
-  a.hub,
-  a.severidad,
-  a.tipo_incidencia,
-  a.muestras,
-  ROUND((a.muestras * 100.0) / NULLIF(t.total_muestras, 0), 2) AS pct_muestras,
-  CAST(
-    ROUND(((a.muestras * 100.0) / NULLIF(t.total_muestras, 0)) / 100.0 * 1440, 0)
-    AS INT
-  ) AS duracion_aprox_min
-FROM agg a
-JOIN totales t ON a.hub = t.hub
-WHERE a.severidad <> 'OK'
-ORDER BY a.hub, a.muestras DESC
+  h.id_nodo,
+  h.tipo,
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 500
         """.strip(),
     },
     "top_causas_24h": {
         "titulo": "Top causas (últimas 24h) — incidencia derivada",
+        # Versión "safe": sin agregaciones.
         "sql": f"""
-WITH base AS (
-  SELECT
-    lower(regexp_replace(COALESCE(h.estado,''), 'ó', 'o')) AS estado_norm,
-    lower(regexp_replace(COALESCE(h.motivo_retraso,''), 'ó', 'o')) AS motivo_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_norm,
-    lower(regexp_replace(COALESCE(h.clima_actual,''), 'ó', 'o')) AS clima_desc_norm
-  FROM {HIVE_DB_NAME}.{_T_HIST} h
-  WHERE h.fecha_proceso >= timestampadd(HOUR, -24, current_timestamp())
-),
-clasif AS (
-  SELECT
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN 'Bloqueado'
-      WHEN estado_norm LIKE '%congest%' THEN 'Congestionado'
-      ELSE 'OK'
-    END AS severidad,
-    CASE
-      WHEN estado_norm LIKE '%bloque%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%accidente%' OR motivo_norm LIKE '%colision%' OR motivo_norm LIKE '%choque%' THEN 'Bloqueo - Accidente'
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Bloqueo - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Bloqueo - Clima'
-          ELSE 'Bloqueo - Otros'
-        END
-      WHEN estado_norm LIKE '%congest%' THEN
-        CASE
-          WHEN motivo_norm LIKE '%obra%' OR motivo_norm LIKE '%obras%' THEN 'Congestion - Obras'
-          WHEN clima_norm LIKE '%niebla%' OR clima_norm LIKE '%lluvia%' OR clima_norm LIKE '%nieve%' OR clima_norm LIKE '%tormenta%'
-            OR clima_desc_norm LIKE '%niebla%' OR clima_desc_norm LIKE '%lluvia%' OR clima_desc_norm LIKE '%nieve%' OR clima_desc_norm LIKE '%tormenta%' THEN 'Congestion - Clima'
-          WHEN motivo_norm LIKE '%trafico%' OR motivo_norm LIKE '%tráfico%' THEN 'Congestion - Trafico'
-          ELSE 'Congestion - Otros'
-        END
-      ELSE 'OK'
-    END AS tipo_incidencia
-  FROM base
-),
-agg AS (
-  SELECT
-    severidad,
-    tipo_incidencia,
-    COUNT(*) AS muestras
-  FROM clasif
-  WHERE tipo_incidencia <> 'OK'
-  GROUP BY severidad, tipo_incidencia
-),
-totales AS (
-  SELECT SUM(muestras) AS total_muestras FROM agg
-)
 SELECT
-  a.severidad,
-  a.tipo_incidencia,
-  a.muestras,
-  ROUND((a.muestras * 100.0) / NULLIF(t.total_muestras, 0), 2) AS pct_muestras,
-  CAST(
-    ROUND(((a.muestras * 100.0) / NULLIF(t.total_muestras, 0)) / 100.0 * 1440, 0)
-    AS INT
-  ) AS duracion_aprox_min_24h
-FROM agg a
-CROSS JOIN totales t
-ORDER BY a.muestras DESC
-LIMIT 10
+  h.estado,
+  h.motivo_retraso,
+  h.clima_actual,
+  h.fecha_proceso
+FROM {HIVE_DB_NAME}.{_T_HIST} h
+WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+LIMIT 200
         """.strip(),
     },
 }
@@ -441,20 +483,21 @@ def _ejecutar_hive_pyhive(sql: str) -> Tuple[bool, str, str]:
 
 def ejecutar_hive_sql_seguro(sql: str) -> Tuple[bool, str, str]:
     """
-    Ejecuta HiveQL de solo lectura (SHOW / SELECT / WITH) vía PyHive.
+    Ejecuta HiveQL de solo lectura (SHOW / SELECT / WITH / DESCRIBE) vía PyHive.
     Para integraciones que construyen el SQL en servidor (p. ej. asistente de flota).
     """
     sql = sql.strip()
     u = sql.upper().lstrip()
-    if not (u.startswith("SHOW") or u.startswith("SELECT") or u.startswith("WITH")):
-        return False, "Solo se permiten SHOW, SELECT o WITH", ""
+    if not (
+        u.startswith("SHOW")
+        or u.startswith("SELECT")
+        or u.startswith("WITH")
+        or u.startswith("DESCRIBE")
+        or u.startswith("DESC ")
+    ):
+        return False, "Solo se permiten SHOW, SELECT, WITH o DESCRIBE", ""
     timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_ejecutar_hive_pyhive, sql)
-        try:
-            return fut.result(timeout=timeout)
-        except FuturesTimeout:
-            return False, f"Timeout PyHive ({timeout}s)", ""
+    return _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
 
 
 def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
@@ -472,12 +515,7 @@ def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
     if " AS SELECT * FROM " not in u:
         return False, "CREATE VIEW interno restringido a 'AS SELECT * FROM ...'.", ""
     timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_ejecutar_hive_pyhive, sql)
-        try:
-            return fut.result(timeout=timeout)
-        except FuturesTimeout:
-            return False, f"Timeout PyHive ({timeout}s)", ""
+    return _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
 
 
 def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
@@ -499,14 +537,8 @@ def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
     sql_u = sql.upper().lstrip()
     can_fallback = sql_u.startswith("SELECT") or sql_u.startswith("WITH")
 
-    timed_out = False
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_ejecutar_hive_pyhive, sql)
-        try:
-            ok, err, out = fut.result(timeout=timeout)
-        except FuturesTimeout:
-            timed_out = True
-            ok, err, out = False, "", ""
+    ok, err, out = _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
+    timed_out = err.startswith("Timeout PyHive")
 
     if ok:
         return True, "", out
@@ -545,14 +577,21 @@ def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
 def _get_spark_hive_session():
     """
     SparkSession con catálogo Hive (metastore local embebido).
-    No comparte el proceso con HiveServer2: si Derby ya está abierto por HS2, fallará con XSDB6.
+    Usa el metastore thrift compartido para no abrir Derby embebido en paralelo.
     """
     from pyspark.sql import SparkSession
 
+    os.environ.setdefault("HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("SIMLOG_HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("HIVE_METASTORE_URIS", HIVE_METASTORE_URIS)
     return (
         SparkSession.builder.master("local[*]")
         .appName("SIMLOG_HiveQueryUI")
         .config("spark.sql.warehouse.dir", "/user/hive/warehouse")
+        .config("spark.sql.catalogImplementation", "hive")
+        .config("spark.hadoop.hive.metastore.warehouse.dir", "/user/hive/warehouse")
+        .config("spark.hadoop.hive.metastore.uris", HIVE_METASTORE_URIS)
+        .config("hive.metastore.uris", HIVE_METASTORE_URIS)
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -594,6 +633,26 @@ def _ejecutar_hive_consulta_spark(sql: str, max_rows: int = 2000) -> Tuple[bool,
                 "",
             )
         return False, msg, ""
+
+
+def _ejecutar_hive_pyhive_con_timeout(sql: str, timeout: int) -> Tuple[bool, str, str]:
+    """
+    Ejecuta PyHive en un hilo daemon para que un timeout no bloquee la salida del proceso.
+    """
+    queue: Queue[Tuple[bool, str, str]] = Queue(maxsize=1)
+
+    def _runner() -> None:
+        try:
+            queue.put(_ejecutar_hive_pyhive(sql))
+        except Exception as exc:
+            queue.put((False, str(exc), ""))
+
+    thread = Thread(target=_runner, name="simlog-hive-query", daemon=True)
+    thread.start()
+    try:
+        return queue.get(timeout=timeout)
+    except Exception:
+        return False, f"Timeout PyHive ({timeout}s)", ""
 
 
 def listar_claves_cassandra() -> List[str]:

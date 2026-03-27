@@ -27,6 +27,11 @@ Documento funcional para la plataforma en modo standalone.
 | CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
 | CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
 | CU-12 | Desplegar clúster didáctico en GitHub Codespaces | Operador / Docente | Hadoop+Spark+Kafka+Jupyter en perfil aislado `*.codespaces.*` |
+| CU-13 | Generar informes a medida (plantillas + PDF) | Analista / Operador | Informe personalizado por tabla/campos/filtros y export PDF |
+| CU-14 | Navegar por buscador semántico del dashboard | Analista / Operador | Hallazgos rápidos y salto directo a secciones/pestañas |
+| CU-15 | Resolver dudas operativas con FAQ IA | Analista / Operador | Respuesta semántica local con sugerencias y fuentes |
+| CU-16 | Integrar incidencias reales DATEX2 DGT | Operador / Programador | Snapshot enriquecido con señal real y prioridad sobre simulación |
+| CU-17 | Auditar procedencia de la ingesta en NiFi | Operador | Trazabilidad por relaciones y atributos de provenance |
 
 ## Detalle breve
 
@@ -34,6 +39,7 @@ Documento funcional para la plataforma en modo standalone.
 
 - **Precondiciones:** HDFS, Kafka, Cassandra (y opcionalmente Hive) activos.
 - **Flujo:** ingesta genera JSON → Kafka + HDFS → Spark procesa → Cassandra + Hive.
+- **Variante real:** si DATEX2 DGT está disponible, la ingesta añade incidencias reales; si falla, usa caché o sigue solo con simulación.
 - **Disparadores:** Streamlit “Paso siguiente”, Airflow `dag_maestro_smart_grid`, DAGs `simlog_kdd_*`, NiFi.
 
 ### CU-02 — Supervisar el stack
@@ -68,6 +74,8 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-08 — NiFi
 
 - **Documentación:** `nifi/README_NIFI.md`, especificación de flujo en `nifi/flow/`.
+- **Relaciones clave:** `Build_GPS_Sintetico -> OpenWeather_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload`.
+- **Provenance:** atributos `simlog.provenance.stage`, `simlog.provenance.sources`, `simlog.provenance.dgt_mode`, `simlog.provenance.dgt_incidents`.
 
 ### CU-09 — Explorar ciclo KDD en Streamlit
 
@@ -96,6 +104,36 @@ Documento funcional para la plataforma en modo standalone.
 - **Postcondición:** clúster docente disponible sin alterar el `docker-compose.yml` principal.
 - **Documentación:** `docs/CODESPACES_CLUSTER.md`.
 
+### CU-13 — Informes a medida (Cassandra/Hive)
+
+- **Entrada:** selección de motor, tabla y campos (o `SELECT *`), filtros, orden y límite.
+- **Flujo:** el constructor genera consulta segura de lectura, muestra vista previa y permite guardar plantilla.
+- **Salida:** descarga de informe PDF y reutilización por plantilla.
+
+### CU-14 — Búsqueda semántica en cabecera
+
+- **Entrada:** texto libre (ej. “swagger”, “historico hive”, “rutas alternativas”).
+- **Flujo:** matching semántico sobre catálogo funcional y botón `Ir a ...`.
+- **Salida:** apertura directa de la sección objetivo en la navegación principal.
+
+### CU-15 — FAQ IA (preguntas frecuentes de operación)
+
+- **Entrada:** pregunta libre (ej. “¿cómo genero un informe PDF?” o “¿por qué NiFi no aparece activo?”).
+- **Flujo:** la pestaña **Servicios** consulta `servicios/api_faq_ia.py`, que busca coincidencias en `servicios/faq_knowledge_base.json` y devuelve respuesta, confianza, coincidencia principal, sugerencias y fuentes.
+- **Salida:** respuesta operativa inmediata sin salir del dashboard; posibilidad de reutilizar preguntas del historial.
+
+### CU-16 — Integrar DATEX2 DGT
+
+- **Entrada:** feed XML DATEX2 v3.6 de la DGT.
+- **Flujo:** `ingesta/ingesta_dgt_datex2.py` descarga/parsing -> mapeo a nodos -> merge con simulación -> publicación en Kafka/HDFS -> Spark recalcula criticidad.
+- **Salida:** nodos afectados con `source=dgt`, `severity`, `peso_pagerank` y evidencia en `transporte_dgt_raw`.
+
+### CU-17 — Auditar procedencia de la ingesta en NiFi
+
+- **Entrada:** evento generado por `PG_SIMLOG_KDD`.
+- **Flujo:** revisar `Data Provenance` y atributos `simlog.provenance.*` en los procesadores de merge.
+- **Salida:** trazabilidad sobre qué datos proceden de simulación, OpenWeather y DGT y en qué etapa se mezclaron.
+
 ---
 
 ## Diagrama de casos de uso (Mermaid)
@@ -123,6 +161,11 @@ flowchart LR
     CU10[CU-10 Asistente de Flota]
     CU11[CU-11 Graph AI anomalías]
     CU12[CU-12 Cluster Codespaces]
+    CU13[CU-13 Informes a medida]
+    CU14[CU-14 Buscador semántico]
+    CU15[CU-15 FAQ IA]
+    CU16[CU-16 Integrar DATEX2 DGT]
+    CU17[CU-17 Auditar provenance NiFi]
   end
   OP --> CU1
   OP --> CU2
@@ -141,4 +184,13 @@ flowchart LR
   AN --> CU11
   OP --> CU12
   PR --> CU12
+  OP --> CU13
+  AN --> CU13
+  OP --> CU14
+  AN --> CU14
+  OP --> CU15
+  AN --> CU15
+  OP --> CU16
+  PR --> CU16
+  OP --> CU17
 ```

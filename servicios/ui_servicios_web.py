@@ -3,7 +3,7 @@ URLs y credenciales de las interfaces web de cada servicio (configurables por en
 
 Variables recomendadas (ejemplo en `.env` o shell):
   SIMLOG_UI_HDFS_URL, SIMLOG_UI_HDFS_PORT, SIMLOG_UI_HDFS_USER, SIMLOG_UI_HDFS_PASSWORD
-  … análogo para KAFKA, CASSANDRA, SPARK, HIVE, AIRFLOW, NIFI
+  … análogo para KAFKA, CASSANDRA, SPARK, HIVE, AIRFLOW, API, FAQ_IA, NIFI
 
 Si SIMLOG_UI_REVEAL_SECRETS=1, se muestran contraseñas en claro (solo entornos de confianza).
 """
@@ -115,6 +115,24 @@ def _defaults() -> dict[str, InterfazWebServicio]:
             usuario="admin",
             password_env="SIMLOG_UI_AIRFLOW_PASSWORD",
             nota="Web / API Airflow 2.x (normal recomendado en este stack: 8088 para no chocar con Spark 8080). Crea usuario con `airflow users create` y define credenciales en variables de entorno.",
+        ),
+        "api": InterfazWebServicio(
+            servicio_id="api",
+            nombre="Swagger API (FastAPI)",
+            url=f"http://{h}:8090/docs",
+            puerto="8090",
+            usuario="",
+            password_env="SIMLOG_UI_API_PASSWORD",
+            nota="Swagger UI para la API REST (`/docs`) y esquema OpenAPI (`/openapi.json`).",
+        ),
+        "faq_ia": InterfazWebServicio(
+            servicio_id="faq_ia",
+            nombre="FAQ IA API (FastAPI)",
+            url=f"http://{h}:8091/docs",
+            puerto="8091",
+            usuario="",
+            password_env="SIMLOG_UI_FAQ_IA_PASSWORD",
+            nota="Swagger UI del microservicio FAQ IA (`/docs`) y endpoint de preguntas `/api/v1/faq/ask`.",
         ),
         "nifi": InterfazWebServicio(
             servicio_id="nifi",

@@ -9,9 +9,9 @@ package "UI Ciclo KDD" {
 }
 component "NiFi\nPG_SIMLOG_KDD" as NiFi
 component "Airflow\nDAGs" as Airflow
-component "Ingesta\ningesta_kdd.py" as Ingesta
+component "Ingesta\ningesta_kdd.py + ingesta_dgt_datex2.py" as Ingesta
 component "Spark\nprocesamiento_grafos.py" as Spark
-database "Kafka\nraw/filtered" as Kafka
+database "Kafka\ndgt_raw/raw/filtered" as Kafka
 database "HDFS\nbackup" as HDFS
 database "Cassandra\noperacional" as Cas
 database "Hive\nhistórico + analítica incidencias 24h" as Hive

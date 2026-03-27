@@ -49,6 +49,32 @@ uvicorn servicios.api_simlog:app --host 0.0.0.0 --port 8090
 
 Las rutas bajo `/api/v1/datos/*` devuelven listas vacías si Cassandra no está disponible o no hay datos (mismo criterio que el dashboard Streamlit).
 
+## FAQ IA API
+
+Microservicio complementario para preguntas frecuentes sobre el proyecto, sin dependencia de servicios externos:
+
+```bash
+cd ~/proyecto_transporte_global
+source venv_transporte/bin/activate
+uvicorn servicios.api_faq_ia:app --host 0.0.0.0 --port 8091
+```
+
+- **Swagger UI (interactivo):** http://localhost:8091/docs
+- **ReDoc:** http://localhost:8091/redoc
+- **Esquema OpenAPI (JSON):** http://localhost:8091/openapi.json
+
+### Endpoints FAQ (resumen)
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/health` | Liveness del servicio FAQ IA |
+| GET | `/api/v1/faq/questions` | Lista de preguntas cargadas desde la KB |
+| POST | `/api/v1/faq/ask` | Resuelve una pregunta y devuelve respuesta, confianza, sugerencias y fuentes |
+
+Base de conocimiento:
+
+- `servicios/faq_knowledge_base.json`
+
 ## Integración con otras aplicaciones
 
 1. Importar el contrato desde `openapi.json` (generadores de cliente: OpenAPI Generator, `openapi-typescript`, etc.).
