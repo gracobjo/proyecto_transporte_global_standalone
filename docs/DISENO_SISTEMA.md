@@ -11,8 +11,8 @@ SIMLOG implementa un ciclo KDD logístico de extremo a extremo con foco en:
 
 ## Arquitectura lógica (capas)
 
-1. **Ingesta** — `ingesta_kdd.py` y/o NiFi: snapshot cada ~15 min (clima, red, GPS).
-2. **Mensajería y backup** — Kafka (`transporte_raw`, `transporte_filtered`) y HDFS (`HDFS_BACKUP_PATH`).
+1. **Ingesta** — `ingesta_kdd.py` y/o NiFi: snapshot cada ~15 min (clima, red, GPS), con OpenWeather opcional y respaldo meteorológico DGT.
+2. **Mensajería y backup** — Kafka (`transporte_dgt_raw`, `transporte_raw`, `transporte_filtered`) y HDFS (`HDFS_BACKUP_PATH`).
 3. **Procesamiento** — Spark (`procesamiento/procesamiento_grafos.py`): grafo, autosanación, PageRank.
 4. **Persistencia** — Cassandra (operativo) y Hive (histórico y analítica de incidencias para reporting 24h).
 5. **Orquestación** — Airflow (DAGs en `~/airflow/dags`, código en `orquestacion/`), NiFi (trigger), scripts de stack.
@@ -39,7 +39,7 @@ No funcionales reforzados:
 
 La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **documentar en vivo** el alineamiento fase ↔ código ↔ datos. Diseño detallado: **[DASHBOARD_KDD_UI.md](DASHBOARD_KDD_UI.md)**.
 
-- **Fases 1–2**: simulación por paso, vista de `camiones` y `clima_hubs` desde `reports/kdd/work/ultimo_payload.json`, prueba de OpenWeather con API key opcional en formulario.
+- **Fases 1–2**: simulación por paso, vista de `camiones` y `clima_hubs` desde `reports/kdd/work/ultimo_payload.json`, prueba de OpenWeather con API key opcional en formulario y visibilidad de `source` / `fallback_activo` cuando entra el respaldo DGT.
 - **Fases 3–5**: reglas de negocio en un solo bloque markdown; **una** vista topológica Altair (misma red); mapa geográfico solo en otras pestañas.
 - **Lista completa de fases**: sin duplicar widgets interactivos (solo resumen textual).
 
@@ -58,6 +58,7 @@ La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **
 | SQL/CQL seguro en frontend | Permitir exploración del dato sin abrir riesgo de escritura/borrado accidental |
 | Plantillas de informe en JSON | Reutilización operativa y generación PDF consistente para negocio |
 | Navegación por buscador semántico | Reducir tiempo de acceso a funciones cuando aumenta el número de pestañas/servicios |
+| Respaldo meteorológico DGT | Mantener continuidad funcional del snapshot aunque OpenWeather no responda o la clave no sea válida |
 
 ## Perfil de despliegue: clúster en GitHub Codespaces
 
@@ -83,7 +84,8 @@ Este perfil levanta Hadoop+Spark+Kafka+Jupyter con límites de recursos conserva
 1. Arrancar stack: `python -u scripts/simlog_stack.py start` (o DAG de arranque en Airflow).
 2. Comprobar: `… status` o panel de servicios.
 3. Ejecutar pipeline: DAG maestro cada 15 min y/o cadena `simlog_kdd_01_seleccion` … (si servicios ya están arriba).
-4. Parar demo: `… stop`.
+4. Si OpenWeather no responde, validar que el payload entra con `source=dgt` y `fallback_activo=true` en `clima_hubs`.
+5. Parar demo: `… stop`.
 
 ## Restricciones
 
@@ -99,6 +101,7 @@ Este perfil levanta Hadoop+Spark+Kafka+Jupyter con límites de recursos conserva
 flowchart TB
   subgraph Externos
     OWM[OpenWeather API]
+    DGT[DGT DATEX2]
   end
   subgraph SIMLOG
     ING[Ingesta / NiFi]
@@ -111,6 +114,7 @@ flowchart TB
     UI[Streamlit]
   end
   OWM --> ING
+  DGT --> ING
   ING --> K
   ING --> H
   SP --> K
@@ -134,6 +138,10 @@ flowchart LR
     AFD[DAGs Airflow]
     NIF[NiFi]
   end
+  subgraph Fuentes_externas
+    OWM[OpenWeather]
+    DGT[DGT DATEX2]
+  end
   subgraph Datos
     KF[Kafka]
     HD[HDFS]
@@ -152,6 +160,8 @@ flowchart LR
   ST --> FAPI
   AFU --> AFD
   AFD --> SPK
+  OWM --> NIF
+  DGT --> NIF
   NIF --> KF
   NIF --> HD
   SPK --> KF

@@ -61,6 +61,7 @@ from servicios.kdd_reglas_ui import render_panel_reglas_grafo
 from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
 from servicios.ui_faq_ia import render_faq_ia_panel
 from servicios.ui_pruebas_ingesta import render_pruebas_ingesta_tab
+from servicios.ui_nifi_flujo import render_nifi_flujo_tab
 from servicios.pruebas_ingesta import registrar_prueba_ingesta
 from servicios.pipeline_verificacion import leer_ultima_ingesta
 
@@ -79,6 +80,7 @@ TAB_LABELS = [
     "Ciclo KDD",
     "Resultados pipeline",
     "Pruebas",
+    "Flujo NiFi",
     "Cuadro de mando",
     "Asistente flota",
     "Rutas híbridas",
@@ -129,6 +131,7 @@ def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
         {"tab": "Resultados pipeline", "titulo": "Resultado de fases y persistencia", "keywords": "pipeline resultado fases ingesta spark"},
         {"tab": "Resultados pipeline", "titulo": "Estado DGT y alertas de bloqueos", "keywords": "dgt datex2 live cache disabled alertas bloqueos provenance"},
         {"tab": "Pruebas", "titulo": "Registro de pruebas y trazabilidad", "keywords": "pruebas test evidencias nifi airflow script ingesta historico"},
+        {"tab": "Flujo NiFi", "titulo": "Canvas, procesadores y relaciones NiFi", "keywords": "nifi procesadores relaciones provenance canvas openweather dgt kafka hdfs"},
         {"tab": "Verificación técnica", "titulo": "Checks rápidos HDFS/Kafka/Cassandra", "keywords": "verificacion tecnica hdfs kafka cassandra checks"},
         {"tab": "Ciclo KDD", "titulo": "Fases KDD y ejecución por fase", "keywords": "kdd fases seleccion preprocesamiento transformacion mineria interpretacion"},
         {"tab": "Gemelo digital", "titulo": "Visualización del gemelo y red", "keywords": "gemelo digital red nodos aristas"},
@@ -686,6 +689,9 @@ def main() -> None:
 
     if active_tab == "Pruebas":
         render_pruebas_ingesta_tab()
+
+    if active_tab == "Flujo NiFi":
+        render_nifi_flujo_tab()
 
     if active_tab == "Cuadro de mando":
         render_cuadro_mando_tab()

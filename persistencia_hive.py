@@ -10,19 +10,311 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, TimestampType
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-HIVE_DB = "logistica_db"
+import os
+
+from config import (
+    HDFS_NAMENODE,
+    HIVE_BEELINE_USER,
+    HIVE_CONF_DIR,
+    HIVE_DB,
+    HIVE_METASTORE_URIS,
+    HIVE_TABLE_TRANSPORTE_HIST,
+)
 
 TABLA_EVENTOS = "eventos_historico"
 TABLA_CAMIONES = "tracking_camiones_historico"
 TABLA_CLIMA = "clima_historico"
 TABLA_RUTAS = "rutas_alternativas_historico"
 TABLA_AGG = "agg_estadisticas_diarias"
+TABLA_TRANSPORTE = HIVE_TABLE_TRANSPORTE_HIST
+HIVE_COMPAT_BASE = os.environ.get("SIMLOG_HIVE_COMPAT_BASE", "/user/hadoop/simlog_hive")
+CSV_SERDE = "org.apache.hadoop.hive.serde2.OpenCSVSerde"
+HDFS_DEFAULT_FS = os.environ.get(
+    "SIMLOG_HDFS_DEFAULT_FS",
+    os.environ.get(
+        "HDFS_DEFAULT_FS",
+        "hdfs://nodo1:9000" if HDFS_NAMENODE.startswith(("127.", "localhost")) else f"hdfs://{HDFS_NAMENODE}",
+    ),
+)
+
+TABLE_PATHS = {
+    TABLA_EVENTOS: f"{HIVE_COMPAT_BASE}/{TABLA_EVENTOS}",
+    TABLA_CLIMA: f"{HIVE_COMPAT_BASE}/{TABLA_CLIMA}",
+    TABLA_CAMIONES: f"{HIVE_COMPAT_BASE}/{TABLA_CAMIONES}",
+    TABLA_RUTAS: f"{HIVE_COMPAT_BASE}/{TABLA_RUTAS}",
+    TABLA_AGG: f"{HIVE_COMPAT_BASE}/{TABLA_AGG}",
+    TABLA_TRANSPORTE: f"{HIVE_COMPAT_BASE}/{TABLA_TRANSPORTE}",
+}
+
+TABLE_SCHEMAS: Dict[str, List[Tuple[str, str]]] = {
+    TABLA_EVENTOS: [
+        ("timestamp", "STRING"),
+        ("anio", "INT"),
+        ("mes", "INT"),
+        ("dia", "INT"),
+        ("hora", "INT"),
+        ("minuto", "INT"),
+        ("dia_semana", "STRING"),
+        ("tipo_evento", "STRING"),
+        ("id_elemento", "STRING"),
+        ("tipo_elemento", "STRING"),
+        ("estado", "STRING"),
+        ("motivo", "STRING"),
+        ("pagerank", "DOUBLE"),
+        ("distancia_km", "DOUBLE"),
+        ("hub_asociado", "STRING"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+    TABLA_CLIMA: [
+        ("timestamp", "STRING"),
+        ("anio", "INT"),
+        ("mes", "INT"),
+        ("dia", "INT"),
+        ("ciudad", "STRING"),
+        ("temperatura", "DOUBLE"),
+        ("humedad", "INT"),
+        ("descripcion", "STRING"),
+        ("visibilidad", "INT"),
+        ("estado_carretera", "STRING"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+    TABLA_CAMIONES: [
+        ("timestamp", "STRING"),
+        ("anio", "INT"),
+        ("mes", "INT"),
+        ("dia", "INT"),
+        ("id_camion", "STRING"),
+        ("origen", "STRING"),
+        ("destino", "STRING"),
+        ("nodo_actual", "STRING"),
+        ("lat_actual", "DOUBLE"),
+        ("lon_actual", "DOUBLE"),
+        ("progreso_pct", "DOUBLE"),
+        ("distancia_total_km", "DOUBLE"),
+        ("tiene_ruta_alternativa", "BOOLEAN"),
+        ("distancia_alternativa_km", "DOUBLE"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+    TABLA_TRANSPORTE: [
+        ("timestamp", "STRING"),
+        ("anio", "INT"),
+        ("mes", "INT"),
+        ("dia", "INT"),
+        ("hora", "INT"),
+        ("minuto", "INT"),
+        ("id_camion", "STRING"),
+        ("origen", "STRING"),
+        ("destino", "STRING"),
+        ("nodo_actual", "STRING"),
+        ("lat", "DOUBLE"),
+        ("lon", "DOUBLE"),
+        ("progreso_pct", "DOUBLE"),
+        ("distancia_total_km", "DOUBLE"),
+        ("estado_ruta", "STRING"),
+        ("motivo_retraso", "STRING"),
+        ("ruta", "STRING"),
+        ("ruta_sugerida", "STRING"),
+        ("hub_actual", "STRING"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+    TABLA_RUTAS: [
+        ("timestamp", "STRING"),
+        ("anio", "INT"),
+        ("mes", "INT"),
+        ("dia", "INT"),
+        ("origen", "STRING"),
+        ("destino", "STRING"),
+        ("ruta_original", "STRING"),
+        ("ruta_alternativa", "STRING"),
+        ("distancia_original_km", "DOUBLE"),
+        ("distancia_alternativa_km", "DOUBLE"),
+        ("motivo_bloqueo", "STRING"),
+        ("ahorro_km", "DOUBLE"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+    TABLA_AGG: [
+        ("anio", "INT"),
+        ("mes", "INT"),
+        ("dia", "INT"),
+        ("tipo_evento", "STRING"),
+        ("estado", "STRING"),
+        ("motivo", "STRING"),
+        ("contador", "INT"),
+        ("pct_total", "DOUBLE"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+}
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalizar_clima(datos: Dict) -> List[Dict]:
+    clima = datos.get("clima")
+    if isinstance(clima, list) and clima:
+        return clima
+    clima_hubs = datos.get("clima_hubs") or {}
+    out = []
+    for ciudad, item in clima_hubs.items():
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "ciudad": ciudad,
+                "temperatura": item.get("temperatura", item.get("temp")),
+                "humedad": item.get("humedad"),
+                "descripcion": item.get("descripcion", ""),
+                "visibilidad": item.get("visibilidad"),
+                "estado_carretera": item.get("estado_carretera"),
+                "timestamp": datos.get("timestamp"),
+            }
+        )
+    return out
+
+
+def _normalizar_camiones(datos: Dict) -> List[Dict]:
+    out = []
+    for camion in datos.get("camiones", []):
+        ruta = camion.get("ruta") or camion.get("ruta_sugerida") or []
+        pos = camion.get("posicion_actual") if isinstance(camion.get("posicion_actual"), dict) else {}
+        lat = camion.get("lat", pos.get("lat"))
+        lon = camion.get("lon", pos.get("lon"))
+        origen = camion.get("ruta_origen") or (ruta[0] if ruta else "")
+        destino = camion.get("ruta_destino") or (ruta[-1] if ruta else "")
+        ruta_sugerida = camion.get("ruta_sugerida") or ruta
+        out.append(
+            {
+                "id_camion": camion.get("id_camion") or camion.get("id") or "UNKNOWN",
+                "origen": origen,
+                "destino": destino,
+                "nodo_actual": camion.get("nodo_actual") or camion.get("origen_tramo") or origen,
+                "lat_actual": _safe_float(lat),
+                "lon_actual": _safe_float(lon),
+                "progreso_pct": _safe_float(camion.get("progreso_pct", camion.get("progreso", 0.0))),
+                "distancia_total_km": _safe_float(camion.get("distancia_total_km")),
+                "tiene_ruta_alternativa": bool(ruta_sugerida and ruta_sugerida != ruta),
+                "distancia_alternativa_km": _safe_float(camion.get("distancia_alternativa_km")),
+                "estado_ruta": camion.get("estado_ruta", "En ruta"),
+                "motivo_retraso": camion.get("motivo_retraso", ""),
+                "ruta": ruta,
+                "ruta_sugerida": ruta_sugerida,
+            }
+        )
+    return out
+
+
+def _hdfs_uri(path: str) -> str:
+    if path.startswith("hdfs://"):
+        return path
+    return f"{HDFS_DEFAULT_FS}{path}"
+
+
+def _hive_connect(database: str | None = None):
+    from pyhive import hive
+
+    host, port = "127.0.0.1", 10000
+    last_error = None
+    for auth in ("NOSASL", "NONE"):
+        try:
+            kwargs = dict(
+                host=host,
+                port=port,
+                username=HIVE_BEELINE_USER,
+                auth=auth,
+            )
+            if database:
+                kwargs["database"] = database
+            return hive.Connection(**kwargs)
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"No se pudo conectar a HiveServer2: {last_error}")
+
+
+def _ejecutar_hive_ddl(sql: str, *, database: str | None = None) -> None:
+    conn = _hive_connect(database=database)
+    cur = conn.cursor()
+    try:
+        cur.execute(sql)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _columnas_actuales(tabla: str) -> List[str]:
+    conn = _hive_connect(database=HIVE_DB)
+    cur = conn.cursor()
+    try:
+        cur.execute(f"DESCRIBE {HIVE_DB}.{tabla}")
+        out = []
+        for row in cur.fetchall():
+            name = (row[0] or "").strip()
+            if not name or name.startswith("#"):
+                continue
+            out.append(name)
+        return out
+    except Exception:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _asegurar_tabla_externa_csv(tabla: str, *, replace: bool = False) -> None:
+    cols = TABLE_SCHEMAS[tabla]
+    location = _hdfs_uri(TABLE_PATHS[tabla])
+    expected_cols = [name for name, _ in cols]
+    current_cols = _columnas_actuales(tabla)
+    if replace or (current_cols and current_cols != expected_cols):
+        _ejecutar_hive_ddl(f"DROP TABLE IF EXISTS {HIVE_DB}.{tabla}", database=HIVE_DB)
+
+    cols_sql = ",\n            ".join(f"`{name}` {dtype}" for name, dtype in cols)
+    ddl = f"""
+        CREATE EXTERNAL TABLE IF NOT EXISTS {HIVE_DB}.{tabla} (
+            {cols_sql}
+        )
+        ROW FORMAT SERDE '{CSV_SERDE}'
+        WITH SERDEPROPERTIES (
+            "separatorChar"=",",
+            "quoteChar"="\\"",
+            "escapeChar"="\\\\"
+        )
+        STORED AS TEXTFILE
+        LOCATION '{location}'
+        TBLPROPERTIES ('skip.header.line.count'='1')
+    """
+    _ejecutar_hive_ddl(ddl, database=HIVE_DB)
+
+
+def _append_external_csv(df, tabla: str) -> None:
+    ordered_cols = [name for name, _ in TABLE_SCHEMAS[tabla]]
+    (
+        df.select(*ordered_cols)
+        .coalesce(1)
+        .write.mode("append")
+        .option("header", "true")
+        .csv(_hdfs_uri(TABLE_PATHS[tabla]))
+    )
 
 
 def crear_spark_hive(app_name: str = "HivePersistence") -> SparkSession:
-    """Crea sesión Spark con soporte Hive y Cassandra."""
+    """Crea sesión Spark enfocada a escribir datasets compatibles con Hive 4."""
+    os.environ.setdefault("HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("SIMLOG_HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("HIVE_METASTORE_URIS", HIVE_METASTORE_URIS)
     return SparkSession.builder \
         .appName(app_name) \
         .master("local[*]") \
@@ -30,110 +322,14 @@ def crear_spark_hive(app_name: str = "HivePersistence") -> SparkSession:
         .config("spark.sql.shuffle.partitions", "2") \
         .config("spark.sql.warehouse.dir", "/user/hive/warehouse") \
         .config("spark.cassandra.connection.host", "127.0.0.1") \
-        .enableHiveSupport() \
         .getOrCreate()
 
 
 def inicializar_esquema_hive(spark: SparkSession) -> None:
-    """Inicializa la base de datos y tablas Hive con esquema optimizado."""
-    
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {HIVE_DB}")
-    spark.sql(f"USE {HIVE_DB}")
-    
-    spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {TABLA_EVENTOS} (
-            timestamp STRING,
-            anio INT,
-            mes INT,
-            dia INT,
-            hora INT,
-            minuto INT,
-            dia_semana STRING,
-            tipo_evento STRING,
-            id_elemento STRING,
-            tipo_elemento STRING,
-            estado STRING,
-            motivo STRING,
-            pagerank DOUBLE,
-            distancia_km DOUBLE,
-            hub_asociado STRING
-        )
-        PARTITIONED BY (anio_part INT, mes_part INT)
-        STORED AS parquet
-        TBLPROPERTIES ('parquet.compression'='SNAPPY')
-    """)
-    
-    spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {TABLA_CLIMA} (
-            timestamp STRING,
-            anio INT,
-            mes INT,
-            dia INT,
-            ciudad STRING,
-            temperatura DOUBLE,
-            humedad INT,
-            descripcion STRING,
-            visibilidad INT,
-            estado_carretera STRING
-        )
-        PARTITIONED BY (anio_part INT, mes_part INT)
-        STORED AS parquet
-    """)
-    
-    spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {TABLA_CAMIONES} (
-            timestamp STRING,
-            anio INT,
-            mes INT,
-            dia INT,
-            id_camion STRING,
-            origen STRING,
-            destino STRING,
-            nodo_actual STRING,
-            lat_actual DOUBLE,
-            lon_actual DOUBLE,
-            progreso_pct DOUBLE,
-            distancia_total_km DOUBLE,
-            tiene_ruta_alternativa BOOLEAN,
-            distancia_alternativa_km DOUBLE
-        )
-        PARTITIONED BY (anio_part INT, mes_part INT)
-        STORED AS parquet
-    """)
-    
-    spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {TABLA_RUTAS} (
-            timestamp STRING,
-            anio INT,
-            mes INT,
-            dia INT,
-            origen STRING,
-            destino STRING,
-            ruta_original STRING,
-            ruta_alternativa STRING,
-            distancia_original_km DOUBLE,
-            distancia_alternativa_km DOUBLE,
-            motivo_bloqueo STRING,
-            ahorro_km DOUBLE
-        )
-        PARTITIONED BY (anio_part INT, mes_part INT)
-        STORED AS parquet
-    """)
-    
-    spark.sql(f"""
-        CREATE TABLE IF NOT EXISTS {TABLA_AGG} (
-            anio INT,
-            mes INT,
-            dia INT,
-            tipo_evento STRING,
-            estado STRING,
-            motivo STRING,
-            contador INT,
-            pct_total DOUBLE
-        )
-        PARTITIONED BY (anio_part INT, mes_part INT)
-        STORED AS parquet
-    """)
+    """Inicializa la base y tablas externas compatibles con Hive 4."""
+    _ejecutar_hive_ddl(f"CREATE DATABASE IF NOT EXISTS {HIVE_DB}")
+    for tabla in TABLE_SCHEMAS:
+        _asegurar_tabla_externa_csv(tabla, replace=(tabla == TABLA_TRANSPORTE))
 
 
 def parsear_timestamp(ts: str) -> Dict:
@@ -227,7 +423,7 @@ def persistir_eventos_historico(
     
     if eventos:
         df = spark.createDataFrame(eventos)
-        df.write.mode("append").partitionBy("anio_part", "mes_part").insertInto(TABLA_EVENTOS)
+        _append_external_csv(df, TABLA_EVENTOS)
         print(f"Insertados {len(eventos)} eventos en {TABLA_EVENTOS}")
 
 
@@ -241,8 +437,8 @@ def persistir_clima_historico(spark: SparkSession, datos: Dict) -> None:
     
     registros = []
     
-    for clima in datos.get("clima", []):
-        estado_carretera = "Óptimo"
+    for clima in _normalizar_clima(datos):
+        estado_carretera = clima.get("estado_carretera") or "Optimo"
         desc = clima.get("descripcion", "").lower()
         if "niebla" in desc or "niebla" in desc:
             estado_carretera = "Niebla"
@@ -259,10 +455,10 @@ def persistir_clima_historico(spark: SparkSession, datos: Dict) -> None:
             "mes": componentes["mes"],
             "dia": componentes["dia"],
             "ciudad": clima.get("ciudad", "Unknown"),
-            "temperatura": clima.get("temperatura"),
+            "temperatura": clima.get("temperatura", clima.get("temp")),
             "humedad": clima.get("humedad"),
             "descripcion": clima.get("descripcion", ""),
-            "visibilidad": clima.get("visibilidad", 10000),
+            "visibilidad": clima.get("visibilidad") or 10000,
             "estado_carretera": estado_carretera,
             "anio_part": anio,
             "mes_part": mes
@@ -270,7 +466,7 @@ def persistir_clima_historico(spark: SparkSession, datos: Dict) -> None:
     
     if registros:
         df = spark.createDataFrame(registros)
-        df.write.mode("append").partitionBy("anio_part", "mes_part").insertInto(TABLA_CLIMA)
+        _append_external_csv(df, TABLA_CLIMA)
         print(f"Insertados {len(registros)} registros climáticos en {TABLA_CLIMA}")
 
 
@@ -288,24 +484,22 @@ def persistir_camiones_historico(
     
     registros = []
     
-    for camion in datos.get("camiones", []):
-        cam_id = camion.get("id", "UNKNOWN")
+    for camion in _normalizar_camiones(datos):
+        cam_id = camion.get("id_camion", "UNKNOWN")
         ruta_alt = rutas_alternativas.get(cam_id, {})
-        
-        pos = camion.get("posicion_actual", {})
+
         ruta = camion.get("ruta", [])
-        
         registros.append({
             "timestamp": ts,
             "anio": componentes["anio"],
             "mes": componentes["mes"],
             "dia": componentes["dia"],
             "id_camion": cam_id,
-            "origen": ruta[0] if ruta else "",
-            "destino": ruta[-1] if len(ruta) > 1 else "",
+            "origen": camion.get("origen") or (ruta[0] if ruta else ""),
+            "destino": camion.get("destino") or (ruta[-1] if len(ruta) > 1 else ""),
             "nodo_actual": camion.get("nodo_actual", ""),
-            "lat_actual": pos.get("lat", 0.0),
-            "lon_actual": pos.get("lon", 0.0),
+            "lat_actual": camion.get("lat_actual", 0.0),
+            "lon_actual": camion.get("lon_actual", 0.0),
             "progreso_pct": camion.get("progreso_pct", 0.0),
             "distancia_total_km": camion.get("distancia_total_km", 0.0),
             "tiene_ruta_alternativa": ruta_alt.get("ruta") is not None,
@@ -316,8 +510,52 @@ def persistir_camiones_historico(
     
     if registros:
         df = spark.createDataFrame(registros)
-        df.write.mode("append").partitionBy("anio_part", "mes_part").insertInto(TABLA_CAMIONES)
+        _append_external_csv(df, TABLA_CAMIONES)
         print(f"Insertados {len(registros)} registros de camiones en {TABLA_CAMIONES}")
+
+
+def persistir_transporte_historico(spark: SparkSession, datos: Dict, nodos_info: Dict) -> None:
+    """Persiste una tabla plana para la UI y el gemelo digital."""
+
+    ts = datos.get("timestamp", datetime.now().isoformat())
+    componentes = parsear_timestamp(ts)
+    anio = componentes["anio"]
+    mes = componentes["mes"]
+
+    registros = []
+    for camion in _normalizar_camiones(datos):
+        nodo_actual = camion.get("nodo_actual", "")
+        hub_actual = nodos_info.get(nodo_actual, {}).get("hub")
+        if not hub_actual and nodos_info.get(nodo_actual, {}).get("tipo") == "hub":
+            hub_actual = nodo_actual
+        registros.append({
+            "timestamp": ts,
+            "anio": componentes["anio"],
+            "mes": componentes["mes"],
+            "dia": componentes["dia"],
+            "hora": componentes["hora"],
+            "minuto": componentes["minuto"],
+            "id_camion": camion.get("id_camion", "UNKNOWN"),
+            "origen": camion.get("origen", ""),
+            "destino": camion.get("destino", ""),
+            "nodo_actual": nodo_actual,
+            "lat": camion.get("lat_actual", 0.0),
+            "lon": camion.get("lon_actual", 0.0),
+            "progreso_pct": camion.get("progreso_pct", 0.0),
+            "distancia_total_km": camion.get("distancia_total_km", 0.0),
+            "estado_ruta": camion.get("estado_ruta", "En ruta"),
+            "motivo_retraso": camion.get("motivo_retraso", ""),
+            "ruta": "->".join(camion.get("ruta", [])),
+            "ruta_sugerida": "->".join(camion.get("ruta_sugerida", [])),
+            "hub_actual": hub_actual or "Desconocido",
+            "anio_part": anio,
+            "mes_part": mes,
+        })
+
+    if registros:
+        df = spark.createDataFrame(registros)
+        _append_external_csv(df, TABLA_TRANSPORTE)
+        print(f"Insertados {len(registros)} registros en {TABLA_TRANSPORTE}")
 
 
 def persistir_rutas_alternativas(
@@ -363,30 +601,44 @@ def persistir_rutas_alternativas(
     
     if registros:
         df = spark.createDataFrame(registros)
-        df.write.mode("append").partitionBy("anio_part", "mes_part").insertInto(TABLA_RUTAS)
+        _append_external_csv(df, TABLA_RUTAS)
         print(f"Insertadas {len(registros)} rutas alternativas en {TABLA_RUTAS}")
 
 
 def calcular_estadisticas_diarias(spark: SparkSession) -> None:
-    """Calcula agregaciones diarias para análisis de tendencias."""
-    
-    spark.sql(f"""
-        INSERT OVERWRITE TABLE {TABLA_AGG} PARTITION(anio_part, mes_part)
-        SELECT 
-            anio,
-            mes,
-            dia,
-            tipo_evento,
-            estado,
-            motivo,
-            COUNT(*) as contador,
-            ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY anio, mes, dia), 2) as pct_total,
-            anio as anio_part,
-            mes as mes_part
-        FROM {TABLA_EVENTOS}
-        WHERE anio_part IS NOT NULL
-        GROUP BY anio, mes, dia, tipo_evento, estado, motivo, anio, mes
-    """)
+    """Calcula agregaciones diarias leyendo el histórico externo ya escrito en HDFS."""
+    path = _hdfs_uri(TABLE_PATHS[TABLA_EVENTOS])
+    try:
+        df = spark.read.option("header", "true").csv(path, inferSchema=True)
+    except Exception:
+        return
+    if df.rdd.isEmpty():
+        return
+
+    agg = (
+        df.filter(F.col("anio_part").isNotNull())
+        .groupBy("anio", "mes", "dia", "tipo_evento", "estado", "motivo", "anio_part", "mes_part")
+        .agg(F.count("*").alias("contador"))
+    )
+    window_cols = ["anio", "mes", "dia"]
+    total = agg.groupBy(*window_cols).agg(F.sum("contador").alias("total_dia"))
+    agg = (
+        agg.join(total, on=window_cols, how="left")
+        .withColumn("pct_total", F.round(F.col("contador") * F.lit(100.0) / F.col("total_dia"), 2))
+        .select(
+            "anio",
+            "mes",
+            "dia",
+            "tipo_evento",
+            "estado",
+            "motivo",
+            "contador",
+            "pct_total",
+            "anio_part",
+            "mes_part",
+        )
+    )
+    _append_external_csv(agg, TABLA_AGG)
 
 
 def ejecutar_persistencia_hive(
@@ -409,6 +661,9 @@ def ejecutar_persistencia_hive(
     
     print("Persistiendo tracking de camiones...")
     persistir_camiones_historico(spark, datos, rutas_alternativas)
+
+    print("Persistiendo transporte analítico...")
+    persistir_transporte_historico(spark, datos, nodos_info)
     
     print("Persistiendo rutas alternativas...")
     persistir_rutas_alternativas(spark, datos, rutas_alternativas)

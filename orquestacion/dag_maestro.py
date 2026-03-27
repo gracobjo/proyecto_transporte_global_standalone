@@ -65,7 +65,13 @@ def ejecutar_ingesta(**context):
     paso_val = int(ds.timestamp() // (max(1, interval_min) * 60))
     r = subprocess.run(
         [f"{BASE}/venv_transporte/bin/python", "-m", "ingesta.ingesta_kdd"],
-        env={**os.environ, "PASO_15MIN": str(paso_val)},
+        env={
+            **os.environ,
+            "PASO_15MIN": str(paso_val),
+            "SIMLOG_INGESTA_CANAL": "airflow",
+            "SIMLOG_INGESTA_ORIGEN": "airflow_dag_maestro",
+            "SIMLOG_INGESTA_EJECUTOR": "simlog_pipeline_maestro.ejecutar_ingesta",
+        },
         capture_output=True,
         text=True,
         cwd=str(BASE),

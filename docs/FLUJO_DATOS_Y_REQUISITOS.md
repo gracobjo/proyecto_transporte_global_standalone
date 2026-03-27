@@ -14,8 +14,8 @@ La **ingesta** produce un único JSON que contiene cuatro bloques de datos: **cl
 
 ```json
 "clima": [
-  { "ciudad": "Madrid", "temperatura": 18.5, "humedad": 60, "descripcion": "clear sky", "visibilidad": 10000, "timestamp": "2025-03-15T12:00:00" },
-  { "ciudad": "Barcelona", "temperatura": 16.2, "humedad": 72, "descripcion": "light rain", "visibilidad": 8000, "timestamp": "2025-03-15T12:00:00" }
+  { "ciudad": "Madrid", "temperatura": 18.5, "humedad": 60, "descripcion": "clear sky", "visibilidad": 10000, "source": "openweather", "fallback_activo": false, "timestamp": "2025-03-15T12:00:00" },
+  { "ciudad": "Barcelona", "temperatura": null, "humedad": null, "descripcion": "Fallback DGT: Niebla en AP-68", "visibilidad": 500, "source": "dgt", "fallback_activo": true, "timestamp": "2025-03-15T12:00:00" }
 ]
 ```
 
@@ -48,9 +48,11 @@ La **ingesta** produce un único JSON que contiene cuatro bloques de datos: **cl
 ```
 
 - **GPS**: `id_camion`, `lat`, `lon`, `ruta`, `ruta_origen`, `ruta_destino`, `estado_ruta`.
-- **Tiempo**: `clima` (temperatura, humedad, descripción, visibilidad por ciudad).
+- **Tiempo**: `clima` (temperatura, humedad, descripción, visibilidad por ciudad), con `source` y `fallback_activo` para distinguir si procede de OpenWeather o del respaldo DGT.
 - **Incidencias reales**: `incidencias_dgt` y `resumen_dgt` (fuente `live|cache|disabled`, severidad, carretera, municipio, provincia, coordenadas y nodos afectados).
 - **Rutas**: `estados_nodos` y `estados_aristas` (estado y motivo por nodo y por enlace), ahora con `source`, `severity`, `peso_pagerank` e `id_incidencia` cuando la DGT pisa a la simulación.
+
+Cuando **OpenWeather no responde**, devuelve `401` o entrega un payload inválido, la ingesta no detiene el pipeline: reutiliza la información meteorológica inferida desde incidencias DATEX2 DGT (`condiciones_meteorologicas`, `estado_carretera`, `visibilidad`) y la publica en `clima_hubs` / `clima` con `source="dgt"` y `fallback_activo=true`. Este es el modo operativo alternativo documentado actualmente.
 
 Ese JSON se envía a **Kafka** (temas `transporte_dgt_raw`, `transporte_raw` y `transporte_filtered`) y se guarda como copia **raw** en **HDFS** en la ruta **`HDFS_BACKUP_PATH`** (`/user/hadoop/transporte_backup`). Esa misma ruta es la que usa el procesamiento Spark para leer los JSON, de modo que no hace falta duplicar rutas: la ingesta escribe donde Spark lee.
 
@@ -167,7 +169,7 @@ En el estado actual del proyecto:
 
 | Requisito típico | Estado actual |
 |------------------|---------------|
-| **Ingesta de datos** | Sí: NiFi y/o script de ingesta (OpenWeather + simulación GPS) → Kafka + HDFS. |
+| **Ingesta de datos** | Sí: NiFi y/o script de ingesta (OpenWeather opcional + simulación GPS + respaldo meteorológico DGT) → Kafka + HDFS. |
 | **Almacenamiento distribuido (HDFS)** | Sí: backup JSON; warehouse Hive en HDFS. |
 | **Procesamiento Big Data (Spark)** | Sí: GraphFrames, autosanación, PageRank, persistencia. |
 | **Almacenamiento NoSQL (Cassandra)** | Sí: keyspace operativo (nodos, aristas, camiones, PageRank). |
@@ -192,7 +194,7 @@ Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMEN
 | RF-KDD-01 | Asociar cada fase KDD a **scripts y stack** declarados en `servicios/kdd_fases.py` | Tarjeta por fase + caption stack/script |
 | RF-KDD-02 | **Vista previa** de ficheros del repositorio citados (p. ej. `ingesta/ingesta_kdd.py`, `procesamiento_grafos.py`) | `servicios/kdd_vista_ficheros.py` — primeras y últimas 5 líneas |
 | RF-KDD-03 | En fases 1–2, mostrar **GPS sintético** (`camiones`) y **clima** (`clima_hubs`) del último payload | Lectura de `reports/kdd/work/ultimo_payload.json` |
-| RF-KDD-04 | Permitir **consulta en vivo** a OpenWeather con API key introducida en formulario (sin persistir en disco) | Formulario Streamlit + `consulta_clima_hubs(api_key=…)` |
+| RF-KDD-04 | Permitir **consulta en vivo** a OpenWeather con API key introducida en formulario (sin persistir en disco) y reflejar si se usa respaldo DGT cuando la clave falla | Formulario Streamlit + `consulta_clima_hubs(api_key=…)` + lectura de `fallback_activo` en payload |
 | RF-KDD-05 | **Simular** otra ventana temporal: slider de paso, ingesta desde la tarjeta, **instantánea** y **diff** de payload | `st.session_state` + comparación JSON |
 | RF-KDD-06 | En fases 3–5, documentar **reglas de negocio** del grafo sin repetir el mismo texto al cambiar de fase | `servicios/kdd_reglas_ui.py` — panel unificado |
 | RF-KDD-07 | Mostrar **topología lógica** (Altair) como **una** figura para fases 3–5; distinguir de mapa geográfico | `servicios/kdd_vista_grafo.py` |
@@ -205,6 +207,7 @@ Para trazabilidad de evaluación y brechas puntuales, consultar `docs/REQUIREMEN
 | RNF-KDD-01 | **Usabilidad**: una sola zona interactiva principal por tipo de control en la vista de fase activa | `widget_scope` (`kdd_principal` vs `kdd_lista_fN`) |
 | RNF-KDD-02 | **Seguridad**: no almacenar API keys de prueba en ficheros del proyecto | Solo `st.session_state`; `.env` sigue siendo la vía para clave estable |
 | RNF-KDD-03 | **Mantenibilidad**: módulos `servicios/kdd_*.py` desacoplados de la orquestación | Ingesta invocable por subproceso desde `ejecucion_pipeline` |
+| RNF-KDD-05 | **Continuidad operativa**: el dashboard debe seguir mostrando contexto meteorológico aunque OpenWeather no esté disponible | `ingesta_kdd.py` combina OpenWeather con `info_dgt["clima_hubs"]` y expone `fallback_activo` |
 | RNF-KDD-04 | **Consistencia visual**: no sugerir tres grafos distintos cuando el layout topológico es el mismo | Título de gráfico y subtítulos alineados a «una red, varias fases» |
 
 Diseño detallado: **`docs/DASHBOARD_KDD_UI.md`**.

@@ -11,8 +11,14 @@ participant "Dashboard" as UI
 participant "OpenWeather API" as OWM
 
 SCH -> ING: Trigger (cada 15 min)
+ING -> OWM: Consulta clima por hubs
+alt OpenWeather valido
+  OWM --> ING: clima principal
+else OpenWeather falla / clave invalida
+  OWM --> ING: error / payload invalido
+end
 ING -> DGT: Descarga XML DATEX2
-DGT --> ING: Incidencias reales / fallback cache
+DGT --> ING: Incidencias reales / fallback cache / clima alternativo
 ING -> K: Publica snapshot (raw/filtered)
 ING -> H: Guarda backup JSON
 SCH -> S: Ejecuta procesamiento

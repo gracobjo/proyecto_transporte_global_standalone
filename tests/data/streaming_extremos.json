@@ -1,0 +1,32 @@
+{
+  "eventos": [
+    {
+      "id_vehiculo": "veh_1",
+      "ruta": "Madrid->Barcelona",
+      "event_time": "2026-03-26T10:00:00",
+      "delay_minutes": 12.0,
+      "estado_evento": "OK"
+    },
+    {
+      "id_vehiculo": "veh_2",
+      "ruta": "Madrid->Barcelona",
+      "event_time": "2026-03-26T10:04:00",
+      "delay_minutes": 48.0,
+      "estado_evento": "Congestionado"
+    },
+    {
+      "id_vehiculo": "veh_3",
+      "ruta": "Madrid->Barcelona",
+      "event_time": "2026-03-26T10:06:00",
+      "delay_minutes": 55.0,
+      "estado_evento": "Congestionado"
+    },
+    {
+      "id_vehiculo": "veh_4",
+      "ruta": "Sevilla->Vigo",
+      "event_time": "2026-03-26T10:08:00",
+      "delay_minutes": 5.0,
+      "estado_evento": "OK"
+    }
+  ]
+}

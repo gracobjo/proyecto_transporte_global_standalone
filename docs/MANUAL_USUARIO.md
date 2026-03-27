@@ -12,6 +12,8 @@ La app es un dashboard **Streamlit** para supervisión y análisis del ciclo **K
 - **Airflow**: orquestación periódica (DAGs).
 - **NiFi + Kafka + HDFS**: ingesta, buffer y backup de snapshots.
 
+En la configuración operativa actual, el proyecto sigue funcionando aunque OpenWeather no responda: el contexto meteorológico se reconstruye con información alternativa procedente de incidencias DATEX2 DGT y se marca en el payload con `source="dgt"` y `fallback_activo=true`.
+
 ## 2. Arranque rápido (local)
 
 1. Ejecuta el dashboard:
@@ -50,7 +52,7 @@ Controles:
 
 **Resultado esperado**:
 
-- Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado). Si la DGT DATEX2 responde, el snapshot se enriquece con incidencias reales; si falla, puede usar caché o continuar solo con simulación. Después se publica en Kafka y se guarda JSON en HDFS.
+- Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado). Si OpenWeather responde, el clima sale con `source=openweather`; si no, el sistema usa información alternativa desde la DGT. Si la DGT DATEX2 responde, además se enriquece con incidencias reales; si falla, puede usar caché o continuar solo con simulación. Después se publica en Kafka y se guarda JSON en HDFS.
 - Tras Spark: se estructura y persiste el “estado operativo” en Cassandra, y (si está configurado) se actualiza histórico Hive.
 
 ### 3.3 Enlace a “Gemelo digital — incidencias”
@@ -107,7 +109,7 @@ Controles:
 Secciones:
 
 - **Ingesta (clima + GPS simulado)**: vista del último snapshot local (compatible con el flujo de Spark).
-- **Señal DGT**: el snapshot indica si la fuente operó en modo `live`, `cache` o `disabled` y cuántos nodos quedaron afectados.
+- **Señal DGT**: el snapshot indica si la fuente operó en modo `live`, `cache` o `disabled`, cuántos nodos quedaron afectados y si el clima se está sirviendo como respaldo de OpenWeather.
 - **Kafka + HDFS**: confirma accesibilidad y muestra ficheros `.json` en HDFS.
 - **Spark → Cassandra**: lista de tablas y número de filas.
 - **Hive (histórico opcional)**: muestra `SHOW TABLES` y conteos (si HiveServer2 está OK).
@@ -239,6 +241,21 @@ Si NiFi está activo, el linaje de la ingesta enriquecida se puede revisar en la
 - filtrar por `Merge_DGT_Into_Payload`
 - inspeccionar atributos `simlog.provenance.stage`, `simlog.provenance.sources`, `simlog.provenance.dgt_mode` y `simlog.provenance.dgt_incidents`
 
+## 4.7.b Cómo interpretar el clima alternativo a OpenWeather
+
+Cuando OpenWeather no esté disponible o la clave no sea válida, la aplicación no se detiene. En ese caso:
+
+- el payload mostrará entradas de `clima` o `clima_hubs` con `source = dgt`,
+- el campo `fallback_activo` aparecerá a `true`,
+- `resumen_dgt.hubs_clima_respaldo` indicará cuántos hubs se han cubierto con la fuente alternativa,
+- la pestaña **Resultados pipeline** seguirá mostrando la ingesta como válida aunque el enriquecimiento meteorológico principal no esté activo.
+
+Qué debes revisar:
+
+1. En **Resultados pipeline**, comprueba el modo DGT (`live`, `cache`, `disabled`).
+2. En el último snapshot, comprueba si el clima viene con `source=openweather` o `source=dgt`.
+3. Si estás usando NiFi, revisa `Data Provenance` para ver en qué etapa se mezclaron las fuentes.
+
 ## 5. Ejecución de la ingesta DGT
 
 ### 5.1 Script standalone
@@ -259,6 +276,14 @@ Opciones útiles:
 - Los nodos afectados pasan a `source=dgt`.
 - La severidad real ajusta `peso_pagerank`, por lo que el ranking de criticidad puede cambiar.
 - Si hay muchos nodos bloqueados, aparece una alerta operativa en el snapshot.
+- Si OpenWeather falla, la información meteorológica útil se toma de DGT y queda visible con `fallback_activo=true`.
+
+### 5.3 Cómo está configurado el respaldo a OpenWeather
+
+- El sistema intenta primero consultar OpenWeather.
+- Si la respuesta no es válida, se conservan las incidencias DGT y se reutilizan sus campos meteorológicos (`condiciones_meteorologicas`, `estado_carretera`, `visibilidad`) para completar los hubs.
+- Este comportamiento aplica tanto al script de ingesta como a Airflow y al flujo NiFi del grupo `PG_SIMLOG_KDD`.
+- Para el usuario final no cambia el uso del dashboard: cambia únicamente la fuente mostrada en el payload y en los indicadores.
 
 ### FAQ IA dentro de “Servicios”
 

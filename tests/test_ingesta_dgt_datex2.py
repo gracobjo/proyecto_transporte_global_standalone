@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ingesta.ingesta_dgt_datex2 import fusionar_estados, mapear_incidencias_a_nodos, parsear_xml_datex2
+from ingesta.ingesta_dgt_datex2 import (
+    fusionar_estados,
+    inferir_clima_hubs_desde_dgt,
+    mapear_incidencias_a_nodos,
+    parsear_xml_datex2,
+)
 
 
 SAMPLE_DATEX2_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -33,6 +38,12 @@ SAMPLE_DATEX2_XML = """<?xml version="1.0" encoding="UTF-8"?>
             <value>Accidente con corte total</value>
           </comment>
         </generalPublicComment>
+        <cause>
+          <causeType>poorEnvironment</causeType>
+          <detailedCauseType>
+            <poorEnvironmentType>snowfall</poorEnvironmentType>
+          </detailedCauseType>
+        </cause>
       </situationRecord>
     </situation>
   </payloadPublication>
@@ -53,6 +64,8 @@ def test_parsear_xml_datex2_extrae_campos_clave():
     assert incidencia["provincia"] == "Madrid"
     assert incidencia["lat"] == 40.4168
     assert incidencia["lon"] == -3.7038
+    assert incidencia["estado_carretera"] == "Nieve"
+    assert incidencia["condiciones_meteorologicas"] == ["Nevada"]
 
 
 def test_mapear_y_fusionar_estados_prioriza_dgt_sobre_simulacion():
@@ -72,4 +85,16 @@ def test_mapear_y_fusionar_estados_prioriza_dgt_sobre_simulacion():
     assert merged["Madrid"]["carretera"] == "A-6"
     assert merged["Bilbao"]["estado"] == "Congestionado"
     assert merged["Bilbao"]["source"] == "simulacion"
+
+
+def test_inferir_clima_hubs_desde_dgt_genera_fallback_para_hub():
+    incidencias = parsear_xml_datex2(SAMPLE_DATEX2_XML)
+
+    clima_hubs = inferir_clima_hubs_desde_dgt(incidencias, max_km=100.0)
+
+    assert "Madrid" in clima_hubs
+    assert clima_hubs["Madrid"]["source"] == "dgt"
+    assert clima_hubs["Madrid"]["fallback_activo"] is True
+    assert clima_hubs["Madrid"]["estado_carretera"] == "Nieve"
+    assert "Fallback DGT" in clima_hubs["Madrid"]["descripcion"]
 

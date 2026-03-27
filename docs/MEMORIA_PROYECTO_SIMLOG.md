@@ -36,6 +36,8 @@
 
 SIMLOG Espana es una plataforma de simulacion y monitorizacion logistica basada en stack Apache para ejecutar un ciclo KDD completo: ingesta, preprocesamiento, transformacion con grafos, mineria e interpretacion. El sistema integra fuentes de clima, simulacion de incidencias, geolocalizacion de camiones e incidencias reales de trafico de la DGT en formato DATEX2 para construir una vista operativa y analitica de la red de transporte.
 
+En la operacion actual, la fuente meteorologica principal OpenWeather queda configurada como opcional: cuando la API no responde o la clave no es valida, SIMLOG utiliza informacion alternativa inferida desde la DGT para no romper el snapshot ni el resto del pipeline.
+
 La solucion desacopla etapas con Kafka y HDFS, procesa con Spark/GraphFrames, persiste estado operativo en Cassandra e historico en Hive, y ofrece una interfaz Streamlit para operacion, inspeccion de pipeline, planificacion de rutas y simulacion de escenarios. La plataforma se ha diseniado para ejecucion standalone, simplificando su uso docente y de demostracion sin perder trazabilidad tecnica.
 
 ---
@@ -62,6 +64,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 
 - Implementar ingesta periodica con clima, incidencias y tracking de camiones.
 - Integrar una fuente real de trafico (DGT DATEX2) con prioridad controlada sobre la simulacion.
+- Mantener continuidad operativa aunque OpenWeather no este disponible, usando contexto meteorologico alternativo desde DGT.
 - Desacoplar transporte de datos con Kafka y backup en HDFS.
 - Aplicar transformaciones de grafo y reglas de autosanacion con Spark.
 - Calcular criticidad de nodos (PageRank) y rutas alternativas.
@@ -87,6 +90,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 - SLO/SLA empresariales con monitoreo externo avanzado.
 - Endurecimiento completo de seguridad para entorno productivo.
 - Operativa full cloud con autoescalado gestionado.
+- Dependencia de una API key valida de OpenWeather si se quiere clima principal; mientras tanto, el proyecto opera en modo alternativo con DGT.
 
 ---
 
@@ -111,6 +115,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 - Reproducibilidad en entorno standalone.
 - Modularidad y separacion por responsabilidades.
 - Tolerancia a degradacion parcial (Hive opcional en ciertos escenarios).
+- Continuidad de la capa de clima mediante fuente alternativa cuando OpenWeather falla.
 - Observabilidad operativa basica (checks de servicios y pipeline).
 - Navegacion asistida por buscador semantico para reducir tiempo de acceso.
 - Seguridad de consulta: bloqueo de operaciones de escritura/borrado desde UI.
@@ -123,7 +128,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 La arquitectura se organiza en seis capas:
 
 1. **Ingesta:** scripts Python y/o flujos NiFi.
-2. **Mensajeria y backup:** Kafka (`transporte_raw`, `transporte_filtered`) y HDFS.
+2. **Mensajeria y backup:** Kafka (`transporte_dgt_raw`, `transporte_raw`, `transporte_filtered`) y HDFS.
 3. **Procesamiento:** Spark con modelado de grafo y reglas de negocio.
 4. **Persistencia:** Cassandra (operativa) + Hive (historico/analitica).
 5. **Orquestacion:** Airflow, NiFi y scripts de control.
@@ -135,6 +140,7 @@ Decisiones de diseno clave:
 - Pipeline desacoplado para robustez y reprocesado.
 - Modo standalone para facilitar despliegue y demo.
 - UI unificada que combina operacion tecnica y narrativa KDD.
+- OpenWeather como enriquecimiento opcional; DGT como respaldo meteorologico integrado en el mismo contrato de datos.
 
 ---
 
@@ -146,7 +152,7 @@ Decisiones de diseno clave:
 - **Aristas:** distancia y estado operativo.
 - **Camiones:** posicion, ruta, origen/destino, estado.
 - **Metrica de criticidad:** PageRank por nodo.
-- **Contexto de clima:** condiciones por hub.
+- **Contexto de clima:** condiciones por hub, con procedencia (`openweather` o `dgt`) y marca de `fallback_activo`.
 
 ### 7.2 Flujo de datos
 
@@ -154,7 +160,7 @@ Decisiones de diseno clave:
 
 ### 7.3 Contrato de datos
 
-El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `lat`, `lon`, `ruta_origen`, `ruta_destino`) y estructura de estados de nodos/aristas, con enfoque de compatibilidad para consumidores legacy cuando aplica. Tras la integracion DATEX2, el contrato tambien incluye `incidencias_dgt`, `resumen_dgt`, `source`, `severity`, `peso_pagerank` e identificadores de incidencia.
+El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `lat`, `lon`, `ruta_origen`, `ruta_destino`) y estructura de estados de nodos/aristas, con enfoque de compatibilidad para consumidores legacy cuando aplica. Tras la integracion DATEX2, el contrato tambien incluye `incidencias_dgt`, `resumen_dgt`, `source`, `severity`, `peso_pagerank` e identificadores de incidencia. En el bloque de clima, `source` y `fallback_activo` permiten saber si el dato final viene de OpenWeather o del respaldo DGT.
 
 ---
 
@@ -162,7 +168,7 @@ El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `
 
 ### 8.1 Ingesta
 
-- Consulta clima por API.
+- Consulta clima por API y, si no esta disponible, reconstruccion meteorologica a partir de DGT.
 - Simulacion de incidencias y GPS.
 - Integracion DATEX2 DGT con cache local y modo degradado.
 - Publicacion Kafka y copia HDFS.
@@ -181,6 +187,18 @@ El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `
 
 - **Cassandra:** tablas operativas para dashboard, ahora con procedencia y severidad en `nodos_estado` y `pagerank_nodos`.
 - **Hive:** historico y consultas analiticas orientadas a reporting.
+
+### 8.5 Configuracion del uso alternativo a OpenWeather
+
+La configuracion aplicada en el proyecto es la siguiente:
+
+1. El pipeline intenta primero leer OpenWeather con `OWM_API_KEY` o `API_WEATHER_KEY`.
+2. `ingesta_kdd.py` valida esa respuesta antes de mezclarla.
+3. `ingesta_dgt_datex2.py` extrae tambien contexto meteorologico desde incidencias DATEX2 (`condiciones_meteorologicas`, `estado_carretera`, `visibilidad`).
+4. Si OpenWeather falla, `combinar_clima_hubs(...)` publica clima alternativo con `source="dgt"` y `fallback_activo=true`.
+5. En NiFi, `MergeOpenWeatherIntoPayload.groovy` deja pasar el payload cuando el clima no es valido y `MergeDgtDatex2IntoPayload.groovy` rellena `clima_hubs` en el ultimo merge.
+
+Con ello, la misma estructura JSON sirve para Kafka, HDFS, Spark, Cassandra, Hive y frontend sin bifurcar consumidores.
 
 ### 8.4 Servicios y utilidades
 
@@ -212,6 +230,7 @@ Aspectos UX destacados:
 - trazabilidad visual de cambios de payload,
 - toggle de simulacion de incidencias desde frontend,
 - visibilidad del modo DGT (`live`, `cache`, `disabled`) y de las alertas de bloqueo,
+- visibilidad explicita de si el clima mostrado procede de OpenWeather o del respaldo DGT,
 - buscador semantico en cabecera con salto directo de pestañas,
 - constructor de informes a medida con modo `SELECT *` o por campos,
 - exportacion PDF para consumo de negocio y auditoria,
@@ -227,6 +246,7 @@ Aspectos UX destacados:
 - servicios del stack segun disponibilidad,
 - ejecucion manual de ingesta/procesamiento/dashboard.
 - script dedicado `scripts/ejecutar_ingesta_dgt.py` para probar la rama real.
+- operacion estable incluso cuando OpenWeather no esta disponible, gracias al respaldo DGT documentado.
 
 ### 10.2 Docker
 
@@ -279,7 +299,8 @@ docker compose -f docker-compose.codespaces.yml down -v
 
 - documentacion de flujos y procesadores,
 - uso de parameter context para variables sensibles,
-- soporte de ingesta de clima y persistencia en pipeline.
+- soporte de ingesta de clima y persistencia en pipeline,
+- fallback meteorologico en el propio flujo para no bloquear Kafka/HDFS por ausencia de OpenWeather.
 
 La coexistencia Airflow/NiFi requiere coordinacion de ventanas para evitar solapamientos.
 
@@ -296,6 +317,7 @@ Mecanismos incorporados:
 - consultas supervisadas en Hive/Cassandra,
 - paneles de verificacion en frontend.
 - FAQ IA para troubleshooting rapido y autoservicio documental.
+- trazabilidad en NiFi mediante `simlog.provenance.*` para distinguir simulacion, OpenWeather y respaldo DGT.
 
 Estrategia recomendada:
 
@@ -314,6 +336,7 @@ Estrategia recomendada:
 - Capacidad de simulacion de escenarios y rutas alternativas.
 - Soporte contextual integrado mediante FAQ IA local y documentada.
 - Documentacion extensa para perfiles tecnico, usuario y presentacion.
+- Continuidad demostrada del pipeline aun sin OpenWeather, usando informacion alternativa derivada de DGT.
 
 El estado actual permite demostraciones completas y ejecucion incremental segun recursos disponibles.
 
@@ -332,6 +355,7 @@ El estado actual permite demostraciones completas y ejecucion incremental segun 
 
 - modo standalone y scripts de operacion,
 - fallback en componentes opcionales (por ejemplo Hive en ciertas rutas de uso),
+- fallback meteorologico DGT cuando OpenWeather no ofrece una respuesta valida,
 - guias de troubleshooting y checklists,
 - modo demo en Codespaces para presentacion estable.
 

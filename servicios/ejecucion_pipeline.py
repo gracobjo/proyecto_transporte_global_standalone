@@ -63,6 +63,9 @@ def ejecutar_ingesta(
     por reloj (`ingesta/trigger_paso.py`) — útil para alinearse con cron/trigger.
     """
     env = os.environ.copy()
+    env["SIMLOG_INGESTA_CANAL"] = "script_python"
+    env["SIMLOG_INGESTA_ORIGEN"] = "frontend_streamlit"
+    env["SIMLOG_INGESTA_EJECUTOR"] = "streamlit_sidebar"
     if paso_15min is not None:
         env["PASO_15MIN"] = str(paso_15min)
     else:

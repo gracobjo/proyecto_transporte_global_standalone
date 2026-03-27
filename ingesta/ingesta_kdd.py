@@ -121,6 +121,55 @@ def consulta_clima_hubs(api_key: str | None = None) -> dict:
     return clima
 
 
+def _clima_openweather_valido(item: dict | None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    desc = str(item.get("descripcion") or "").strip().lower()
+    if desc.startswith("http ") or desc.startswith("error:") or "sin api key" in desc:
+        return False
+    return any(item.get(k) is not None for k in ("temp", "humedad", "viento", "visibilidad"))
+
+
+def combinar_clima_hubs(clima_owm: dict, clima_dgt: dict) -> dict:
+    clima_owm = clima_owm or {}
+    clima_dgt = clima_dgt or {}
+    combined: dict = {}
+    hub_ids = sorted(set(clima_owm.keys()) | set(clima_dgt.keys()))
+
+    for hub in hub_ids:
+        owm = dict(clima_owm.get(hub) or {})
+        dgt = dict(clima_dgt.get(hub) or {})
+        if _clima_openweather_valido(owm):
+            merged = {
+                **owm,
+                "source": "openweather",
+                "fallback_activo": False,
+            }
+            if dgt:
+                merged["estado_carretera"] = dgt.get("estado_carretera") or merged.get("estado_carretera")
+                merged["visibilidad"] = dgt.get("visibilidad", merged.get("visibilidad"))
+                merged["condiciones_meteorologicas"] = list(dgt.get("condiciones_meteorologicas") or [])
+                merged["dgt_weather_backup"] = True
+            combined[hub] = merged
+            continue
+
+        if dgt:
+            combined[hub] = {
+                **dgt,
+                "source": "dgt",
+                "fallback_activo": True,
+                "owm_error": owm.get("descripcion") if owm else None,
+            }
+            continue
+
+        combined[hub] = {
+            **owm,
+            "source": "openweather_unavailable",
+            "fallback_activo": False,
+        }
+    return combined
+
+
 def simular_incidentes_nodos() -> dict:
     """Estados aleatorios para nodos: OK, Congestionado, Bloqueado."""
     nodos = get_nodos()
@@ -239,6 +288,9 @@ def clima_hubs_a_lista(clima_hubs: dict, timestamp: str) -> list[dict]:
                 "descripcion": datos.get("descripcion", ""),
                 "visibilidad": datos.get("visibilidad"),
                 "viento": datos.get("viento"),
+                "source": datos.get("source"),
+                "fallback_activo": datos.get("fallback_activo", False),
+                "estado_carretera": datos.get("estado_carretera"),
                 "timestamp": timestamp,
             }
         )
@@ -398,7 +450,7 @@ def main(paso_15min=0):
     origen_ingesta = os.environ.get("SIMLOG_INGESTA_ORIGEN", "cli_script").strip() or "cli_script"
     ejecutor_ingesta = os.environ.get("SIMLOG_INGESTA_EJECUTOR", "python -m ingesta.ingesta_kdd").strip()
 
-    clima = consulta_clima_hubs()
+    clima_owm = consulta_clima_hubs()
     sim_incid = _env_flag("SIMLOG_SIMULAR_INCIDENCIAS", True)
     use_dgt = _env_flag("SIMLOG_USE_DGT", True)
     dgt_cache_only = _env_flag("SIMLOG_DGT_ONLY_CACHE", False)
@@ -423,6 +475,7 @@ def main(paso_15min=0):
     rutas = generar_rutas_camiones(5)
     posiciones = interpolacion_gps_15min(rutas, paso_15min)
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    clima = combinar_clima_hubs(clima_owm, info_dgt.get("clima_hubs", {}))
     clima_lista = clima_hubs_a_lista(clima, timestamp)
     alerta_bloqueos = evaluar_alerta_bloqueos(estados_nodos)
 
@@ -442,6 +495,7 @@ def main(paso_15min=0):
             "error": info_dgt.get("error"),
             "incidencias_totales": len(info_dgt.get("incidencias", [])),
             "nodos_afectados": len(info_dgt.get("mapeo_nodos", {})),
+            "hubs_clima_respaldo": len(info_dgt.get("clima_hubs", {})),
         },
         "alertas_operativas": [alerta_bloqueos],
         "nodos_estado": {
