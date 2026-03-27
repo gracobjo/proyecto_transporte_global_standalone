@@ -8,7 +8,7 @@ Documento que resume: (1) ejemplos concretos de datos (GPS, clima, rutas), (2) q
 
 ### 1.1 Datos que genera la ingesta (ejemplo de un “snapshot” de 15 min)
 
-La **ingesta** produce un único JSON que contiene tres bloques de datos: **clima**, **estados de nodos/aristas** (para rutas) y **camiones con GPS**.
+La **ingesta** produce un único JSON que contiene cuatro bloques de datos: **clima**, **incidencias DGT DATEX2**, **estados de nodos/aristas** (para rutas) y **camiones con GPS**.
 
 **Ejemplo – Clima (datos de tiempo por hub):**
 
@@ -49,9 +49,10 @@ La **ingesta** produce un único JSON que contiene tres bloques de datos: **clim
 
 - **GPS**: `id_camion`, `lat`, `lon`, `ruta`, `ruta_origen`, `ruta_destino`, `estado_ruta`.
 - **Tiempo**: `clima` (temperatura, humedad, descripción, visibilidad por ciudad).
-- **Rutas**: `estados_nodos` y `estados_aristas` (estado y motivo por nodo y por enlace).
+- **Incidencias reales**: `incidencias_dgt` y `resumen_dgt` (fuente `live|cache|disabled`, severidad, carretera, municipio, provincia, coordenadas y nodos afectados).
+- **Rutas**: `estados_nodos` y `estados_aristas` (estado y motivo por nodo y por enlace), ahora con `source`, `severity`, `peso_pagerank` e `id_incidencia` cuando la DGT pisa a la simulación.
 
-Ese JSON se envía a **Kafka** (temas `transporte_raw` y `transporte_filtered`) y se guarda como copia **raw** en **HDFS** en la ruta **`HDFS_BACKUP_PATH`** (`/user/hadoop/transporte_backup`). Esa misma ruta es la que usa el procesamiento Spark para leer los JSON, de modo que no hace falta duplicar rutas: la ingesta escribe donde Spark lee.
+Ese JSON se envía a **Kafka** (temas `transporte_dgt_raw`, `transporte_raw` y `transporte_filtered`) y se guarda como copia **raw** en **HDFS** en la ruta **`HDFS_BACKUP_PATH`** (`/user/hadoop/transporte_backup`). Esa misma ruta es la que usa el procesamiento Spark para leer los JSON, de modo que no hace falta duplicar rutas: la ingesta escribe donde Spark lee.
 
 ---
 
@@ -67,8 +68,8 @@ Ese JSON se envía a **Kafka** (temas `transporte_raw` y `transporte_filtered`) 
 | Dónde | Qué se guarda |
 |-------|----------------|
 | **HDFS** | La ingesta ya ha guardado aquí el JSON “en bruto”. Spark **no** vuelve a escribir en HDFS en este flujo; solo **lee** desde aquí. El warehouse de Hive (si se usa) suele estar en HDFS, así que lo que Spark escribe en Hive queda almacenado en HDFS. |
-| **Cassandra** (keyspace `logistica_espana`) | Spark **estructura** los datos y escribe en tablas: **nodos_estado**, **aristas_estado**, **tracking_camiones**, **pagerank_nodos**. Son los mismos datos que en el JSON (clima integrado en nodos, estados, camiones, etc.), pero normalizados y con tipos (float, timestamp, listas, etc.). |
-| **Hive** (opcional) | Spark puede escribir tablas de **histórico** (p. ej. `logistica_espana.historico_nodos` o tablas en `logistica_db` si se usa `persistencia_hive.py`). Esas tablas viven en el warehouse de Hive (típicamente en HDFS). |
+| **Cassandra** (keyspace `logistica_espana`) | Spark **estructura** los datos y escribe en tablas: **nodos_estado**, **aristas_estado**, **tracking_camiones**, **pagerank_nodos**. Son los mismos datos que en el JSON (clima integrado en nodos, estados, camiones, incidencias DGT priorizadas, etc.), pero normalizados y con tipos (float, timestamp, listas, etc.). |
+| **Hive** (opcional) | Spark escribe tablas de **histórico** (p. ej. `logistica_espana.historico_nodos`, `transporte_ingesta_completa`, `eventos_historico`, `clima_historico`) usando rutas externas compatibles con Hive 4. |
 
 Resumen: **HDFS** = JSON de ingesta (y warehouse Hive). **Cassandra** = mismos datos ya procesados y estructurados en tablas para consulta en tiempo (casi) real.
 
@@ -171,7 +172,8 @@ En el estado actual del proyecto:
 | **Procesamiento Big Data (Spark)** | Sí: GraphFrames, autosanación, PageRank, persistencia. |
 | **Almacenamiento NoSQL (Cassandra)** | Sí: keyspace operativo (nodos, aristas, camiones, PageRank). |
 | **Almacenamiento analítico (Hive)** | Sí: histórico y consultas supervisadas. |
-| **Cola de mensajes (Kafka)** | Sí: `transporte_raw` y `transporte_filtered`. |
+| **Cola de mensajes (Kafka)** | Sí: `transporte_dgt_raw`, `transporte_raw` y `transporte_filtered`. |
+| **Integración DATEX2 DGT** | Sí: feed real con fallback a caché y merge con prioridad sobre simulación. |
 | **Calidad de datos** | Sí: limpieza previa a persistencia en el pipeline Spark. |
 | **Visualización** | Sí: Streamlit + mapa. |
 | **Orquestación** | Sí: Airflow (DAGs) y/o trigger en NiFi; scripts `simlog_stack.py` para el stack. |

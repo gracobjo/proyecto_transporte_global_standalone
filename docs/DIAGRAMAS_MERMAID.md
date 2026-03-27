@@ -30,6 +30,8 @@ flowchart TB
     UC13[CU-13 Informes a medida]
     UC14[CU-14 Buscador semántico]
     UC15[CU-15 FAQ IA]
+    UC16[CU-16 Integrar DATEX2 DGT]
+    UC17[CU-17 Auditar provenance NiFi]
   end
   OP --> UC1
   OP --> UC2
@@ -54,6 +56,9 @@ flowchart TB
   AN --> UC14
   OP --> UC15
   AN --> UC15
+  OP --> UC16
+  SCH --> UC16
+  OP --> UC17
 ```
 
 ---
@@ -76,11 +81,11 @@ flowchart LR
     VG[kdd_vista_grafo]
   end
   subgraph Pipeline
-    I[ingesta_kdd]
+    I[ingesta_kdd + ingesta_dgt_datex2]
     P[procesamiento_grafos]
   end
   subgraph Mensajería
-    K[Kafka raw/filtered]
+    K[Kafka dgt_raw/raw/filtered]
     H[HDFS backup]
   end
   subgraph Stores
@@ -122,6 +127,7 @@ flowchart LR
 sequenceDiagram
   participant T as Trigger NiFi/Airflow
   participant I as Ingesta
+  participant DGT as DGT DATEX2
   participant K as Kafka
   participant H as HDFS
   participant S as Spark
@@ -129,6 +135,8 @@ sequenceDiagram
   participant V as Hive
   participant D as Dashboard
   T->>I: Disparo periódico
+  I->>DGT: Descarga XML DATEX2
+  DGT-->>I: Incidencias reales / error
   I->>K: Publica raw + filtered
   I->>H: Backup JSON
   T->>S: Ejecuta procesamiento
@@ -158,6 +166,24 @@ sequenceDiagram
   OW-->>ING: JSON
   ING-->>ST: Tabla por hub
   Note over ST: Clave solo en session_state
+```
+
+---
+
+## 4.b Secuencia — NiFi provenance con DGT
+
+```mermaid
+sequenceDiagram
+  participant N as NiFi PG_SIMLOG_KDD
+  participant O as OpenWeather InvokeHTTP
+  participant G as DGT DATEX2 InvokeHTTP
+  participant M as Merge scripts
+  participant P as Data Provenance
+  N->>O: Snapshot sintético base
+  O-->>M: Atributo owm.response
+  M->>G: Payload con clima + provenance stage=weather_merged
+  G-->>M: Atributo dgt.response.xml
+  M-->>P: FlowFile con simlog.provenance.*\n(stage, sources, dgt_mode, dgt_incidents)
 ```
 
 ---

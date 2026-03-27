@@ -8,7 +8,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 
 | Área | ¿Se cumple? | Comentario |
 |------|-------------|------------|
-| **Ingesta (NiFi + Kafka)** | Sí | Ingesta Python operativa; NiFi con flujo documentado y trigger periódico; Kafka `transporte_raw` / `transporte_filtered`. |
+| **Ingesta (NiFi + Kafka)** | Sí | Ingesta Python operativa; NiFi con flujo documentado y trigger periódico; Kafka `transporte_dgt_raw` / `transporte_raw` / `transporte_filtered`. |
 | **Procesamiento (Spark)** | Sí | Spark 3.5 + GraphFrames, limpieza previa a persistencia, opción Hive enriquecimiento. |
 | **Persistencia (HDFS, Cassandra, Hive)** | Sí | HDFS backup raw, Cassandra operativo, Hive histórico. |
 | **Orquestación (Airflow)** | Sí | DAGs por fases KDD, maestro 15 min, gestión servicios; Airflow 3.x con api-server + scheduler; configurar `[api] base_url` al puerto real (p. ej. 8088). |
@@ -21,6 +21,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | **Navegación semántica UI** | Sí | Buscador semántico en cabecera con salto directo a pestañas/secciones. |
 | **Swagger en catálogo de servicios** | Sí | API FastAPI incluida en resumen de servicios y enlaces de acceso (`/docs`, `/redoc`). |
 | **FAQ IA operativa** | Sí | Microservicio FAQ local (`8091`) + panel Streamlit + KB JSON editable + Swagger. |
+| **Integración DATEX2 DGT** | Sí | Feed XML real con caché, merge con simulación y trazabilidad por fuente. |
 
 ---
 
@@ -28,7 +29,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 
 | Requisito | Estado actual | ¿Cumple? |
 |-----------|-----------------|----------|
-| NiFi + Kafka (raw/filtered) | Integrado y documentado (`nifi/`) | Sí |
+| NiFi + Kafka (dgt_raw/raw/filtered) | Integrado y documentado (`nifi/`) | Sí |
 | Spark 3.5 + GraphFrames | `procesamiento/procesamiento_grafos.py` | Sí |
 | HDFS + Cassandra + Hive | Rutas en `config.py` / esquemas | Sí |
 | Airflow | DAGs en `~/airflow/dags` + `orquestacion/`; Execution API alineada al puerto del api-server | Sí |
@@ -58,7 +59,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 
 | Punto | Estado |
 |------|--------|
-| Fuentes (OpenWeather + GPS simulado) | Cubierto (`ingesta_kdd.py`, NiFi) |
+| Fuentes (OpenWeather + GPS simulado + DGT DATEX2) | Cubierto (`ingesta_kdd.py`, `ingesta_dgt_datex2.py`, NiFi) |
 | Kafka raw / filtered | Cubierto |
 | Backup raw en HDFS | Cubierto (`HDFS_BACKUP_PATH`) |
 

@@ -11,7 +11,7 @@ Guía para extender y operar la plataforma SIMLOG, incluyendo:
 
 Componentes principales:
 
-- `ingesta/`: genera snapshots (clima OpenWeather + incidentes + GPS simulado) y publica en Kafka + backup JSON en HDFS.
+- `ingesta/`: genera snapshots (clima OpenWeather + incidentes + GPS simulado) y publica en Kafka + backup JSON en HDFS. Incluye `ingesta_dgt_datex2.py` para integrar incidencias reales DATEX2.
 - `procesamiento/`: Spark (GraphFrames) → escribe en Cassandra y (opcionalmente) Hive.
 - `orquestacion/`: DAGs Airflow.
 - `servicios/`: módulos para Streamlit (UI) y consultas supervisadas (Cassandra/Hive).
@@ -114,6 +114,48 @@ No ejecuta SQL arbitrario: usa **whitelist**/plantillas y heurísticas.
    - Para Hive: define tabla/DDL existente (y ajusta `SIMLOG_HIVE_TABLA_TRANSPORTE` si el nombre difiere).
 3. Si necesitas post-procesado (p.ej. ordenar top por `pagerank`), implementa el ajuste en el cliente antes del render (el asistente ya lo soporta en `aplicar_postproceso_gestor`).
 
+## 3.b Integración DATEX2 DGT
+
+### Qué hace
+
+El módulo `ingesta/ingesta_dgt_datex2.py`:
+
+1. Descarga el feed XML DATEX2 v3.6 de la DGT.
+2. Lo normaliza a un contrato interno con `id_incidencia`, `severity`, `estado`, `carretera`, `municipio`, `provincia`, `lat`, `lon`, `descripcion`.
+3. Proyecta cada incidencia al nodo logístico más cercano.
+4. Fusiona la señal DGT con la simulación manteniendo prioridad de `source=dgt`.
+
+### Puntos de extensión
+
+- `parsear_xml_datex2(xml_text)`: ampliar extractores XML.
+- `mapear_incidencias_a_nodos(...)`: mejorar matching geográfico o pasar a aristas.
+- `fusionar_estados(...)`: cambiar política de desempate.
+- `obtener_incidencias_dgt(...)`: endurecer caché, timeout y modo degradado.
+
+### Contrato de salida
+
+- `incidencias_dgt`
+- `resumen_dgt`
+- `nodos_estado` / `estados_nodos` con:
+  - `source`
+  - `severity`
+  - `peso_pagerank`
+  - `id_incidencia`
+  - `carretera`, `municipio`, `provincia`
+
+### Script standalone
+
+```bash
+venv_transporte/bin/python scripts/ejecutar_ingesta_dgt.py --skip-processing
+```
+
+### Tests
+
+- `tests/test_ingesta_dgt_datex2.py`
+- `tests/test_ingestion.py`
+
+Los tests cubren parseo mínimo de DATEX2, mapeo a nodos y prioridad del merge frente a la simulación.
+
 ## 4. Graph AI (FastAPI + NetworkX)
 
 ### 3.1 Qué hace
@@ -198,6 +240,32 @@ Ejecución:
 2. Llamada al microservicio `POST /analyze-graph`.
 3. Inserción de anomalías en Cassandra (`graph_anomalies`).
 4. (Opcional) publicación en Kafka.
+
+## 6. NiFi: relaciones y provenance para DGT
+
+La rama NiFi enriquecida queda así:
+
+`Build_GPS_Sintetico -> OpenWeather_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload -> Kafka/HDFS/Spark`
+
+Archivos relevantes:
+
+- `nifi/groovy/GenerateSyntheticGpsForPractice.groovy`
+- `nifi/groovy/MergeOpenWeatherIntoPayload.groovy`
+- `nifi/groovy/MergeDgtDatex2IntoPayload.groovy`
+- `scripts/recreate_nifi_practice_flow.py`
+- `nifi/flow/simlog_kdd_flow_spec.yaml`
+
+### Atributos de provenance
+
+El merge NiFi deja atributos consultables en `Data Provenance`:
+
+- `simlog.provenance.stage`
+- `simlog.provenance.sources`
+- `simlog.provenance.dgt_mode`
+- `simlog.provenance.dgt_incidents`
+- `simlog.provenance.dgt_nodes_affected`
+
+Esto permite diferenciar snapshots puramente simulados de snapshots enriquecidos con señal real DGT.
 
 ## 5. Requisitos para correr Graph AI (FastAPI) en tu entorno
 

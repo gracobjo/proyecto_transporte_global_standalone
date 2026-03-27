@@ -34,7 +34,7 @@
 
 ## 1. Resumen ejecutivo
 
-SIMLOG Espana es una plataforma de simulacion y monitorizacion logistica basada en stack Apache para ejecutar un ciclo KDD completo: ingesta, preprocesamiento, transformacion con grafos, mineria e interpretacion. El sistema integra fuentes de clima, simulacion de incidencias y geolocalizacion de camiones para construir una vista operativa y analitica de la red de transporte.
+SIMLOG Espana es una plataforma de simulacion y monitorizacion logistica basada en stack Apache para ejecutar un ciclo KDD completo: ingesta, preprocesamiento, transformacion con grafos, mineria e interpretacion. El sistema integra fuentes de clima, simulacion de incidencias, geolocalizacion de camiones e incidencias reales de trafico de la DGT en formato DATEX2 para construir una vista operativa y analitica de la red de transporte.
 
 La solucion desacopla etapas con Kafka y HDFS, procesa con Spark/GraphFrames, persiste estado operativo en Cassandra e historico en Hive, y ofrece una interfaz Streamlit para operacion, inspeccion de pipeline, planificacion de rutas y simulacion de escenarios. La plataforma se ha diseniado para ejecucion standalone, simplificando su uso docente y de demostracion sin perder trazabilidad tecnica.
 
@@ -61,6 +61,7 @@ Construir una plataforma integrada capaz de simular, procesar y visualizar el es
 ### 3.2 Objetivos especificos
 
 - Implementar ingesta periodica con clima, incidencias y tracking de camiones.
+- Integrar una fuente real de trafico (DGT DATEX2) con prioridad controlada sobre la simulacion.
 - Desacoplar transporte de datos con Kafka y backup en HDFS.
 - Aplicar transformaciones de grafo y reglas de autosanacion con Spark.
 - Calcular criticidad de nodos (PageRank) y rutas alternativas.
@@ -153,7 +154,7 @@ Decisiones de diseno clave:
 
 ### 7.3 Contrato de datos
 
-El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `lat`, `lon`, `ruta_origen`, `ruta_destino`) y estructura de estados de nodos/aristas, con enfoque de compatibilidad para consumidores legacy cuando aplica.
+El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `lat`, `lon`, `ruta_origen`, `ruta_destino`) y estructura de estados de nodos/aristas, con enfoque de compatibilidad para consumidores legacy cuando aplica. Tras la integracion DATEX2, el contrato tambien incluye `incidencias_dgt`, `resumen_dgt`, `source`, `severity`, `peso_pagerank` e identificadores de incidencia.
 
 ---
 
@@ -163,12 +164,14 @@ El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `
 
 - Consulta clima por API.
 - Simulacion de incidencias y GPS.
+- Integracion DATEX2 DGT con cache local y modo degradado.
 - Publicacion Kafka y copia HDFS.
 - Escritura de snapshot local para consumo de UI y fases Spark.
 
 ### 8.2 Procesamiento
 
 - Construccion de grafo desde topologia y estado.
+- Reponderacion de criticidad usando `peso_pagerank` cuando la fuente es la DGT.
 - Regla de autosanacion:
   - bloqueo: exclusion de arista,
   - congestion/clima adverso: penalizacion de peso.
@@ -176,7 +179,7 @@ El proyecto mantiene contrato canonico para camiones (por ejemplo `id_camion`, `
 
 ### 8.3 Persistencia
 
-- **Cassandra:** tablas operativas para dashboard.
+- **Cassandra:** tablas operativas para dashboard, ahora con procedencia y severidad en `nodos_estado` y `pagerank_nodos`.
 - **Hive:** historico y consultas analiticas orientadas a reporting.
 
 ### 8.4 Servicios y utilidades
@@ -208,6 +211,7 @@ Aspectos UX destacados:
 - separacion entre topologia logica y mapa geografico,
 - trazabilidad visual de cambios de payload,
 - toggle de simulacion de incidencias desde frontend,
+- visibilidad del modo DGT (`live`, `cache`, `disabled`) y de las alertas de bloqueo,
 - buscador semantico en cabecera con salto directo de pestañas,
 - constructor de informes a medida con modo `SELECT *` o por campos,
 - exportacion PDF para consumo de negocio y auditoria,
@@ -222,6 +226,7 @@ Aspectos UX destacados:
 - venv Python,
 - servicios del stack segun disponibilidad,
 - ejecucion manual de ingesta/procesamiento/dashboard.
+- script dedicado `scripts/ejecutar_ingesta_dgt.py` para probar la rama real.
 
 ### 10.2 Docker
 

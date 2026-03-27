@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS nodos_estado (
     temperatura FLOAT,
     humedad FLOAT,
     viento_velocidad FLOAT,
+    source TEXT,
+    severity TEXT,
+    id_incidencia TEXT,
+    carretera TEXT,
+    municipio TEXT,
+    provincia TEXT,
+    descripcion_incidencia TEXT,
     ultima_actualizacion TIMESTAMP
 );
 
@@ -84,6 +91,9 @@ CREATE TABLE IF NOT EXISTS eventos_historico (
 CREATE TABLE IF NOT EXISTS pagerank_nodos (
     id_nodo TEXT PRIMARY KEY,
     pagerank FLOAT,
+    peso_pagerank FLOAT,
+    source TEXT,
+    estado TEXT,
     ultima_actualizacion TIMESTAMP
 );
 

@@ -1,9 +1,9 @@
 # Especificación del flujo NiFi — SIMLOG España
 # PG completo para este proyecto:
 # 1) Ingesta GPS + OpenWeather cada 15 min
-# 2) Publicación Kafka (raw + filtered)
-# 3) Persistencia HDFS desde Kafka
-# 4) Trigger de Spark para guardar en Cassandra + Hive
+# 2) Merge de incidencias DATEX2 DGT con prioridad sobre simulacion
+# 3) Publicación Kafka (dgt_raw + raw + filtered)
+# 4) Persistencia HDFS y trigger de Spark para guardar en Cassandra + Hive
 
 meta:
   process_group: PG_SIMLOG_KDD
@@ -12,14 +12,18 @@ meta:
   description: >
     Grupo único de procesadores y relaciones usado en SIMLOG.
     La ingesta se ejecuta cada 15 minutos, construye un snapshot con GPS y OpenWeather,
-    publica a Kafka y persiste en HDFS. A partir del topic filtered se lanza Spark,
-    que persiste en Cassandra y Hive.
+    añade incidencias reales DATEX2 DGT, publica a Kafka y persiste en HDFS.
+    El FlowFile conserva atributos de provenance (`simlog.provenance.*`) para separar
+    simulacion, clima y DGT. Desde el snapshot final se lanza Spark, que persiste en
+    Cassandra y Hive.
 
 parameter_context_required:
   - KAFKA_BOOTSTRAP
   - TOPIC_RAW
+  - TOPIC_DGT_RAW
   - TOPIC_FILTERED
   - OWM_API_KEY
+  - DGT_DATEX2_URL
   - HDFS_BACKUP_PATH
   - PROJECT_ROOT
   - SPARK_HOME
@@ -47,10 +51,10 @@ processors:
 
   - id: N03
     type: ExecuteScript
-    name: Build_JSON_GPS_OpenWeather
+    name: Build_JSON_GPS_Sintetico
     properties:
       Script Engine: Groovy
-      Script File: "${PROJECT_ROOT}/nifi/groovy/GenerateFullPayloadSimlog.groovy"
+      Script File: "${PROJECT_ROOT}/nifi/groovy/GenerateSyntheticGpsForPractice.groovy"
     output_contract:
       mime.type: application/json
       payload_keys:
@@ -59,8 +63,55 @@ processors:
         - estados_nodos
         - estados_aristas
         - camiones
+      provenance_attributes:
+        - simlog.provenance.sources=simulacion
+        - simlog.provenance.stage=synthetic_payload
 
   - id: N04
+    type: InvokeHTTP
+    name: OpenWeather_InvokeHTTP
+    properties:
+      Remote URL: "${owm.url}"
+      HTTP Method: GET
+      Response Body Attribute Name: "owm.response"
+
+  - id: N05
+    type: ExecuteScript
+    name: Merge_Weather_Into_Payload
+    properties:
+      Script Engine: Groovy
+      Script File: "${PROJECT_ROOT}/nifi/groovy/MergeOpenWeatherIntoPayload.groovy"
+
+  - id: N06
+    type: InvokeHTTP
+    name: DGT_DATEX2_InvokeHTTP
+    properties:
+      Remote URL: "${DGT_DATEX2_URL}"
+      HTTP Method: GET
+      Response Body Attribute Name: "dgt.response.xml"
+
+  - id: N07
+    type: ExecuteScript
+    name: Merge_DGT_Into_Payload
+    properties:
+      Script Engine: Groovy
+      Script File: "${PROJECT_ROOT}/nifi/groovy/MergeDgtDatex2IntoPayload.groovy"
+    output_contract:
+      provenance_attributes:
+        - simlog.provenance.sources=simulacion,openweather,dgt
+        - simlog.provenance.stage=dgt_merged
+        - simlog.provenance.dgt_mode=live|disabled
+        - simlog.provenance.dgt_incidents=<n>
+
+  - id: N08
+    type: PublishKafka
+    name: Kafka_Publish_DGT_RAW
+    properties:
+      Kafka Brokers: "${KAFKA_BOOTSTRAP}"
+      Topic Name: "${TOPIC_DGT_RAW}"
+      Delivery Guarantee: "at_least_once"
+
+  - id: N09
     type: PublishKafka
     name: Kafka_Publish_RAW
     properties:
@@ -68,7 +119,7 @@ processors:
       Topic Name: "${TOPIC_RAW}"
       Delivery Guarantee: "at_least_once"
 
-  - id: N05
+  - id: N10
     type: PublishKafka
     name: Kafka_Publish_FILTERED
     properties:
@@ -76,18 +127,8 @@ processors:
       Topic Name: "${TOPIC_FILTERED}"
       Delivery Guarantee: "at_least_once"
 
-  # --- PERSISTENCIA HDFS DESDE KAFKA ---
-  - id: N06
-    type: ConsumeKafka
-    name: Kafka_Consume_Filtered_for_HDFS
-    scheduling_strategy: TIMER_DRIVEN
-    scheduling_period: "30 sec"
-    properties:
-      Kafka Brokers: "${KAFKA_BOOTSTRAP}"
-      Topic Name: "${TOPIC_FILTERED}"
-      Group ID: "nifi_hdfs_writer"
-
-  - id: N07
+  # --- PERSISTENCIA HDFS / TRIGGER SPARK DESDE EL SNAPSHOT FINAL ---
+  - id: N11
     type: PutHDFS
     name: HDFS_Backup_JSON
     properties:
@@ -95,18 +136,7 @@ processors:
       Directory: "${HDFS_BACKUP_PATH}/${now():format('yyyy/MM/dd')}"
       Conflict Resolution: replace
 
-  # --- TRIGGER SPARK PARA CASSANDRA + HIVE ---
-  - id: N08
-    type: ConsumeKafka
-    name: Kafka_Consume_Filtered_for_Spark
-    scheduling_strategy: TIMER_DRIVEN
-    scheduling_period: "30 sec"
-    properties:
-      Kafka Brokers: "${KAFKA_BOOTSTRAP}"
-      Topic Name: "${TOPIC_FILTERED}"
-      Group ID: "nifi_spark_trigger"
-
-  - id: N09
+  - id: N12
     type: ExecuteProcess
     name: Spark_Submit_Procesamiento
     properties:
@@ -117,13 +147,13 @@ processors:
       Cassandra (tiempo real) + Hive (histórico).
 
   # --- OBSERVABILIDAD / ERRORES ---
-  - id: N10
+  - id: N13
     type: LogAttribute
     name: Log_Fallos
     properties:
       Log Level: error
 
-  - id: N11
+  - id: N14
     type: PutFile
     name: DLQ_Local
     properties:
@@ -135,25 +165,32 @@ connections:
   - { from: N01, to: N02, relationship: success }
   - { from: N02, to: N03, relationship: success }
   - { from: N03, to: N04, relationship: success }
-  - { from: N03, to: N05, relationship: success }
-
-  # HDFS branch (consume filtered)
-  - { from: N06, to: N07, relationship: success }
-
-  # Spark branch (consume filtered)
-  - { from: N08, to: N09, relationship: success }
+  - { from: N04, to: N05, relationship: Original }
+  - { from: N05, to: N06, relationship: success }
+  - { from: N06, to: N07, relationship: Original }
+  - { from: N07, to: N08, relationship: success }
+  - { from: N07, to: N09, relationship: success }
+  - { from: N07, to: N10, relationship: success }
+  - { from: N07, to: N11, relationship: success }
+  - { from: N10, to: N12, relationship: success }
 
   # Errores comunes
-  - { from: N03, to: N10, relationship: failure }
-  - { from: N04, to: N10, relationship: failure }
-  - { from: N05, to: N10, relationship: failure }
-  - { from: N06, to: N10, relationship: failure }
-  - { from: N07, to: N10, relationship: failure }
-  - { from: N08, to: N10, relationship: failure }
-  - { from: N09, to: N10, relationship: failure }
-  - { from: N10, to: N11, relationship: success }
+  - { from: N03, to: N13, relationship: failure }
+  - { from: N04, to: N13, relationship: Failure }
+  - { from: N04, to: N13, relationship: Retry }
+  - { from: N04, to: N13, relationship: No Retry }
+  - { from: N05, to: N13, relationship: failure }
+  - { from: N06, to: N13, relationship: failure }
+  - { from: N06, to: N13, relationship: Failure }
+  - { from: N06, to: N13, relationship: Retry }
+  - { from: N06, to: N13, relationship: No Retry }
+  - { from: N07, to: N13, relationship: failure }
+  - { from: N11, to: N13, relationship: failure }
+  - { from: N12, to: N13, relationship: failure }
+  - { from: N13, to: N14, relationship: success }
 
 runtime_notes:
-  - "TOPIC_FILTERED actúa como punto de integración para HDFS y trigger Spark."
+  - "El snapshot final ya contiene `source`, `severity`, `peso_pagerank`, `incidencias_dgt` y `resumen_dgt`."
+  - "La provenance de NiFi puede filtrarse por `simlog.provenance.stage`, `simlog.provenance.sources` y `simlog.provenance.dgt_mode`."
+  - "TOPIC_FILTERED sigue siendo el punto de integración con consumidores Spark/servicios externos."
   - "Evitar ejecutar en paralelo este trigger con Airflow para no duplicar procesamiento."
-  - "Si prefieres Spark solo por lotes, deja N08/N09 en stopped."

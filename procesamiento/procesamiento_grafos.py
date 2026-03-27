@@ -29,12 +29,22 @@ from config import (
     KAFKA_BOOTSTRAP,
     TOPIC_TRANSPORTE,
     HIVE_DB,
+    HIVE_CONF_DIR,
     HIVE_METASTORE_URIS,
 )
 
 # Pesos de penalización por clima/estado
 PESO_CONGESTIONADO = 1.5  # Niebla, Tráfico, Lluvia
 PESO_BLOQUEADO = 9999  # Se elimina del grafo
+HIVE_COMPAT_SEED_BASE = os.environ.get("SIMLOG_HIVE_SEED_BASE", "/user/hadoop/simlog_seed")
+HIVE_COMPAT_NODOS_MAESTRO_PATH = os.environ.get(
+    "SIMLOG_HIVE_NODOS_MAESTRO_PATH",
+    f"{HIVE_COMPAT_SEED_BASE}/nodos_maestro",
+)
+HIVE_COMPAT_HISTORICO_NODOS_PATH = os.environ.get(
+    "SIMLOG_HIVE_HISTORICO_NODOS_PATH",
+    f"{HIVE_COMPAT_SEED_BASE}/historico_nodos",
+)
 
 
 def cargar_estados_desde_kafka(spark):
@@ -66,6 +76,9 @@ def cargar_estados_desde_kafka(spark):
 def crear_spark():
     """Spark con Cassandra; Hive queda en modo opt-in para evitar locks del metastore."""
     os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
+    os.environ.setdefault("HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("SIMLOG_HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("HIVE_METASTORE_URIS", HIVE_METASTORE_URIS)
     master = os.environ.get("SPARK_MASTER", "local")
     base_builder = (
         SparkSession.builder
@@ -74,6 +87,9 @@ def crear_spark():
         .config("spark.driver.memory", "512m")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
+        .config("spark.sql.shuffle.partitions", os.environ.get("SIMLOG_SPARK_SHUFFLE_PARTITIONS", "8"))
+        .config("spark.default.parallelism", os.environ.get("SIMLOG_SPARK_DEFAULT_PARALLELISM", "8"))
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
         .config("spark.sql.warehouse.dir", "/user/hive/warehouse")
         .config("spark.cassandra.connection.host", CASSANDRA_HOST)
         .config("spark.cassandra.connection.timeoutMS", "30000")
@@ -82,11 +98,16 @@ def crear_spark():
         .config("spark.jars.packages", "com.datastax.spark:spark-cassandra-connector_2.12:3.5.0")
         .config("spark.eventLog.enabled", "false")
         .config("spark.hadoop.dfs.client.use.datanode.hostname", "false")
+        .config("spark.sql.catalogImplementation", "hive")
+        .config("spark.hadoop.hive.metastore.warehouse.dir", "/user/hive/warehouse")
     )
-    # Si hay metastore remoto (Thrift), usarlo: evita Derby embebido e incompatibilidades de versión.
-    # Exporta: HIVE_METASTORE_URIS=thrift://127.0.0.1:9083 (o el host/puerto que uses).
     if (HIVE_METASTORE_URIS or "").strip():
-        base_builder = base_builder.config("spark.hadoop.hive.metastore.uris", HIVE_METASTORE_URIS.strip())
+        uri = HIVE_METASTORE_URIS.strip()
+        base_builder = (
+            base_builder
+            .config("spark.hadoop.hive.metastore.uris", uri)
+            .config("hive.metastore.uris", uri)
+        )
     enable_hive = os.environ.get("SIMLOG_ENABLE_HIVE", "0") == "1"
     if not enable_hive:
         return base_builder.getOrCreate()
@@ -97,10 +118,24 @@ def crear_spark():
         return base_builder.getOrCreate()
 
 
-def construir_grafo_base(spark, nodos, aristas):
-    """Crear GraphFrame con vértices y aristas."""
-    v_data = [(nid, datos["lat"], datos["lon"], datos["tipo"]) for nid, datos in nodos.items()]
-    v = spark.createDataFrame(v_data, ["id", "lat", "lon", "tipo"])
+def construir_grafo_base(spark, nodos, aristas, estados_nodos=None):
+    """Crear GraphFrame con vértices enriquecidos con severidad/fuente DGT."""
+    v_data = []
+    for nid, datos in nodos.items():
+        est = (estados_nodos or {}).get(nid, {})
+        v_data.append(
+            (
+                nid,
+                datos["lat"],
+                datos["lon"],
+                datos["tipo"],
+                est.get("source", "simulacion"),
+                est.get("severity", "low"),
+                float(est.get("peso_pagerank", 1.0) or 1.0),
+                est.get("estado", "OK"),
+            )
+        )
+    v = spark.createDataFrame(v_data, ["id", "lat", "lon", "tipo", "source", "severity", "peso_pagerank", "estado"])
 
     e_data = [(a, b, float(d)) for a, b, d in aristas]
     e = spark.createDataFrame(e_data, ["src", "dst", "distancia_km"])
@@ -156,29 +191,30 @@ def enriquecer_desde_hive(spark, estados_nodos, estados_aristas, camiones):
     """
     Enriquecimiento desde datos maestros en Hive (PDF Fase II).
     Lee tabla nodos_maestro (id_nodo, lat, lon, tipo, hub) y añade hub a estados_nodos.
-    Si la tabla no existe o está vacía, asegura crearla y poblarla desde config_nodos.
+    En Hive 4 usamos el path externo publicado por HS2 para evitar incompatibilidades
+    del cliente de metastore de Spark con el Thrift de Hive.
     """
     nodos = get_nodos()
-    db = HIVE_DB if HIVE_DB else "logistica_espana"
+
+    rows = []
+    for nid, datos in nodos.items():
+        hub = datos.get("hub", nid if datos.get("tipo") == "hub" else "")
+        rows.append((nid, float(datos["lat"]), float(datos["lon"]), datos["tipo"], hub))
+
     try:
-        spark.sql(f"CREATE DATABASE IF NOT EXISTS {db}")
-        spark.sql(f"USE {db}")
-        spark.sql("""
-            CREATE TABLE IF NOT EXISTS nodos_maestro (
-                id_nodo STRING, lat DOUBLE, lon DOUBLE, tipo STRING, hub STRING
-            ) STORED AS PARQUET
-        """)
-        # Poblar desde config_nodos si la tabla está vacía
-        df_master = spark.sql("SELECT * FROM nodos_maestro LIMIT 1")
-        if df_master.count() == 0:
-            rows = []
-            for nid, datos in nodos.items():
-                hub = datos.get("hub", nid if datos.get("tipo") == "hub" else "")
-                rows.append((nid, float(datos["lat"]), float(datos["lon"]), datos["tipo"], hub))
-            from pyspark.sql import Row
-            spark.createDataFrame(rows, ["id_nodo", "lat", "lon", "tipo", "hub"]).write.mode("overwrite").saveAsTable(f"{db}.nodos_maestro")
-        # Leer maestros y enriquecer
-        df_maestro = spark.sql(f"SELECT id_nodo, hub FROM {db}.nodos_maestro")
+        try:
+            df_master = spark.read.option("header", "true").csv(HIVE_COMPAT_NODOS_MAESTRO_PATH)
+            if df_master.rdd.isEmpty():
+                raise ValueError("nodos_maestro vacío")
+        except Exception:
+            df_master = spark.createDataFrame(rows, ["id_nodo", "lat", "lon", "tipo", "hub"])
+            (
+                df_master.coalesce(1)
+                .write.mode("overwrite")
+                .option("header", "true")
+                .csv(HIVE_COMPAT_NODOS_MAESTRO_PATH)
+            )
+        df_maestro = df_master.select("id_nodo", "hub")
         maestro = {r.id_nodo: r.hub for r in df_maestro.collect()}
         for nid in list(estados_nodos.keys()):
             if isinstance(estados_nodos.get(nid), dict) and nid in maestro:
@@ -214,13 +250,22 @@ def limpiar_datos_antes_cassandra(estados_nodos, estados_aristas, camiones):
     for nid, d in (estados_nodos or {}).items():
         if not nid:
             continue
+        estado = norm_estado(d.get("estado"))
         nodos_limpios[nid] = {
-            "estado": norm_estado(d.get("estado")),
+            "estado": estado,
             "motivo": d.get("motivo") or "",
             "clima_desc": d.get("clima_desc"),
             "temp": d.get("temp"),
             "humedad": d.get("humedad"),
             "viento": d.get("viento"),
+            "source": d.get("source") or "simulacion",
+            "severity": d.get("severity") or ("high" if estado == "Bloqueado" else ("medium" if estado == "Congestionado" else "low")),
+            "peso_pagerank": float(d.get("peso_pagerank", 1.0) or 1.0),
+            "id_incidencia": d.get("id_incidencia"),
+            "carretera": d.get("carretera"),
+            "municipio": d.get("municipio"),
+            "provincia": d.get("provincia"),
+            "descripcion": d.get("descripcion"),
         }
 
     # Limpiar aristas: nulos y normalizar estado
@@ -242,8 +287,9 @@ def limpiar_datos_antes_cassandra(estados_nodos, estados_aristas, camiones):
         if not cid or cid in seen_ids:
             continue
         seen_ids.add(cid)
-        lat = c.get("lat")
-        lon = c.get("lon")
+        pos = c.get("posicion_actual") if isinstance(c.get("posicion_actual"), dict) else {}
+        lat = c.get("lat", pos.get("lat"))
+        lon = c.get("lon", pos.get("lon"))
         if lat is None:
             lat = 40.4
         if lon is None:
@@ -254,17 +300,207 @@ def limpiar_datos_antes_cassandra(estados_nodos, estados_aristas, camiones):
             lat, lon = 40.4, -3.7
         if not (35 <= lat <= 44 and -10 <= lon <= 5):
             continue  # Fuera de España, filtrar
+        ruta = c.get("ruta") or c.get("ruta_sugerida") or []
+        ruta = ruta if isinstance(ruta, list) else []
+        ruta_sugerida = c.get("ruta_sugerida") or ruta
+        ruta_sugerida = ruta_sugerida if isinstance(ruta_sugerida, list) else ruta
+        try:
+            progreso_pct = float(c.get("progreso_pct", c.get("progreso", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            progreso_pct = 0.0
+        try:
+            distancia_total_km = float(c.get("distancia_total_km", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            distancia_total_km = 0.0
         camiones_limpios.append({
             "id_camion": cid,
+            "id": cid,
             "lat": lat,
             "lon": lon,
-            "ruta_origen": c.get("ruta_origen") or (c.get("ruta") or [None])[0] or "",
-            "ruta_destino": c.get("ruta_destino") or (c.get("ruta") or [None])[-1] or "",
-            "ruta_sugerida": c.get("ruta_sugerida") or c.get("ruta") or [],
+            "posicion_actual": {"lat": lat, "lon": lon},
+            "ruta": ruta,
+            "ruta_origen": c.get("ruta_origen") or (ruta[0] if ruta else ""),
+            "ruta_destino": c.get("ruta_destino") or (ruta[-1] if ruta else ""),
+            "ruta_sugerida": ruta_sugerida,
             "estado_ruta": c.get("estado_ruta") or "En ruta",
-            "motivo_retraso": c.get("motivo_retraso"),
+            "motivo_retraso": c.get("motivo_retraso") or "",
+            "progreso_pct": progreso_pct,
+            "distancia_total_km": distancia_total_km,
+            "nodo_actual": c.get("nodo_actual") or c.get("origen_tramo") or (ruta[0] if ruta else ""),
+            "origen_tramo": c.get("origen_tramo") or (ruta[0] if ruta else ""),
+            "destino_tramo": c.get("destino_tramo") or (ruta[1] if len(ruta) > 1 else (ruta[0] if ruta else "")),
+            "distancia_alternativa_km": c.get("distancia_alternativa_km"),
         })
     return nodos_limpios, aristas_limpias, camiones_limpios
+
+
+def _distancia_ruta_km(ruta):
+    if not ruta or len(ruta) < 2:
+        return 0.0
+    nodos = get_nodos()
+    distancias = {}
+    for src, dst, dist in get_aristas():
+        distancias[(src, dst)] = float(dist)
+        distancias[(dst, src)] = float(dist)
+    total = 0.0
+    for src, dst in zip(ruta, ruta[1:]):
+        tramo = distancias.get((src, dst))
+        if tramo is None:
+            d1 = nodos.get(src, {"lat": 40.4, "lon": -3.7})
+            d2 = nodos.get(dst, {"lat": 40.4, "lon": -3.7})
+            tramo = (((d1["lat"] - d2["lat"]) ** 2 + (d1["lon"] - d2["lon"]) ** 2) ** 0.5) * 111.0
+        total += float(tramo)
+    return round(total, 2)
+
+
+def _persistir_historico_nodos_hive_compatible(spark, df_nodos):
+    """
+    Mantiene `historico_nodos` vía la ruta externa que Hive ya expone en HDFS.
+    Evita `saveAsTable()` contra Hive 4 desde Spark.
+    """
+    df_hist = (
+        df_nodos.withColumn("motivo_retraso", col("motivo"))
+        .withColumn("clima_actual", col("clima_desc"))
+        .withColumn("temperatura", col("temp"))
+        .withColumn("viento_velocidad", col("viento"))
+        .select(
+            "id_nodo",
+            "lat",
+            "lon",
+            "tipo",
+            "estado",
+            "motivo_retraso",
+            "clima_actual",
+            "temperatura",
+            "humedad",
+            "viento_velocidad",
+            "ultima_actualizacion",
+            "fecha_proceso",
+        )
+    )
+    (
+        df_hist.coalesce(1)
+        .write.mode("append")
+        .option("header", "true")
+        .csv(HIVE_COMPAT_HISTORICO_NODOS_PATH)
+    )
+
+
+def _ruta_alternativa_minima(ruta, nodos):
+    if not ruta or len(ruta) < 2:
+        return ruta or []
+
+    def hub_de(nodo):
+        info = nodos.get(nodo, {})
+        if info.get("tipo") == "hub":
+            return nodo
+        return info.get("hub") or "Madrid"
+
+    origen = ruta[0]
+    destino = ruta[-1]
+    hub_origen = hub_de(origen)
+    hub_destino = hub_de(destino)
+    propuesta = []
+    for nodo in (origen, hub_origen, "Madrid", hub_destino, destino):
+        if nodo and (not propuesta or propuesta[-1] != nodo):
+            propuesta.append(nodo)
+    return propuesta
+
+
+def _construir_rutas_alternativas(camiones, estados_aristas):
+    nodos = get_nodos()
+    rutas = {}
+    bloqueadas = set()
+    for key, info in (estados_aristas or {}).items():
+        if (info or {}).get("estado") == "Bloqueado" and "|" in key:
+            src, dst = key.split("|", 1)
+            bloqueadas.add((src, dst))
+            bloqueadas.add((dst, src))
+
+    for camion in camiones:
+        ruta = camion.get("ruta") or []
+        ruta_sugerida = camion.get("ruta_sugerida") or ruta
+        necesita_alternativa = ruta_sugerida != ruta
+        if not necesita_alternativa and len(ruta) >= 2:
+            necesita_alternativa = any((src, dst) in bloqueadas for src, dst in zip(ruta, ruta[1:]))
+            if necesita_alternativa:
+                ruta_sugerida = _ruta_alternativa_minima(ruta, nodos)
+        if not necesita_alternativa:
+            continue
+        rutas[camion["id_camion"]] = {
+            "ruta": ruta_sugerida,
+            "distancia": _distancia_ruta_km(ruta_sugerida),
+            "motivo": camion.get("motivo_retraso") or "Ruta alternativa calculada",
+        }
+    return rutas
+
+
+def _persistir_eventos_historico_cassandra(estados_nodos, estados_aristas):
+    try:
+        import uuid
+        from cassandra.cluster import Cluster
+
+        nodos = get_nodos()
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+        stmt = session.prepare(
+            """
+            INSERT INTO eventos_historico (
+                id_evento, tipo_entidad, id_entidad, estado_anterior, estado_nuevo,
+                motivo, lat, lon, timestamp_evento
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        )
+        now = datetime.now(timezone.utc)
+        for nid, info in (estados_nodos or {}).items():
+            meta = nodos.get(nid, {})
+            session.execute(
+                stmt,
+                (
+                    uuid.uuid4(),
+                    "nodo",
+                    nid,
+                    None,
+                    info.get("estado", "OK"),
+                    info.get("motivo", ""),
+                    float(meta.get("lat", 0.0)),
+                    float(meta.get("lon", 0.0)),
+                    now,
+                ),
+            )
+        for edge_id, info in (estados_aristas or {}).items():
+            if "|" not in edge_id:
+                continue
+            src, _ = edge_id.split("|", 1)
+            meta = nodos.get(src, {})
+            session.execute(
+                stmt,
+                (
+                    uuid.uuid4(),
+                    "arista",
+                    edge_id,
+                    None,
+                    info.get("estado", "OK"),
+                    info.get("motivo", ""),
+                    float(meta.get("lat", 0.0)),
+                    float(meta.get("lon", 0.0)),
+                    now,
+                ),
+            )
+        cluster.shutdown()
+    except Exception as e:
+        print(f"[CASSANDRA] eventos_historico no disponible: {e}")
+
+
+def _evaluar_alerta_bloqueos(estados_nodos):
+    bloqueados = [nid for nid, info in (estados_nodos or {}).items() if (info or {}).get("estado") == "Bloqueado"]
+    total = len(estados_nodos or {})
+    ratio = (len(bloqueados) / total) if total else 0.0
+    if ratio >= 0.20 or len(bloqueados) >= 5:
+        return {"nivel": "critica", "bloqueados": len(bloqueados), "ratio": round(ratio, 3), "nodos": bloqueados}
+    if len(bloqueados) >= 3:
+        return {"nivel": "alta", "bloqueados": len(bloqueados), "ratio": round(ratio, 3), "nodos": bloqueados}
+    return {"nivel": "normal", "bloqueados": len(bloqueados), "ratio": round(ratio, 3), "nodos": bloqueados}
 
 
 def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
@@ -272,12 +508,15 @@ def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
     nodos = get_nodos()
     aristas = get_aristas()
 
-    g0 = construir_grafo_base(spark, nodos, aristas)
+    g0 = construir_grafo_base(spark, nodos, aristas, estados_nodos=estados_nodos)
     g = aplicar_autosanacion(g0, estados_aristas, estados_nodos)
 
     # PageRank para identificar nodos críticos
     pr = g.pageRank(resetProbability=0.15, maxIter=10)
-    pagerank_df = pr.vertices.select("id", col("pagerank").alias("pagerank_val"))
+    pagerank_df = (
+        pr.vertices.select("id", "source", "severity", "peso_pagerank", "estado", col("pagerank").alias("base_pagerank"))
+        .withColumn("pagerank_val", col("base_pagerank") * col("peso_pagerank"))
+    )
 
     # Preparar nodos_estado para Cassandra
     from pyspark.sql.types import StructType, StructField, StringType, FloatType, TimestampType
@@ -295,6 +534,13 @@ def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
             float(est.get("temp") or 0),
             float(est.get("humedad") or 0),
             float(est.get("viento") or 0),
+            est.get("source", "simulacion"),
+            est.get("severity", "low"),
+            est.get("id_incidencia"),
+            est.get("carretera"),
+            est.get("municipio"),
+            est.get("provincia"),
+            est.get("descripcion"),
             datetime.now(timezone.utc),
         ))
 
@@ -309,6 +555,13 @@ def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
         StructField("temperatura", FloatType()),
         StructField("humedad", FloatType()),
         StructField("viento_velocidad", FloatType()),
+        StructField("source", StringType()),
+        StructField("severity", StringType()),
+        StructField("id_incidencia", StringType()),
+        StructField("carretera", StringType()),
+        StructField("municipio", StringType()),
+        StructField("provincia", StringType()),
+        StructField("descripcion_incidencia", StringType()),
         StructField("ultima_actualizacion", TimestampType()),
     ])
     df_nodos = spark.createDataFrame(rows_nodos, schema_nodos)
@@ -396,30 +649,83 @@ def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
 
     # PageRank a Cassandra
     pr_rows = pagerank_df.collect()
-    from pyspark.sql.types import StructType, StructField, StringType, FloatType, TimestampType
-    pr_schema = StructType([
-        StructField("id_nodo", StringType()),
-        StructField("pagerank", FloatType()),
-        StructField("ultima_actualizacion", TimestampType()),
-    ])
-    pr_data = [(r["id"], float(r["pagerank_val"]), datetime.now(timezone.utc)) for r in pr_rows]
-    df_pr = spark.createDataFrame(pr_data, ["id_nodo", "pagerank", "ultima_actualizacion"])
+    pr_data = [
+        (
+            r["id"],
+            float(r["pagerank_val"]),
+            float(r["peso_pagerank"] or 1.0),
+            r["source"] or "simulacion",
+            r["estado"] or "OK",
+            datetime.now(timezone.utc),
+        )
+        for r in pr_rows
+    ]
+    df_pr = spark.createDataFrame(
+        pr_data,
+        ["id_nodo", "pagerank", "peso_pagerank", "source", "estado", "ultima_actualizacion"],
+    )
     df_pr.write \
         .format("org.apache.spark.sql.cassandra") \
         .options(table="pagerank_nodos", keyspace=KEYSPACE) \
         .mode("append") \
         .save()
 
+    _persistir_eventos_historico_cassandra(estados_nodos, estados_aristas)
+
+    pagerank_dict = {r["id"]: {"pagerank": float(r["pagerank_val"])} for r in pr_rows}
+    rutas_alternativas = _construir_rutas_alternativas(camiones, estados_aristas)
+    clima_hubs = {}
+    clima = []
+    for nid, info in (estados_nodos or {}).items():
+        meta = nodos.get(nid, {})
+        hub = meta.get("hub") or (nid if meta.get("tipo") == "hub" else None)
+        if not hub or hub in clima_hubs:
+            continue
+        clima_hubs[hub] = {
+            "descripcion": info.get("clima_desc", "N/A"),
+            "temp": info.get("temp"),
+            "humedad": info.get("humedad"),
+            "viento": info.get("viento"),
+        }
+        clima.append(
+            {
+                "ciudad": hub,
+                "temperatura": info.get("temp"),
+                "humedad": info.get("humedad"),
+                "descripcion": info.get("clima_desc", "N/A"),
+                "visibilidad": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    datos_hive = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "estados_nodos": estados_nodos,
+        "estados_aristas": estados_aristas,
+        "camiones": camiones,
+        "clima_hubs": clima_hubs,
+        "clima": clima,
+        "alerta_bloqueos": _evaluar_alerta_bloqueos(estados_nodos),
+    }
+
     # Hive: histórico de eventos (si Hive está disponible)
     try:
-        spark.sql("CREATE DATABASE IF NOT EXISTS logistica_espana")
-        spark.sql("USE logistica_espana")
-        df_nodos.withColumn("fecha_proceso", current_timestamp()).write \
-            .format("hive") \
-            .mode("append") \
-            .saveAsTable("logistica_espana.historico_nodos")
+        from persistencia_hive import ejecutar_persistencia_hive
+
+        _persistir_historico_nodos_hive_compatible(
+            spark,
+            df_nodos.withColumn("fecha_proceso", current_timestamp()),
+        )
+        ejecutar_persistencia_hive(spark, datos_hive, pagerank_dict, rutas_alternativas, nodos)
+        print(
+            "[HIVE] Modo compatibilidad activo: Spark mantiene histórico Hive "
+            "mediante rutas externas compatibles con Hive 4."
+        )
     except Exception as e:
         print(f"[HIVE] Opcional - No disponible: {e}")
+
+    alerta = _evaluar_alerta_bloqueos(estados_nodos)
+    if alerta["nivel"] != "normal":
+        print(f"[ALERTA] Bloqueos de red detectados: {alerta}")
 
     return g, pagerank_df
 
@@ -477,22 +783,70 @@ def main():
             import random
             nodos = get_nodos()
             aristas = get_aristas()
-            estados_nodos = {n: {"estado": random.choice(["OK", "Congestionado", "Bloqueado"]), "motivo": None} for n in nodos}
+            estados_nodos = {
+                n: {
+                    "estado": random.choice(["OK", "Congestionado", "Bloqueado"]),
+                    "motivo": None,
+                    "source": "simulacion",
+                    "severity": "low",
+                    "peso_pagerank": 1.0,
+                }
+                for n in nodos
+            }
             for n in list(estados_nodos.keys())[:5]:
                 if estados_nodos[n]["estado"] == "Congestionado":
                     estados_nodos[n]["motivo"] = random.choice(["Niebla", "Tráfico", "Lluvia"])
+                    estados_nodos[n]["severity"] = "medium"
                 elif estados_nodos[n]["estado"] == "Bloqueado":
                     estados_nodos[n]["motivo"] = random.choice(["Incendio", "Nieve", "Accidente"])
+                    estados_nodos[n]["severity"] = "high"
             estados_aristas = {}
             for a, b, d in aristas:
                 key = f"{a}|{b}"
                 est = random.choice(["OK", "Congestionado", "Bloqueado"])
                 motivo = random.choice(["Niebla", "Tráfico", "Lluvia"]) if est == "Congestionado" else (random.choice(["Incendio", "Nieve"]) if est == "Bloqueado" else None)
-                estados_aristas[key] = {"estado": est, "motivo": motivo, "distancia_km": d}
+                estados_aristas[key] = {
+                    "estado": est,
+                    "motivo": motivo,
+                    "distancia_km": d,
+                    "source": "simulacion",
+                    "severity": "high" if est == "Bloqueado" else ("medium" if est == "Congestionado" else "low"),
+                }
+            clima_hubs = {
+                hub: {
+                    "descripcion": random.choice(["despejado", "lluvia ligera", "niebla"]),
+                    "temp": round(random.uniform(6, 28), 1),
+                    "humedad": random.randint(35, 90),
+                    "viento": round(random.uniform(1, 12), 1),
+                }
+                for hub, info in nodos.items()
+                if info.get("tipo") == "hub"
+            }
             camiones = [
-                {"id_camion": f"camion_{i}", "lat": 40.4 + i * 0.1, "lon": -3.7, "ruta": ["Madrid", "Barcelona"], "ruta_sugerida": ["Madrid", "Toledo", "Cuenca", "Barcelona"]}
+                {
+                    "id_camion": f"camion_{i}",
+                    "id": f"camion_{i}",
+                    "lat": 40.4 + i * 0.1,
+                    "lon": -3.7,
+                    "posicion_actual": {"lat": 40.4 + i * 0.1, "lon": -3.7},
+                    "ruta": ["Madrid", "Barcelona"],
+                    "ruta_sugerida": ["Madrid", "Bilbao", "Barcelona"],
+                    "ruta_origen": "Madrid",
+                    "ruta_destino": "Barcelona",
+                    "nodo_actual": "Madrid",
+                    "progreso_pct": float(i * 15),
+                    "distancia_total_km": _distancia_ruta_km(["Madrid", "Barcelona"]),
+                    "estado_ruta": "En ruta",
+                    "motivo_retraso": "Ruta alternativa calculada" if i % 2 == 0 else "",
+                }
                 for i in range(1, 6)
             ]
+            for hub, c in clima_hubs.items():
+                if hub in estados_nodos:
+                    estados_nodos[hub]["clima_desc"] = c.get("descripcion", "N/A")
+                    estados_nodos[hub]["temp"] = c.get("temp")
+                    estados_nodos[hub]["humedad"] = c.get("humedad")
+                    estados_nodos[hub]["viento"] = c.get("viento")
         else:
             # El JSON de ingesta usa "estados_nodos" y "estados_aristas"
             estados_nodos = payload.get("estados_nodos", payload.get("nodos_estado", {}))
@@ -504,12 +858,16 @@ def main():
                     "id_camion": c.get("id") or c.get("id_camion"),
                     "lat": c.get("posicion_actual", {}).get("lat") if isinstance(c.get("posicion_actual"), dict) else c.get("lat"),
                     "lon": c.get("posicion_actual", {}).get("lon") if isinstance(c.get("posicion_actual"), dict) else c.get("lon"),
+                    "posicion_actual": c.get("posicion_actual"),
                     "ruta": c.get("ruta", []),
                     "ruta_sugerida": c.get("ruta_sugerida", c.get("ruta", [])),
-                    "ruta_origen": (c.get("ruta") or [None])[0],
-                    "ruta_destino": (c.get("ruta") or [None])[-1],
+                    "ruta_origen": c.get("ruta_origen") or (c.get("ruta") or [None])[0],
+                    "ruta_destino": c.get("ruta_destino") or (c.get("ruta") or [None])[-1],
+                    "nodo_actual": c.get("nodo_actual", c.get("origen_tramo")),
                     "estado_ruta": c.get("estado_ruta", "En ruta"),
                     "motivo_retraso": c.get("motivo_retraso"),
+                    "progreso_pct": c.get("progreso_pct", c.get("progreso", 0.0)),
+                    "distancia_total_km": c.get("distancia_total_km", _distancia_ruta_km(c.get("ruta", []))),
                 }
                 for c in camiones
             ]

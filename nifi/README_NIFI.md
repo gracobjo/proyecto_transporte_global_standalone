@@ -3,7 +3,7 @@
 > **Documentación detallada (process group, procesadores, relaciones y criterio):**  
 > **[`PROCESADORES_Y_RELACIONES.md`](PROCESADORES_Y_RELACIONES.md)** — incluye el **flujo compacto recomendado (v2)** y el **flujo granular (v1)**.
 
-Este directorio describe el **grupo de procesadores** y el flujo de datos alineado con el PDF / práctica: **GPS sintético**, **OpenWeather (InvokeHTTP)**, **Kafka**, **HDFS (cliente Hadoop; cluster con YARN)**, **Spark** (job batch vía `spark-submit`), **Cassandra**, **Hive** (histórico analítico).
+Este directorio describe el **grupo de procesadores** y el flujo de datos alineado con el PDF / práctica: **GPS sintético**, **OpenWeather (InvokeHTTP)**, **DGT DATEX2 (InvokeHTTP)**, **Kafka**, **HDFS (cliente Hadoop; cluster con YARN)**, **Spark** (job batch vía `spark-submit`), **Cassandra**, **Hive** (histórico analítico).
 
 > **Nota:** NiFi no sustituye a Spark en memoria: orquesta **ingesta y disparo de jobs**. El procesamiento masivo (GraphFrames) sigue siendo `procesamiento/procesamiento_grafos.py` o un JAR equivalente.
 
@@ -25,22 +25,31 @@ Guia y scripts listos en:
  [Timer 15 min]
       │
       ▼
- [ExecuteScript Groovy]
- (GPS + OpenWeather)
+[ExecuteScript Groovy]
+(GPS sintético)
       │
+      ▼
+[InvokeHTTP OpenWeather]
+      │
+      ▼
+[ExecuteScript MergeWeather]
+      │
+      ▼
+[InvokeHTTP DGT DATEX2]
+      │
+      ▼
+[ExecuteScript MergeDGT]
+      │
+      ├──► [PublishKafka transporte_dgt_raw]
       ├──► [PublishKafka transporte_raw]
       └──► [PublishKafka transporte_filtered]
                  │
-        ┌────────┴────────┐
-        ▼                 ▼
- [ConsumeKafka]      [ConsumeKafka]
-   for HDFS           for Spark trigger
-        │                 │
-        ▼                 ▼
+        ┌────────┴──────────┐
+        ▼                   ▼
    [PutHDFS]       [ExecuteProcess spark-submit]
-                           │
-                           ▼
-                 Cassandra + Hive (vía Spark)
+                            │
+                            ▼
+                  Cassandra + Hive (vía Spark)
 ```
 
 ## Parámetros del Parameter Context (recomendado)
@@ -50,9 +59,11 @@ Definir en **NiFi → Parameter Contexts** (o Variables del grupo):
 | Parámetro | Ejemplo | Uso |
 |-----------|---------|-----|
 | `KAFKA_BOOTSTRAP` | `localhost:9092` | PublishKafka |
+| `TOPIC_DGT_RAW` | `transporte_dgt_raw` | Auditoría XML/merge DGT |
 | `TOPIC_RAW` | `transporte_raw` | Datos crudos (auditoría) |
 | `TOPIC_FILTERED` | `transporte_filtered` | Consumo Spark / pipeline |
 | `OWM_API_KEY` | *(tu clave)* | InvokeHTTP |
+| `DGT_DATEX2_URL` | `https://nap.dgt.es/.../datex2_v36.xml` | InvokeHTTP DGT |
 | `HDFS_RAW_BASE` | `/user/hadoop/transporte_backup/nifi_raw` | PutHDFS |
 | `CASSANDRA_HOST` | `127.0.0.1` | ExecuteScript / Spark |
 | `HIVE_JDBC_URL` | `jdbc:hive2://localhost:10000/logistica_analytics` | PutHiveQL |
@@ -73,7 +84,7 @@ Orden lógico y tipos de procesador **Apache NiFi 1.x / 2.x** (los nombres exact
 | # | Tipo de procesador | Rol KDD / PDF |
 |---|-------------------|---------------|
 | 1 | **GenerateFlowFile** | Disparo periódico (p. ej. cada 15 min) — *Selección / simulación* |
-| 2 | **ExecuteScript** (Groovy) | Genera **JSON** con posiciones GPS sintéticas, ids de camión, `paso_15min` — *Preprocesamiento* |
+| 2 | **ExecuteScript** (Groovy) | Genera **JSON** con posiciones GPS sintéticas, ids de camión, `paso_15min` y atributos `simlog.provenance.*` — *Preprocesamiento* |
 | | *Alternativa* | **ReplaceText** + plantilla en `assets/payload_template.json` (menos flexible) |
 
 Script de referencia: `groovy/GenerateSyntheticPayload.groovy`.
@@ -88,18 +99,34 @@ Script de referencia: `groovy/GenerateSyntheticPayload.groovy`.
 
 Para **5 hubs en paralelo**, crear **5 ramas** (Madrid, Barcelona, …) con `UpdateAttribute` fijo + `InvokeHTTP`, y **MergeContent** con `Minimum Number of Entries = 5`.
 
+### 2.b DATEX2 DGT real
+
+| # | Tipo | Rol |
+|---|------|-----|
+| 6 | **InvokeHTTP** | Descarga XML DATEX2 de la DGT y lo deja en atributo `dgt.response.xml` |
+| 7 | **ExecuteScript** (Groovy) | Fusiona incidencias DGT con el payload, prioriza `source=dgt` sobre simulación y actualiza `severity` / `peso_pagerank` |
+
+Este paso deja trazabilidad adicional en atributos:
+
+- `simlog.provenance.stage=dgt_merged`
+- `simlog.provenance.sources=simulacion,openweather,dgt`
+- `simlog.provenance.dgt_mode=live|disabled`
+- `simlog.provenance.dgt_incidents=<n>`
+- `simlog.provenance.dgt_nodes_affected=<n>`
+
 ### 3. Kafka (pub/sub)
 
 | # | Tipo | Configuración clave |
 |---|------|---------------------|
-| 6 | **PublishKafka** / **PublishKafka**_* | `Bootstrap Servers` = `${KAFKA_BOOTSTRAP`, `Topic Name` = `${TOPIC_RAW}` (crudo) |
-| 7 | *(Opcional)* **PublishKafka** | Segundo topic `${TOPIC_FILTERED}` tras **ValidateRecord** / **JoltTransform** para “datos filtrados” (como en `config.py`) |
+| 8 | **PublishKafka** | `Topic Name` = `${TOPIC_DGT_RAW}` para auditoría específica de la señal DGT |
+| 9 | **PublishKafka** | `Topic Name` = `${TOPIC_RAW}` (snapshot enriquecido completo) |
+| 10 | **PublishKafka** | `Topic Name` = `${TOPIC_FILTERED}` para consumidores del pipeline |
 
 ### 4. HDFS — datos crudos (cluster YARN)
 
 | # | Tipo | Notas |
 |---|------|--------|
-| 8 | **PutHDFS** | `Directory` = `${HDFS_RAW_BASE}/${now():format('yyyy/MM/dd')}`; **Hadoop Configuration Resources** = `file:///etc/hadoop/conf/core-site.xml,file:///etc/hadoop/conf/hdfs-site.xml` |
+| 11 | **PutHDFS** | `Directory` = `${HDFS_RAW_BASE}/${now():format('yyyy/MM/dd')}`; **Hadoop Configuration Resources** = `file:///etc/hadoop/conf/core-site.xml,file:///etc/hadoop/conf/hdfs-site.xml` |
 
 **Importante:** YARN es el **manager de recursos** del cluster; **PutHDFS** usa el **cliente HDFS** (no “invoca YARN” directamente). El PDF suele pedir “datos en HDFS en un cluster YARN”: basta con que `hdfs-site.xml` apunte al NameNode del cluster gestionado por YARN.
 
@@ -109,7 +136,7 @@ NiFi no ejecuta Spark en línea; se usa **ExecuteProcess** o **ExecuteStreamComm
 
 | # | Tipo | Comando típico |
 |---|------|----------------|
-| 9 | **ExecuteProcess** | `bash` argumentos: `scripts/spark_submit_yarn.sh` (o `spark-submit` directo) |
+| 12 | **ExecuteProcess** | `bash` argumentos: `scripts/spark_submit_yarn.sh` (o `spark-submit` directo) |
 
 El script debe lanzar:
 
@@ -155,6 +182,7 @@ En nodos con poca RAM, **priorizar** que Spark inserte en Hive en el mismo job q
 | `flow/simlog_kdd_flow_spec.yaml` | Especificación legible de procesadores y conexiones |
 | `flow/FLUJO_MINIMO_CLIMA.md` | Montaje mínimo operativo (OpenWeather -> Kafka + HDFS) |
 | `groovy/GenerateSyntheticPayload.groovy` | GPS sintético + envelope JSON |
+| `groovy/MergeDgtDatex2IntoPayload.groovy` | Fusión DATEX2 DGT con prioridad y provenance |
 | `scripts/spark_submit_yarn.sh` | Ejemplo `spark-submit` con YARN |
 | `assets/payload_template.json` | Plantilla JSON de referencia |
 | `parameter-context.env.example` | Variables para Parameter Context |
@@ -169,6 +197,28 @@ En nodos con poca RAM, **priorizar** que Spark inserte en Hive en el mismo job q
    - **JsonTreeReader** / **JsonRecordSetWriter** (si usas MergeRecord)
    - **SSLContextService** (si Kafka/HDFS con TLS)
    - **HiveConnectionPool** (PutHiveQL)
+
+## Provenance y relaciones
+
+Para comprobar el linaje en la UI de NiFi:
+
+1. Abrir el Process Group `PG_SIMLOG_KDD`.
+2. Revisar `Data Provenance` filtrando por `componentName`:
+   - `Build_GPS_Sintetico`
+   - `Merge_Weather_Into_Payload`
+   - `Merge_DGT_Into_Payload`
+   - `Kafka_Publish_FILTERED`
+   - `HDFS_Backup_JSON`
+3. Filtrar por atributos `simlog.provenance.*` para distinguir si un snapshot vino solo de simulación o quedó enriquecido con DGT.
+
+Relaciones clave del flujo final:
+
+- `Build_GPS_Sintetico.success -> OpenWeather_InvokeHTTP`
+- `OpenWeather_InvokeHTTP.Original -> Merge_Weather_Into_Payload`
+- `Merge_Weather_Into_Payload.success -> DGT_DATEX2_InvokeHTTP`
+- `DGT_DATEX2_InvokeHTTP.Original -> Merge_DGT_Into_Payload`
+- `Merge_DGT_Into_Payload.success -> Kafka_Publish_DGT_RAW | Kafka_Publish_RAW | Kafka_Publish_FILTERED | HDFS_Backup_JSON`
+- `Kafka_Publish_FILTERED.success -> Spark_Submit_Procesamiento`
 
 ## Seguridad
 

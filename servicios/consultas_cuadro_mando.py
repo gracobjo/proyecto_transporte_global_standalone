@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from queue import Queue
+from threading import Thread
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import (
     CASSANDRA_HOST,
     HIVE_BEELINE_USER,
+    HIVE_CONF_DIR,
     HIVE_DB,
     HIVE_JDBC_URL,
+    HIVE_METASTORE_URIS,
     HIVE_TABLE_HISTORICO_NODOS,
     HIVE_TABLE_NODOS_MAESTRO,
     HIVE_TABLE_TRANSPORTE_HIST,
@@ -56,7 +59,10 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
     },
     "pagerank_top": {
         "titulo": "PageRank — criticidad de nodos",
-        "cql": "SELECT id_nodo, pagerank, ultima_actualizacion FROM pagerank_nodos LIMIT 100",
+        "cql": (
+            "SELECT id_nodo, pagerank, peso_pagerank, source, estado, ultima_actualizacion "
+            "FROM pagerank_nodos LIMIT 100"
+        ),
     },
     "eventos_recientes": {
         "titulo": "Eventos históricos (Cassandra, ventana TTL)",
@@ -82,7 +88,10 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
     },
     "gestor_nodo_critico_pagerank": {
         "titulo": "Gestor — nodo logístico más crítico (PageRank; ordenar en cliente)",
-        "cql": "SELECT id_nodo, pagerank, ultima_actualizacion FROM pagerank_nodos LIMIT 500",
+        "cql": (
+            "SELECT id_nodo, pagerank, peso_pagerank, source, estado, ultima_actualizacion "
+            "FROM pagerank_nodos LIMIT 500"
+        ),
     },
 }
 
@@ -242,6 +251,7 @@ def listar_columnas_hive(tabla: str) -> Tuple[bool, str, List[str]]:
 HIVE_DB_NAME = HIVE_DB or "logistica_espana"
 _T_HIST = HIVE_TABLE_HISTORICO_NODOS
 _T_MAESTRO = HIVE_TABLE_NODOS_MAESTRO
+_T_TRANSP = HIVE_TABLE_TRANSPORTE_HIST
 
 HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     "diag_smoke_hive": {
@@ -280,11 +290,10 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
         "sql": f"SELECT src, dst, distancia_km FROM {HIVE_DB_NAME}.red_gemelo_aristas",
     },
     "transporte_ingesta_real_muestra": {
-        "titulo": "transporte_ingesta_real — camiones (struct)",
+        "titulo": "Transporte histórico — camiones normalizados",
         "sql": (
-            f"SELECT camiones.id_camion AS id, camiones.posicion_actual.lat AS lat, "
-            f"camiones.posicion_actual.lon AS lon, camiones.progreso_pct AS progreso_pct "
-            f"FROM {HIVE_DB_NAME}.transporte_ingesta_real LIMIT 500"
+            f"SELECT id_camion AS id, lat, lon, progreso_pct, origen, destino, estado_ruta "
+            f"FROM {HIVE_DB_NAME}.{_T_TRANSP} LIMIT 500"
         ),
     },
     "gestor_historial_rutas_camion": {
@@ -297,7 +306,7 @@ SELECT
   t.`timestamp`,
   t.camiones
 FROM {HIVE_DB_NAME}.{HIVE_TABLE_TRANSPORTE_HIST} t
-WHERE t.camiones IS NOT NULL
+WHERE t.id_camion IS NOT NULL
 LIMIT 200
         """.strip(),
     },
@@ -488,12 +497,7 @@ def ejecutar_hive_sql_seguro(sql: str) -> Tuple[bool, str, str]:
     ):
         return False, "Solo se permiten SHOW, SELECT, WITH o DESCRIBE", ""
     timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_ejecutar_hive_pyhive, sql)
-        try:
-            return fut.result(timeout=timeout)
-        except FuturesTimeout:
-            return False, f"Timeout PyHive ({timeout}s)", ""
+    return _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
 
 
 def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
@@ -511,12 +515,7 @@ def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
     if " AS SELECT * FROM " not in u:
         return False, "CREATE VIEW interno restringido a 'AS SELECT * FROM ...'.", ""
     timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_ejecutar_hive_pyhive, sql)
-        try:
-            return fut.result(timeout=timeout)
-        except FuturesTimeout:
-            return False, f"Timeout PyHive ({timeout}s)", ""
+    return _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
 
 
 def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
@@ -538,14 +537,8 @@ def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
     sql_u = sql.upper().lstrip()
     can_fallback = sql_u.startswith("SELECT") or sql_u.startswith("WITH")
 
-    timed_out = False
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_ejecutar_hive_pyhive, sql)
-        try:
-            ok, err, out = fut.result(timeout=timeout)
-        except FuturesTimeout:
-            timed_out = True
-            ok, err, out = False, "", ""
+    ok, err, out = _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
+    timed_out = err.startswith("Timeout PyHive")
 
     if ok:
         return True, "", out
@@ -584,14 +577,21 @@ def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
 def _get_spark_hive_session():
     """
     SparkSession con catálogo Hive (metastore local embebido).
-    No comparte el proceso con HiveServer2: si Derby ya está abierto por HS2, fallará con XSDB6.
+    Usa el metastore thrift compartido para no abrir Derby embebido en paralelo.
     """
     from pyspark.sql import SparkSession
 
+    os.environ.setdefault("HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("SIMLOG_HIVE_CONF_DIR", HIVE_CONF_DIR)
+    os.environ.setdefault("HIVE_METASTORE_URIS", HIVE_METASTORE_URIS)
     return (
         SparkSession.builder.master("local[*]")
         .appName("SIMLOG_HiveQueryUI")
         .config("spark.sql.warehouse.dir", "/user/hive/warehouse")
+        .config("spark.sql.catalogImplementation", "hive")
+        .config("spark.hadoop.hive.metastore.warehouse.dir", "/user/hive/warehouse")
+        .config("spark.hadoop.hive.metastore.uris", HIVE_METASTORE_URIS)
+        .config("hive.metastore.uris", HIVE_METASTORE_URIS)
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -633,6 +633,26 @@ def _ejecutar_hive_consulta_spark(sql: str, max_rows: int = 2000) -> Tuple[bool,
                 "",
             )
         return False, msg, ""
+
+
+def _ejecutar_hive_pyhive_con_timeout(sql: str, timeout: int) -> Tuple[bool, str, str]:
+    """
+    Ejecuta PyHive en un hilo daemon para que un timeout no bloquee la salida del proceso.
+    """
+    queue: Queue[Tuple[bool, str, str]] = Queue(maxsize=1)
+
+    def _runner() -> None:
+        try:
+            queue.put(_ejecutar_hive_pyhive(sql))
+        except Exception as exc:
+            queue.put((False, str(exc), ""))
+
+    thread = Thread(target=_runner, name="simlog-hive-query", daemon=True)
+    thread.start()
+    try:
+        return queue.get(timeout=timeout)
+    except Exception:
+        return False, f"Timeout PyHive ({timeout}s)", ""
 
 
 def listar_claves_cassandra() -> List[str]:

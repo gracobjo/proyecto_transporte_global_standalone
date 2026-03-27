@@ -14,7 +14,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 
 | Componente | Responsabilidad | Tecnología |
 |------------|------------------|------------|
-| Ingesta | Construir snapshot de 15 min (clima + incidentes + GPS) | Python / NiFi (opcional) |
+| Ingesta | Construir snapshot de 15 min (clima + incidentes + GPS) y fusionar DATEX2 DGT | Python / NiFi (opcional) |
 | Cola | Buffer y desacoplo de eventos | Kafka |
 | Data lake raw | Backup de snapshots y fuente de reproceso | HDFS |
 | Procesamiento | Limpieza, autosanación de grafo, analítica | Spark 3.5 + GraphFrames |
@@ -29,10 +29,11 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 
 ## Flujo de extremo a extremo
 
-1. Ingesta produce payload con contrato canónico (`camiones`, `nodos_estado`, `aristas_estado`, `clima_hubs`).
-2. Publicación en Kafka (`transporte_raw`, `transporte_filtered`) y backup en HDFS.
-3. Spark lee desde HDFS/Kafka, normaliza datos y aplica lógica de grafo.
-4. Persistencia en Cassandra (estado actual) y Hive (histórico).
+1. Ingesta produce payload con contrato canónico (`camiones`, `nodos_estado`, `aristas_estado`, `clima_hubs`) y añade `incidencias_dgt` / `resumen_dgt` cuando el feed DATEX2 está disponible.
+2. El merge aplica prioridad de `source=dgt` sobre `source=simulacion` y conserva `severity`, `peso_pagerank`, `id_incidencia` y localización.
+3. Publicación en Kafka (`transporte_dgt_raw`, `transporte_raw`, `transporte_filtered`) y backup en HDFS.
+4. Spark lee desde HDFS/Kafka, normaliza datos y aplica lógica de grafo.
+5. Persistencia en Cassandra (estado actual) y Hive (histórico).
 5. Dashboard y API consumen Cassandra para operación diaria.
 6. La pestaña **Ciclo KDD** del dashboard enlaza fases con scripts y ficheros del repo, permite probar **OpenWeather** con clave opcional en sesión y muestra **una** vista topológica de la red para fases 3–5 (detalle en `docs/DASHBOARD_KDD_UI.md`).
 7. La pestaña **Servicios** integra un panel **FAQ IA** que consulta un microservicio local (`servicios/api_faq_ia.py`) y devuelve respuesta, nivel de confianza, sugerencias y fuentes.
@@ -44,22 +45,28 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 - **Hive como histórico**: análisis temporal, agregados y derivación de incidencias para reporting 24h.
 - **HDFS como origen auditable**: replay/reproceso de snapshots.
 - **Limpieza previa a persistencia**: nulos, duplicados y estados no canónicos.
+- **Señal real prioritaria**: la DGT pisa la simulación solo en nodos afectados, manteniendo continuidad operativa si el feed falla.
+- **Modo degradado controlado**: el DAG y el script standalone pueden continuar con caché local o solo simulación.
 - **Standalone-first**: menos fricción en desarrollo; compatible con salto a YARN.
 - **FAQ IA local**: soporte contextual sin dependencia de proveedores externos; base de conocimiento versionable.
 
 ## Contratos de datos clave
 
 - `camiones`: `id_camion`, `lat`, `lon`, `ruta`, `ruta_origen`, `ruta_destino`, `ruta_sugerida`, `estado_ruta`, `motivo_retraso`.
-- `nodos_estado`: estado operativo y variables de clima por nodo.
+- `nodos_estado`: estado operativo y variables de clima por nodo, con `source`, `severity`, `peso_pagerank`, `id_incidencia`, `carretera`, `municipio`, `provincia`.
 - `aristas_estado`: estado por tramo, motivo y distancia.
+- `incidencias_dgt`: lista normalizada de incidencias reales DATEX2.
+- `resumen_dgt`: modo de operación (`live`, `cache`, `disabled`), error y alcance del merge.
 
 ## Operación y resiliencia
 
 - Back-pressure y DLQ en flujos NiFi/Kafka cuando aplique.
 - Reintentos y timeouts en ingesta y orquestación.
 - Separación `raw`/`filtered` para auditoría y consumo.
+- Separación adicional `dgt_raw` para auditar la señal real sin mezclarla con el snapshot completo.
 - Tareas periódicas de mantenimiento (limpieza HDFS, verificación de servicios).
 - Transparencia operativa: FAQ IA devuelve fuentes y pregunta emparejada para evitar respuestas opacas.
+- NiFi conserva atributos `simlog.provenance.*` para inspeccionar en `Data Provenance` qué parte del snapshot procede de simulación, OpenWeather y DGT.
 
 ## Evolución prevista
 

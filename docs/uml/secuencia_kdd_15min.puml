@@ -1,6 +1,7 @@
 @startuml
 actor "Scheduler\n(NiFi/Airflow)" as SCH
 participant "Ingesta" as ING
+participant "DGT DATEX2" as DGT
 participant "Kafka" as K
 participant "HDFS" as H
 participant "Spark" as S
@@ -10,6 +11,8 @@ participant "Dashboard" as UI
 participant "OpenWeather API" as OWM
 
 SCH -> ING: Trigger (cada 15 min)
+ING -> DGT: Descarga XML DATEX2
+DGT --> ING: Incidencias reales / fallback cache
 ING -> K: Publica snapshot (raw/filtered)
 ING -> H: Guarda backup JSON
 SCH -> S: Ejecuta procesamiento

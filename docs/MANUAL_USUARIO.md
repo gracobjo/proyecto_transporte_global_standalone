@@ -50,7 +50,7 @@ Controles:
 
 **Resultado esperado**:
 
-- Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado), se publica en Kafka y se guarda JSON en HDFS.
+- Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado). Si la DGT DATEX2 responde, el snapshot se enriquece con incidencias reales; si falla, puede usar caché o continuar solo con simulación. Después se publica en Kafka y se guarda JSON en HDFS.
 - Tras Spark: se estructura y persiste el “estado operativo” en Cassandra, y (si está configurado) se actualiza histórico Hive.
 
 ### 3.3 Enlace a “Gemelo digital — incidencias”
@@ -107,6 +107,7 @@ Controles:
 Secciones:
 
 - **Ingesta (clima + GPS simulado)**: vista del último snapshot local (compatible con el flujo de Spark).
+- **Señal DGT**: el snapshot indica si la fuente operó en modo `live`, `cache` o `disabled` y cuántos nodos quedaron afectados.
 - **Kafka + HDFS**: confirma accesibilidad y muestra ficheros `.json` en HDFS.
 - **Spark → Cassandra**: lista de tablas y número de filas.
 - **Hive (histórico opcional)**: muestra `SHOW TABLES` y conteos (si HiveServer2 está OK).
@@ -231,6 +232,33 @@ Cómo usarla:
 3. En la parte inferior encontrarás **FAQ IA** para resolver dudas rápidas sobre operación, informes, NiFi, Swagger o uso general del dashboard.
 
 **Resultado esperado**: estados por servicio (OK/❌), enlaces a consolas web si existen y un asistente de FAQ local para incidencias frecuentes.
+
+Si NiFi está activo, el linaje de la ingesta enriquecida se puede revisar en la UI de NiFi:
+
+- abrir `Data Provenance`
+- filtrar por `Merge_DGT_Into_Payload`
+- inspeccionar atributos `simlog.provenance.stage`, `simlog.provenance.sources`, `simlog.provenance.dgt_mode` y `simlog.provenance.dgt_incidents`
+
+## 5. Ejecución de la ingesta DGT
+
+### 5.1 Script standalone
+
+```bash
+venv_transporte/bin/python scripts/ejecutar_ingesta_dgt.py
+```
+
+Opciones útiles:
+
+- `--cache-only`: reutiliza la caché XML local de la DGT.
+- `--no-dgt`: desactiva la fuente DGT y usa solo simulación.
+- `--skip-processing`: ejecuta solo la ingesta y no lanza Spark.
+
+### 5.2 Qué cambia al usar DGT
+
+- El payload añade `incidencias_dgt` y `resumen_dgt`.
+- Los nodos afectados pasan a `source=dgt`.
+- La severidad real ajusta `peso_pagerank`, por lo que el ranking de criticidad puede cambiar.
+- Si hay muchos nodos bloqueados, aparece una alerta operativa en el snapshot.
 
 ### FAQ IA dentro de “Servicios”
 
