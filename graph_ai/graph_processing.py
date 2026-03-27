@@ -17,6 +17,40 @@ class AnomalyParams:
     anomaly_score_threshold: float = 2.5
 
 
+def _pagerank_fallback(g: nx.DiGraph | nx.Graph, alpha: float = 0.85, max_iter: int = 100, tol: float = 1e-6) -> Dict[str, float]:
+    nodes = list(g.nodes())
+    if not nodes:
+        return {}
+    n = len(nodes)
+    rank = {node: 1.0 / n for node in nodes}
+    if g.number_of_edges() == 0:
+        return rank
+
+    successors = {}
+    if g.is_directed():
+        for node in nodes:
+            successors[node] = list(g.successors(node))
+    else:
+        for node in nodes:
+            successors[node] = list(g.neighbors(node))
+
+    for _ in range(max_iter):
+        prev = rank.copy()
+        dangling_sum = sum(prev[node] for node in nodes if not successors[node])
+        for node in nodes:
+            incoming = g.predecessors(node) if g.is_directed() else g.neighbors(node)
+            score = (1.0 - alpha) / n
+            score += alpha * dangling_sum / n
+            for src in incoming:
+                out_degree = len(successors[src]) or n
+                score += alpha * prev[src] / out_degree
+            rank[node] = score
+        err = sum(abs(rank[node] - prev[node]) for node in nodes)
+        if err < tol:
+            break
+    return {k: float(v) for k, v in rank.items()}
+
+
 def build_nx_graph(payload: GraphPayload) -> nx.DiGraph | nx.Graph:
     if payload.directed:
         g: nx.DiGraph | nx.Graph = nx.DiGraph()
@@ -66,7 +100,14 @@ def compute_centralities(g: nx.DiGraph | nx.Graph) -> Dict[str, Dict[str, float]
             seed=42,
         )
 
-    pagerank = nx.pagerank(g, weight="weight") if g.number_of_edges() > 0 else {k: 0.0 for k in g.nodes()}
+    if g.number_of_edges() > 0:
+        try:
+            pagerank = nx.pagerank(g, weight="weight")
+        except ModuleNotFoundError:
+            # Fallback sin scipy para entornos ligeros de pruebas/desarrollo.
+            pagerank = _pagerank_fallback(g)
+    else:
+        pagerank = {k: 0.0 for k in g.nodes()}
 
     out: Dict[str, Dict[str, float]] = {}
     for node in g.nodes():

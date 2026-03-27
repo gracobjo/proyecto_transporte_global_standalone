@@ -84,6 +84,10 @@ flowchart LR
     I[ingesta_kdd + ingesta_dgt_datex2]
     P[procesamiento_grafos]
   end
+  subgraph Externos
+    OWM[OpenWeather]
+    DGT[DGT DATEX2]
+  end
   subgraph Mensajería
     K[Kafka dgt_raw/raw/filtered]
     H[HDFS backup]
@@ -101,6 +105,8 @@ flowchart LR
   ST --> VF
   ST --> VR
   ST --> VG
+  OWM --> I
+  DGT --> I
   VF --> I
   VF --> H
   VG --> C
@@ -127,6 +133,7 @@ flowchart LR
 sequenceDiagram
   participant T as Trigger NiFi/Airflow
   participant I as Ingesta
+  participant OWM as OpenWeather
   participant DGT as DGT DATEX2
   participant K as Kafka
   participant H as HDFS
@@ -135,8 +142,15 @@ sequenceDiagram
   participant V as Hive
   participant D as Dashboard
   T->>I: Disparo periódico
+  I->>OWM: Consulta clima por hubs
+  alt OpenWeather válido
+    OWM-->>I: Clima real por ciudad
+  else OpenWeather falla o clave inválida
+    OWM-->>I: Error / respuesta no usable
+  end
   I->>DGT: Descarga XML DATEX2
   DGT-->>I: Incidencias reales / error
+  Note over I: Si no hay clima válido,\nusa respaldo DGT en clima_hubs
   I->>K: Publica raw + filtered
   I->>H: Backup JSON
   T->>S: Ejecuta procesamiento
@@ -148,7 +162,7 @@ sequenceDiagram
 
 ---
 
-## 4. Secuencia — exploración KDD y OpenWeather (dashboard)
+## 4. Secuencia — exploración KDD y clima externo/fallback (dashboard)
 
 ```mermaid
 sequenceDiagram
@@ -156,6 +170,7 @@ sequenceDiagram
   participant ST as Streamlit Ciclo KDD
   participant W as ultimo_payload.json
   participant OW as OpenWeather API
+  participant DGT as Respaldo DGT
   participant ING as consulta_clima_hubs
   U->>ST: Elige fase 1–2, ajusta paso / formulario API
   ST->>W: Lee camiones / clima_hubs
@@ -163,9 +178,15 @@ sequenceDiagram
   U->>ST: Consultar clima en vivo
   ST->>ING: api_key opcional
   ING->>OW: GET weather
-  OW-->>ING: JSON
+  alt OpenWeather responde
+    OW-->>ING: JSON
+  else OpenWeather no responde / 401
+    OW-->>ING: error
+    ING->>DGT: reutilizar clima inferido
+    DGT-->>ING: condiciones_meteorologicas / visibilidad / estado_carretera
+  end
   ING-->>ST: Tabla por hub
-  Note over ST: Clave solo en session_state
+  Note over ST: Clave solo en session_state;\nla UI distingue source y fallback_activo
 ```
 
 ---
@@ -180,10 +201,11 @@ sequenceDiagram
   participant M as Merge scripts
   participant P as Data Provenance
   N->>O: Snapshot sintético base
-  O-->>M: Atributo owm.response
-  M->>G: Payload con clima + provenance stage=weather_merged
+  O-->>M: Atributo owm.response o error HTTP
+  M->>G: Payload con clima válido o payload intacto
   G-->>M: Atributo dgt.response.xml
   M-->>P: FlowFile con simlog.provenance.*\n(stage, sources, dgt_mode, dgt_incidents)
+  Note over M,P: Si falta clima OpenWeather,\nDGT rellena clima_hubs alternativo
 ```
 
 ---

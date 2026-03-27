@@ -1,0 +1,58 @@
+{
+  "eventos": [
+    {
+      "id_vehiculo": "veh_10",
+      "ruta": "Bilbao->Vigo",
+      "event_time": "2026-03-26T11:00:00",
+      "delay_minutes": 90.0,
+      "estado_evento": "Perdido"
+    },
+    {
+      "id_vehiculo": "veh_11",
+      "ruta": "Bilbao->Vigo",
+      "event_time": "2026-03-26T11:01:00",
+      "delay_minutes": 95.0,
+      "estado_evento": "Perdido"
+    },
+    {
+      "id_vehiculo": "veh_12",
+      "ruta": "Bilbao->Vigo",
+      "event_time": "2026-03-26T11:02:00",
+      "delay_minutes": 100.0,
+      "estado_evento": "Perdido"
+    },
+    {
+      "id_vehiculo": "veh_13",
+      "ruta": "Bilbao->Vigo",
+      "event_time": "2026-03-26T11:03:00",
+      "delay_minutes": 110.0,
+      "estado_evento": "Perdido"
+    }
+  ],
+  "graph_previous": {
+    "nodes": [
+      {"id": "Bilbao"},
+      {"id": "Vigo"},
+      {"id": "Madrid"},
+      {"id": "Barcelona"}
+    ],
+    "edges": [
+      {"source": "Bilbao", "target": "Vigo", "weight": 1.0},
+      {"source": "Bilbao", "target": "Madrid", "weight": 1.0},
+      {"source": "Madrid", "target": "Barcelona", "weight": 1.0}
+    ],
+    "directed": true
+  },
+  "graph_current": {
+    "nodes": [
+      {"id": "Bilbao"},
+      {"id": "Vigo"},
+      {"id": "Madrid"},
+      {"id": "Barcelona"}
+    ],
+    "edges": [
+      {"source": "Madrid", "target": "Barcelona", "weight": 1.0}
+    ],
+    "directed": true
+  }
+}

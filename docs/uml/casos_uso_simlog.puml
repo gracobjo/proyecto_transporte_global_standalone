@@ -13,8 +13,8 @@ rectangle "SIMLOG" {
   usecase "CU-03 Visualizar estado de red" as CU3
   usecase "CU-04 Consultar histórico analítico\n(riesgo por hub 24h + top causas 24h)" as CU4
   usecase "CU-05 Evaluar rutas híbridas" as CU5
-  usecase "CU-09 Explorar KDD en dashboard\n(Streamlit)" as CU9
-  usecase "CU-16 Integrar DATEX2 DGT" as CU16
+  usecase "CU-09 Explorar KDD en dashboard\n(Streamlit + fallback clima)" as CU9
+  usecase "CU-16 Integrar DATEX2 DGT\ny respaldo a OpenWeather" as CU16
   usecase "CU-17 Auditar provenance NiFi" as CU17
 }
 

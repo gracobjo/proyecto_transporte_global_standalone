@@ -11,6 +11,8 @@ component "NiFi\nPG_SIMLOG_KDD" as NiFi
 component "Airflow\nDAGs" as Airflow
 component "Ingesta\ningesta_kdd.py + ingesta_dgt_datex2.py" as Ingesta
 component "Spark\nprocesamiento_grafos.py" as Spark
+cloud "OpenWeather\n(opcional)" as OWM
+cloud "DGT DATEX2\n(fuente real + respaldo clima)" as DGT
 database "Kafka\ndgt_raw/raw/filtered" as Kafka
 database "HDFS\nbackup" as HDFS
 database "Cassandra\noperacional" as Cas
@@ -24,6 +26,8 @@ UI --> KDDUI
 KDDUI --> Ingesta : consulta clima\nopcional
 KDDUI --> Cas : nodos / PageRank
 
+OWM --> Ingesta : clima principal
+DGT --> Ingesta : incidencias + clima alternativo
 NiFi --> Ingesta
 Airflow --> Ingesta
 Ingesta --> Kafka

@@ -65,6 +65,48 @@ def test_main_generates_payload_and_meta(monkeypatch, tmp_path):
     assert saved_payload["origen"] == "pytest_cli"
 
 
+def test_main_usa_respaldo_dgt_cuando_openweather_falla(monkeypatch, tmp_path):
+    monkeypatch.setattr(ingesta_kdd, "BASE", tmp_path)
+    monkeypatch.setattr(
+        ingesta_kdd,
+        "consulta_clima_hubs",
+        lambda api_key=None: {"Madrid": {"descripcion": "HTTP 401: Invalid API key", "temp": None, "humedad": None, "viento": None}},
+    )
+    monkeypatch.setattr(
+        ingesta_kdd,
+        "obtener_incidencias_dgt",
+        lambda **kwargs: {
+            "source_mode": "live",
+            "error": None,
+            "incidencias": [],
+            "mapeo_nodos": {},
+            "clima_hubs": {
+                "Madrid": {
+                    "descripcion": "Fallback DGT: Nevada en A-6",
+                    "temp": None,
+                    "humedad": None,
+                    "viento": None,
+                    "visibilidad": 500,
+                    "estado_carretera": "Nieve",
+                    "condiciones_meteorologicas": ["Nevada"],
+                    "source": "dgt",
+                    "fallback_activo": True,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(ingesta_kdd, "publicar_kafka", lambda payload: True)
+    monkeypatch.setattr(ingesta_kdd, "guardar_hdfs", lambda payload: True)
+
+    payload = ingesta_kdd.main(2)
+
+    assert payload["clima_hubs"]["Madrid"]["source"] == "dgt"
+    assert payload["clima_hubs"]["Madrid"]["fallback_activo"] is True
+    assert payload["clima_hubs"]["Madrid"]["estado_carretera"] == "Nieve"
+    assert payload["resumen_dgt"]["hubs_clima_respaldo"] == 1
+    assert payload["clima"][0]["estado_carretera"] == "Nieve"
+
+
 def test_fixture_payload_respects_expected_contract(load_json_fixture):
     payload = load_json_fixture("ingesta_normal.json")
 

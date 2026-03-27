@@ -1,0 +1,39 @@
+{
+  "registros_gps": [
+    {
+      "id_vehiculo": "veh_1",
+      "lat": 40.4,
+      "lon": -3.7,
+      "velocidad": 62.0,
+      "event_time": "2026-03-26T10:00:00"
+    },
+    {
+      "id_vehiculo": "veh_1",
+      "lat": 40.4,
+      "lon": -3.7,
+      "velocidad": 62.0,
+      "event_time": "2026-03-26T10:00:00"
+    },
+    {
+      "id_vehiculo": null,
+      "lat": 41.3,
+      "lon": 2.1,
+      "velocidad": 50.0,
+      "event_time": "2026-03-26T10:05:00"
+    },
+    {
+      "id_vehiculo": "veh_3",
+      "lat": 52.0,
+      "lon": 13.0,
+      "velocidad": 70.0,
+      "event_time": "2026-03-26T10:07:00"
+    },
+    {
+      "id_vehiculo": "veh_4",
+      "lat": 39.8,
+      "lon": -0.4,
+      "velocidad": 0.0,
+      "event_time": "2026-03-26T10:09:00"
+    }
+  ]
+}

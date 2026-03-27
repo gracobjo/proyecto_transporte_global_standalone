@@ -27,6 +27,7 @@ PORT_HDFS = int(os.environ.get("SIMLOG_PORT_HDFS", "9870"))
 PORT_KAFKA = int(os.environ.get("SIMLOG_PORT_KAFKA", "9092"))
 PORT_CASSANDRA = int(os.environ.get("SIMLOG_PORT_CASSANDRA", "9042"))
 PORT_HIVE = int(os.environ.get("SIMLOG_PORT_HIVE", "10000"))
+PORT_HIVE_METASTORE = int(os.environ.get("SIMLOG_PORT_HIVE_METASTORE", "9083"))
 PORT_SPARK_MASTER = int(os.environ.get("SIMLOG_PORT_SPARK_MASTER", "7077"))
 PORT_AIRFLOW = int(os.environ.get("SIMLOG_PORT_AIRFLOW", "8088"))
 PORT_API = int(os.environ.get("SIMLOG_PORT_API", "8090"))
@@ -109,7 +110,25 @@ def _hive_conf_dir(hh: Path) -> Path:
         raw = os.environ.get(key)
         if raw:
             return Path(raw).expanduser()
+    project_conf = BASE / "hive" / "conf"
+    if (project_conf / "hive-site.xml").exists():
+        return project_conf
     return hh / "conf"
+
+
+def _hive_hosts() -> List[str]:
+    return ["127.0.0.1", "127.0.1.1", "localhost"]
+
+
+def _hive_env(hh: Path, conf_dir: Path) -> Dict[str, str]:
+    env = os.environ.copy()
+    env["HADOOP_CLASSPATH"] = ""
+    env["HIVE_CONF_DIR"] = str(conf_dir)
+    env.setdefault("SIMLOG_HIVE_CONF_DIR", str(conf_dir))
+    env.setdefault("HIVE_METASTORE_URIS", f"thrift://127.0.0.1:{PORT_HIVE_METASTORE}")
+    if hh.exists():
+        env.setdefault("HIVE_HOME", str(hh))
+    return env
 
 
 def _hive_tail_log(log_path: Path, max_chars: int = 2500) -> str:
@@ -353,12 +372,17 @@ def comprobar_spark() -> Dict[str, Any]:
 
 
 def comprobar_hive() -> Dict[str, Any]:
-    ok = puerto_activo_en_hosts(["127.0.0.1", "127.0.1.1", "localhost"], PORT_HIVE)
+    hosts = _hive_hosts()
+    ok_hs2 = puerto_activo_en_hosts(hosts, PORT_HIVE)
+    ok_meta = puerto_activo_en_hosts(hosts, PORT_HIVE_METASTORE)
     return {
         "id": "hive",
         "nombre": "HiveServer2",
-        "activo": ok,
-        "detalle": f"Puerto JDBC {PORT_HIVE}",
+        "activo": ok_hs2 and ok_meta,
+        "detalle": (
+            f"JDBC {PORT_HIVE}: {'activo' if ok_hs2 else 'inactivo'} · "
+            f"Metastore {PORT_HIVE_METASTORE}: {'activo' if ok_meta else 'inactivo'}"
+        ),
         "puerto": PORT_HIVE,
     }
 
@@ -561,9 +585,7 @@ def iniciar_spark() -> str:
 
 
 def iniciar_hive() -> str:
-    hive_hosts = ["127.0.0.1", "127.0.1.1", "localhost"]
-    if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
-        return "HiveServer2 ya parece activo (puerto JDBC)."
+    hive_hosts = _hive_hosts()
     hh = _hive_home()
     conf_dir = _hive_conf_dir(hh)
     hive_bin = hh / "bin" / "hive"
@@ -585,12 +607,16 @@ def iniciar_hive() -> str:
         except Exception:
             pid_path.unlink(missing_ok=True)
 
-    # Entorno aislado: HADOOP_CLASSPATH vacío evita NoClassDefFoundError / conflictos con JARs de Hadoop.
-    env = os.environ.copy()
-    env["HADOOP_CLASSPATH"] = ""
-    env["HIVE_CONF_DIR"] = str(conf_dir)
-    if hh.exists():
-        env.setdefault("HIVE_HOME", str(hh))
+    env = _hive_env(hh, conf_dir)
+
+    meta_msg = iniciar_hive_metastore()
+    if not puerto_activo_en_hosts(hive_hosts, PORT_HIVE_METASTORE):
+        return (
+            "No se pudo dejar operativo el metastore Hive. "
+            f"{meta_msg}"
+        )
+    if puerto_activo_en_hosts(hive_hosts, PORT_HIVE):
+        return f"HiveServer2 ya parece activo (puerto JDBC). {meta_msg}"
 
     try:
         log_f = open(log_path, "ab", buffering=0)
@@ -634,6 +660,58 @@ def iniciar_hive() -> str:
     )
 
 
+def iniciar_hive_metastore() -> str:
+    hosts = _hive_hosts()
+    if puerto_activo_en_hosts(hosts, PORT_HIVE_METASTORE):
+        return "Metastore Hive ya estaba activo."
+    hh = _hive_home()
+    conf_dir = _hive_conf_dir(hh)
+    hive_bin = hh / "bin" / "hive"
+    if not hive_bin.exists():
+        hive_bin = Path("/usr/bin/hive")
+    if not hive_bin.exists():
+        return f"No se encontró `hive` en HIVE_HOME={hh}."
+
+    log_path = Path(os.environ.get("SIMLOG_HIVE_METASTORE_LOG", "/tmp/hadoop/hive-metastore.log"))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = _hive_env(hh, conf_dir)
+
+    try:
+        log_f = open(log_path, "ab", buffering=0)
+    except OSError as e:
+        return f"No se pudo abrir el log del metastore Hive ({log_path}): {e}"
+
+    try:
+        subprocess.Popen(
+            [str(hive_bin), "--service", "metastore"],
+            cwd=str(hh) if hh.exists() else str(BASE),
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        log_f.close()
+        return f"No se pudo lanzar el metastore Hive: {e}"
+    log_f.close()
+
+    ok, msg = esperar_hive_metastore(
+        timeout_sec=max(45, int(os.environ.get("SIMLOG_HIVE_METASTORE_MAX_WAIT_SEC", "180"))),
+        paso=3,
+    )
+    if ok:
+        return msg
+    tail = _hive_tail_log(log_path)
+    extra = ""
+    if "Another instance of Derby" in tail or "XSDB6" in tail:
+        extra = (
+            " Derby sigue bloqueado por otro proceso Hive. "
+            "Debes parar HiveServer2 antes de levantar el metastore compartido."
+        )
+    return f"{msg}{extra} Últimas líneas del log:\n---\n{tail}\n---"
+
+
 def esperar_cassandra(timeout_sec: int = 120, paso: int = 3) -> Tuple[bool, str]:
     """
     Espera a que el puerto CQL (9042) de Cassandra responda.
@@ -664,6 +742,19 @@ def esperar_hiveserver2(timeout_sec: int = 240, paso: int = 5) -> Tuple[bool, st
     return False, (
         f"No se detectó el puerto JDBC {PORT_HIVE} tras {timeout_sec}s. "
         "Revisa /tmp/hadoop/hiveserver2-daemon.log"
+    )
+
+
+def esperar_hive_metastore(timeout_sec: int = 120, paso: int = 3) -> Tuple[bool, str]:
+    hosts = _hive_hosts()
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout_sec:
+        if puerto_activo_en_hosts(hosts, PORT_HIVE_METASTORE):
+            return True, f"Metastore Hive responde en el puerto {PORT_HIVE_METASTORE}."
+        time.sleep(paso)
+    return False, (
+        f"No se detectó el metastore Hive en el puerto {PORT_HIVE_METASTORE} tras {timeout_sec}s. "
+        "Revisa /tmp/hadoop/hive-metastore.log"
     )
 
 
@@ -915,12 +1006,18 @@ def parar_spark() -> str:
 
 
 def parar_hive() -> str:
-    msg = _kill_port(PORT_HIVE)
+    msg_meta = _kill_port(PORT_HIVE_METASTORE)
+    msg_hs2 = _kill_port(PORT_HIVE)
+    pk_hs2 = _pkill_pattern("org.apache.hive.service.server.HiveServer2")
+    pk_meta = _pkill_pattern("org.apache.hadoop.hive.metastore.HiveMetaStore")
     for _ in range(12):
-        if not puerto_activo_en_hosts(["127.0.0.1", "127.0.1.1", "localhost"], PORT_HIVE):
-            return msg
+        if not puerto_activo_en_hosts(_hive_hosts(), PORT_HIVE) and not puerto_activo_en_hosts(_hive_hosts(), PORT_HIVE_METASTORE):
+            return f"{msg_meta} · {msg_hs2} · {pk_meta} · {pk_hs2}"
         time.sleep(1)
-    return f"{msg} (el puerto {PORT_HIVE} sigue activo; puede tardar en cerrar)."
+    return (
+        f"{msg_meta} · {msg_hs2} · {pk_meta} · {pk_hs2} "
+        f"(los puertos {PORT_HIVE_METASTORE}/{PORT_HIVE} siguen activos; puede tardar en cerrar)."
+    )
 
 
 def parar_airflow() -> str:

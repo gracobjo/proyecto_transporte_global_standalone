@@ -15,20 +15,34 @@ def flowFile = session.get()
 if (!flowFile) return
 
 def weatherResponse = flowFile.getAttribute("owm.response")
-if (!weatherResponse) {
-    flowFile = session.putAttribute(flowFile, "merge.error", "missing owm.response")
-    session.transfer(flowFile, REL_FAILURE)
-    return
-}
+def weatherStatus = flowFile.getAttribute("invokehttp.status.code")
 
 def payloadText = ""
-flowFile = session.read(flowFile, { inputStream ->
+session.read(flowFile, { inputStream ->
     payloadText = inputStream.getText("UTF-8")
 } as InputStreamCallback)
 
 def slurper = new JsonSlurper()
 def payload = slurper.parseText(payloadText ?: "{}")
-def weather = slurper.parseText(weatherResponse ?: "{}")
+def climaHubs = payload.clima_hubs instanceof Map ? payload.clima_hubs : [:]
+def climaLista = payload.clima instanceof List ? payload.clima : []
+
+def weather = [:]
+if (weatherResponse) {
+    try {
+        weather = slurper.parseText(weatherResponse ?: "{}")
+    } catch (Exception ignored) {
+        weather = [:]
+    }
+}
+
+def statusCode = 0
+try {
+    statusCode = (weatherStatus ?: "0") as Integer
+} catch (Exception ignored) {
+    statusCode = 0
+}
+def openWeatherOk = statusCode >= 200 && statusCode < 300 && weather instanceof Map && (weather.list instanceof List)
 
 def estadoCarretera = { String descripcion ->
     def desc = (descripcion ?: "").toLowerCase(Locale.ROOT)
@@ -39,33 +53,40 @@ def estadoCarretera = { String descripcion ->
     return "Optimo"
 }
 
-def climaHubs = [:]
-def items = weather instanceof Map ? (weather.list ?: []) : []
-items.each { w ->
-    def ciudad = w?.name ?: "desconocida"
-    def descripcion = (w.weather && w.weather[0]) ? String.valueOf(w.weather[0].description) : ""
-    climaHubs[ciudad] = [
-        descripcion: descripcion,
-        temp: w.main?.temp,
-        humedad: w.main?.humidity,
-        viento: w.wind?.speed,
-        visibilidad: w.visibility,
-        estado_carretera: estadoCarretera(descripcion)
-    ]
+if (openWeatherOk) {
+    climaHubs = [:]
+    def items = weather.list ?: []
+    items.each { w ->
+        def ciudad = w?.name ?: "desconocida"
+        def descripcion = (w.weather && w.weather[0]) ? String.valueOf(w.weather[0].description) : ""
+        climaHubs[ciudad] = [
+            descripcion: descripcion,
+            temp: w.main?.temp,
+            humedad: w.main?.humidity,
+            viento: w.wind?.speed,
+            visibilidad: w.visibility,
+            estado_carretera: estadoCarretera(descripcion),
+            source: "openweather",
+            fallback_activo: false
+        ]
+    }
+    climaLista = climaHubs.collect { ciudad, datos ->
+        [
+            ciudad: ciudad,
+            temperatura: datos.temp,
+            humedad: datos.humedad,
+            descripcion: datos.descripcion,
+            visibilidad: datos.visibilidad,
+            estado_carretera: datos.estado_carretera,
+            source: datos.source,
+            fallback_activo: datos.fallback_activo,
+            timestamp: payload.timestamp
+        ]
+    }
 }
 
 payload.clima_hubs = climaHubs
-payload.clima = climaHubs.collect { ciudad, datos ->
-    [
-        ciudad: ciudad,
-        temperatura: datos.temp,
-        humedad: datos.humedad,
-        descripcion: datos.descripcion,
-        visibilidad: datos.visibilidad,
-        estado_carretera: datos.estado_carretera,
-        timestamp: payload.timestamp
-    ]
-}
+payload.clima = climaLista
 
 def finalJson = JsonOutput.prettyPrint(JsonOutput.toJson(payload))
 flowFile = session.write(flowFile, { out ->
@@ -73,6 +94,7 @@ flowFile = session.write(flowFile, { out ->
 } as OutputStreamCallback)
 
 session.putAttribute(flowFile, "mime.type", "application/json")
-session.putAttribute(flowFile, "simlog.provenance.stage", "weather_merged")
-session.putAttribute(flowFile, "simlog.provenance.sources", "simulacion,openweather")
+session.putAttribute(flowFile, "simlog.weather.available", String.valueOf(openWeatherOk))
+session.putAttribute(flowFile, "simlog.provenance.stage", openWeatherOk ? "weather_merged" : "weather_unavailable")
+session.putAttribute(flowFile, "simlog.provenance.sources", openWeatherOk ? "simulacion,openweather" : "simulacion")
 session.transfer(flowFile, REL_SUCCESS)

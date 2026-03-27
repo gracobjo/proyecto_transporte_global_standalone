@@ -137,6 +137,7 @@ def tarea_fase01(**context):
 
 def ejecutar_fase_preprocesamiento(**context) -> Dict[str, Any]:
     from ingesta.ingesta_kdd import (
+        clima_hubs_a_lista,
         generar_rutas_camiones,
         guardar_hdfs,
         interpolacion_gps_15min,
@@ -159,11 +160,17 @@ def ejecutar_fase_preprocesamiento(**context) -> Dict[str, Any]:
     posiciones = interpolacion_gps_15min(rutas, paso)
 
     payload = {
+        "origen": "airflow_kdd_fase02",
+        "canal_ingesta": "airflow",
+        "ejecutor_ingesta": "simlog_kdd_02_preprocesamiento",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "paso_15min": paso,
         "clima_hubs": clima,
+        "clima": clima_hubs_a_lista(clima, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
         "nodos_estado": {n: {"estado": v["estado"], "motivo": v["motivo"]} for n, v in estados_nodos.items()},
+        "estados_nodos": {n: {"estado": v["estado"], "motivo": v["motivo"]} for n, v in estados_nodos.items()},
         "aristas_estado": estados_aristas,
+        "estados_aristas": estados_aristas,
         "camiones": posiciones,
     }
 

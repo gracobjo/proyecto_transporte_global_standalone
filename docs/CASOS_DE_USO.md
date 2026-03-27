@@ -23,7 +23,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-06 | Evaluar rutas híbridas | Planificador | Rutas y métricas en UI de planificación |
 | CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
 | CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
-| CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather; simulación por paso; topología sin duplicar mapas |
+| CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather si hay clave válida; respaldo DGT visible cuando falla; simulación por paso; topología sin duplicar mapas |
 | CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
 | CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
 | CU-12 | Desplegar clúster didáctico en GitHub Codespaces | Operador / Docente | Hadoop+Spark+Kafka+Jupyter en perfil aislado `*.codespaces.*` |
@@ -39,7 +39,7 @@ Documento funcional para la plataforma en modo standalone.
 
 - **Precondiciones:** HDFS, Kafka, Cassandra (y opcionalmente Hive) activos.
 - **Flujo:** ingesta genera JSON → Kafka + HDFS → Spark procesa → Cassandra + Hive.
-- **Variante real:** si DATEX2 DGT está disponible, la ingesta añade incidencias reales; si falla, usa caché o sigue solo con simulación.
+- **Variante real:** si DATEX2 DGT está disponible, la ingesta añade incidencias reales; si OpenWeather falla, el clima por hub se reconstruye desde DGT; si la DGT también falla, usa caché o sigue solo con simulación.
 - **Disparadores:** Streamlit “Paso siguiente”, Airflow `dag_maestro_smart_grid`, DAGs `simlog_kdd_*`, NiFi.
 
 ### CU-02 — Supervisar el stack
@@ -75,12 +75,13 @@ Documento funcional para la plataforma en modo standalone.
 
 - **Documentación:** `nifi/README_NIFI.md`, especificación de flujo en `nifi/flow/`.
 - **Relaciones clave:** `Build_GPS_Sintetico -> OpenWeather_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload`.
+- **Comportamiento actual:** si `OpenWeather_InvokeHTTP` no aporta clima válido, `Merge_Weather_Into_Payload` deja pasar el payload y `Merge_DGT_Into_Payload` genera `clima_hubs` alternativo desde DATEX2.
 - **Provenance:** atributos `simlog.provenance.stage`, `simlog.provenance.sources`, `simlog.provenance.dgt_mode`, `simlog.provenance.dgt_incidents`.
 
 ### CU-09 — Explorar ciclo KDD en Streamlit
 
 - **Precondiciones:** proyecto clonado; opcionalmente ingesta previa para ver `ultimo_payload.json`.
-- **Flujo principal:** abrir pestaña **Ciclo KDD** → elegir fase (◀ ▶ o desplegable) → leer reglas / vistas previas / grafo topológico según fase → en 1–2 ajustar paso, ejecutar ingesta o guardar instantánea y comparar payload → en 1–2 opcionalmente introducir API key y consultar OpenWeather.
+- **Flujo principal:** abrir pestaña **Ciclo KDD** → elegir fase (◀ ▶ o desplegable) → leer reglas / vistas previas / grafo topológico según fase → en 1–2 ajustar paso, ejecutar ingesta o guardar instantánea y comparar payload → en 1–2 opcionalmente introducir API key y consultar OpenWeather; si no responde, revisar en el snapshot `source=dgt` y `fallback_activo=true`.
 - **Postcondiciones:** comprensión del alineamiento fase–script–datos sin exigir lectura directa de todo el código.
 - **Diseño:** `docs/DASHBOARD_KDD_UI.md`.
 
@@ -125,14 +126,14 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-16 — Integrar DATEX2 DGT
 
 - **Entrada:** feed XML DATEX2 v3.6 de la DGT.
-- **Flujo:** `ingesta/ingesta_dgt_datex2.py` descarga/parsing -> mapeo a nodos -> merge con simulación -> publicación en Kafka/HDFS -> Spark recalcula criticidad.
-- **Salida:** nodos afectados con `source=dgt`, `severity`, `peso_pagerank` y evidencia en `transporte_dgt_raw`.
+- **Flujo:** `ingesta/ingesta_dgt_datex2.py` descarga/parsing -> mapeo a nodos -> merge con simulación -> respaldo climático para hubs cuando OpenWeather falla -> publicación en Kafka/HDFS -> Spark recalcula criticidad.
+- **Salida:** nodos afectados con `source=dgt`, `severity`, `peso_pagerank`, `fallback_activo` en clima cuando aplica y evidencia en `transporte_dgt_raw`.
 
 ### CU-17 — Auditar procedencia de la ingesta en NiFi
 
 - **Entrada:** evento generado por `PG_SIMLOG_KDD`.
 - **Flujo:** revisar `Data Provenance` y atributos `simlog.provenance.*` en los procesadores de merge.
-- **Salida:** trazabilidad sobre qué datos proceden de simulación, OpenWeather y DGT y en qué etapa se mezclaron.
+- **Salida:** trazabilidad sobre qué datos proceden de simulación, OpenWeather y DGT, y sobre si el clima final se obtuvo por fuente principal o por respaldo.
 
 ---
 

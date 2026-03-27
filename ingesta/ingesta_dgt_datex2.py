@@ -36,6 +36,33 @@ PESO_BY_SEVERITY = {
     "highest": 3.0,
 }
 
+VISIBILITY_TO_METERS = {
+    "verypoorvisibility": 100,
+    "poorvisibility": 500,
+    "reducedvisibility": 1500,
+    "moderatevisibility": 3000,
+    "goodvisibility": 10000,
+    "unknown": None,
+}
+
+WEATHER_TOKEN_LABELS = {
+    "snowfall": "Nevada",
+    "snow": "Nieve",
+    "ice": "Hielo",
+    "icy": "Hielo",
+    "frost": "Helada",
+    "rain": "Lluvia",
+    "heavyrain": "Lluvia intensa",
+    "sleet": "Aguanieve",
+    "hail": "Granizo",
+    "fog": "Niebla",
+    "mist": "Niebla",
+    "wind": "Viento fuerte",
+    "strongwinds": "Viento fuerte",
+    "poorenvironment": "Entorno adverso",
+    "wet": "Mojado",
+}
+
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
@@ -90,6 +117,91 @@ def _parse_datetime(value: Optional[str]) -> Optional[str]:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
     except ValueError:
         return value
+
+
+def _clean_weather_token(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    token = "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
+    return token or None
+
+
+def _label_weather_token(value: Optional[str]) -> Optional[str]:
+    token = _clean_weather_token(value)
+    if not token:
+        return None
+    if token in WEATHER_TOKEN_LABELS:
+        return WEATHER_TOKEN_LABELS[token]
+    return str(value).replace("_", " ").strip().title()
+
+
+def _normalize_visibility(value: Optional[str]) -> Optional[int]:
+    token = _clean_weather_token(value)
+    if not token:
+        return None
+    if token in VISIBILITY_TO_METERS:
+        return VISIBILITY_TO_METERS[token]
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if digits:
+        try:
+            return int(digits)
+        except ValueError:
+            return None
+    return None
+
+
+def _infer_road_condition(weather_labels: List[str], explicit_value: Optional[str]) -> Optional[str]:
+    if explicit_value:
+        return explicit_value
+    normalized = " ".join((weather_labels or [])).lower()
+    if "hielo" in normalized or "helada" in normalized:
+        return "Hielo"
+    if "nieve" in normalized or "nevada" in normalized or "aguanieve" in normalized:
+        return "Nieve"
+    if "lluvia" in normalized or "granizo" in normalized:
+        return "Mojado"
+    if "niebla" in normalized:
+        return "Visibilidad reducida"
+    if "viento" in normalized:
+        return "Viento fuerte"
+    return None
+
+
+def _extract_weather(record: ET.Element) -> Dict[str, object]:
+    raw_terms = _all_texts(
+        record,
+        [
+            "poorEnvironmentType",
+            "weatherRelatedRoadConditions",
+            "weatherRelatedConditionType",
+            "roadSurfaceCondition",
+            "visibility",
+            "visibilityType",
+            "precipitationType",
+            "precipitationDetail",
+        ],
+    )
+    labels: List[str] = []
+    seen = set()
+    for item in raw_terms:
+        label = _label_weather_token(item)
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+
+    road_surface_raw = _first_text(
+        record,
+        ["roadSurfaceCondition", "surfaceCondition", "roadSurfaceConditions"],
+    )
+    road_surface = _label_weather_token(road_surface_raw) if road_surface_raw else None
+    visibility_raw = _first_text(record, ["visibility", "visibilityType"])
+    visibility_m = _normalize_visibility(visibility_raw)
+
+    return {
+        "condiciones_meteorologicas": labels,
+        "estado_carretera": _infer_road_condition(labels, road_surface),
+        "visibilidad": visibility_m,
+    }
 
 
 def descargar_xml_datex2(url: str = DGT_DATEX2_URL, timeout: int = 30) -> str:
@@ -166,6 +278,7 @@ def _parse_incident(record: ET.Element) -> Dict:
         severity = "medium"
     location = _extract_location(record)
     record_id = record.attrib.get("id") or _first_text(record, ["id"]) or ""
+    weather = _extract_weather(record)
     return {
         "id_incidencia": record_id or f"dgt-{abs(hash(_pick_description(record)))}",
         "tipo": _pick_type(record),
@@ -177,6 +290,9 @@ def _parse_incident(record: ET.Element) -> Dict:
         "fecha_fin": _parse_datetime(_first_text(record, ["overallEndTime", "endTime"])),
         "probabilidad": _first_text(record, ["probabilityOfOccurrence"]),
         "source": "dgt",
+        "condiciones_meteorologicas": weather["condiciones_meteorologicas"],
+        "estado_carretera": weather["estado_carretera"],
+        "visibilidad": weather["visibilidad"],
         **location,
     }
 
@@ -212,6 +328,9 @@ def normalizar_incidencia_dgt(raw: Dict) -> Dict:
         "fecha_inicio": raw.get("fecha_inicio"),
         "fecha_fin": raw.get("fecha_fin"),
         "probabilidad": raw.get("probabilidad"),
+        "condiciones_meteorologicas": list(raw.get("condiciones_meteorologicas") or []),
+        "estado_carretera": raw.get("estado_carretera"),
+        "visibilidad": raw.get("visibilidad"),
     }
 
 
@@ -280,8 +399,69 @@ def fusionar_estados(estados_simulados: Dict[str, Dict], estados_dgt: Dict[str, 
             "distancia_nodo_km": info.get("distancia_nodo_km"),
             "fecha_inicio": info.get("fecha_inicio"),
             "fecha_fin": info.get("fecha_fin"),
+            "condiciones_meteorologicas": list(info.get("condiciones_meteorologicas") or []),
+            "estado_carretera": info.get("estado_carretera"),
+            "visibilidad": info.get("visibilidad"),
         }
     return merged
+
+
+def _incident_has_weather_context(incidencia: Dict) -> bool:
+    return bool(
+        (incidencia or {}).get("estado_carretera")
+        or (incidencia or {}).get("visibilidad") is not None
+        or (incidencia or {}).get("condiciones_meteorologicas")
+    )
+
+
+def _score_weather_candidate(incidencia: Dict, distancia_km: float) -> tuple[int, float]:
+    severity = SEVERITY_ORDER.get(str((incidencia or {}).get("severity") or "low").lower(), 0)
+    return severity, -float(distancia_km)
+
+
+def inferir_clima_hubs_desde_dgt(
+    incidencias: List[Dict],
+    *,
+    nodos: Optional[Dict[str, Dict]] = None,
+    max_km: float = DGT_MAX_NODE_DISTANCE_KM,
+) -> Dict[str, Dict]:
+    nodos = nodos or get_nodos()
+    hubs = {nid: meta for nid, meta in nodos.items() if str(meta.get("tipo", "")).lower() == "hub"}
+    out: Dict[str, Dict] = {}
+    best_scores: Dict[str, tuple[int, float]] = {}
+
+    for raw in incidencias or []:
+        inc = normalizar_incidencia_dgt(raw)
+        if inc.get("lat") is None or inc.get("lon") is None or not _incident_has_weather_context(inc):
+            continue
+        for hub_id, meta in hubs.items():
+            distance = haversine_km(float(inc["lat"]), float(inc["lon"]), float(meta["lat"]), float(meta["lon"]))
+            if distance > max_km:
+                continue
+            score = _score_weather_candidate(inc, distance)
+            if best_scores.get(hub_id) and score <= best_scores[hub_id]:
+                continue
+            best_scores[hub_id] = score
+            labels = list(inc.get("condiciones_meteorologicas") or [])
+            resumen = labels[0] if labels else (inc.get("estado_carretera") or "Condiciones adversas")
+            carretera = inc.get("carretera")
+            detalle = f"Fallback DGT: {resumen}"
+            if carretera:
+                detalle += f" en {carretera}"
+            out[hub_id] = {
+                "descripcion": detalle,
+                "temp": None,
+                "humedad": None,
+                "viento": None,
+                "visibilidad": inc.get("visibilidad"),
+                "estado_carretera": inc.get("estado_carretera") or "Comprometido",
+                "condiciones_meteorologicas": labels,
+                "source": "dgt",
+                "fallback_activo": True,
+                "id_incidencia": inc.get("id_incidencia"),
+                "distancia_referencia_km": round(distance, 2),
+            }
+    return out
 
 
 def obtener_incidencias_dgt(
@@ -320,9 +500,11 @@ def obtener_incidencias_dgt(
     raw = parsear_xml_datex2(xml_text)
     incidencias = [normalizar_incidencia_dgt(item) for item in raw]
     mapeo_nodos = mapear_incidencias_a_nodos(incidencias, max_km=max_km)
+    clima_hubs = inferir_clima_hubs_desde_dgt(incidencias, max_km=max_km)
     return {
         "source_mode": source_mode,
         "error": error,
         "incidencias": incidencias,
         "mapeo_nodos": mapeo_nodos,
+        "clima_hubs": clima_hubs,
     }
