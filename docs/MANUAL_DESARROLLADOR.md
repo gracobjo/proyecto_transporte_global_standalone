@@ -106,6 +106,40 @@ No ejecuta SQL arbitrario: usa **whitelist**/plantillas y heurísticas.
 - Ajusta timeout con `HIVE_QUERY_TIMEOUT_SEC`.
 - Intenta modos de auth compatibles (NOSASL/NONE) según entorno.
 
+### 2.3.1 YARN, conflictos de puerto y Beeline (verificación operativa)
+
+Las consultas Hive que lanzan trabajos en cluster (p. ej. motor MapReduce o configuración que delega en YARN) necesitan que el **ResourceManager** esté en marcha. Si desde Beeline o el cliente ves errores de conexión al **puerto 8032** (`Connection refused` hacia `nodo1` o el host del RM), suele faltar **YARN**:
+
+```bash
+# Tras tener HDFS operativo (típicamente ya levantado)
+/opt/hadoop/sbin/start-yarn.sh
+```
+
+Comprueba con `jps` que existen procesos `ResourceManager` y `NodeManager`, y que el RM escucha en **8032** (RPC).
+
+**Conflicto con la UI web del ResourceManager (puerto 8088):** por defecto, YARN enlaza la consola del RM en **8088**. En un nodo donde también corre **Airflow** (u otro servicio que ya use 8088), el ResourceManager **falla al arrancar** (`BindException` / “La dirección ya se está usando”) y no quedará proceso escuchando en 8032. En ese caso hay que cambiar la dirección de la web del RM en `yarn-site.xml`, por ejemplo:
+
+```xml
+<property>
+  <name>yarn.resourcemanager.webapp.address</name>
+  <value>0.0.0.0:18088</value>
+</property>
+```
+
+(El valor exacto debe ser un puerto libre en la máquina; **18088** es una convención habitual para no chocar con 8088.) Tras editar, reinicia YARN: `stop-yarn.sh` y `start-yarn.sh`. La UI del cluster quedará en `http://<host>:18088/` (ajusta firewall y DNS si aplica).
+
+**Base de datos JDBC:** el nombre del esquema Hive del proyecto viene de `HIVE_DB` en `config.py` (por defecto **`logistica_espana`**). Las URLs `jdbc:hive2://.../logistica_db` u otros nombres solo funcionan si ese esquema existe; si Beeline responde que la base no existe, revisa la variable de entorno `HIVE_DB` o usa el nombre por defecto.
+
+Ejemplo de comprobación rápida con Beeline (ajusta host y usuario):
+
+```bash
+export HIVE_HOME=/ruta/a/apache-hive-*-bin
+beeline -u 'jdbc:hive2://127.0.0.1:10000/logistica_espana' -n hadoop \
+  -e 'SELECT COUNT(*) FROM alertas_historicas;'
+```
+
+La primera consulta tras arrancar servicios puede tardar varios minutos (arranque en frío de sesión y cola YARN).
+
 ### 2.4 Extender el asistente (nuevo intent / nueva plantilla)
 
 1. Añade una nueva intención en `resolver_intencion_gestor()` en `servicios/gestor_consultas_sql.py`.
@@ -301,6 +335,22 @@ El fallback a OpenWeather está repartido en estos componentes:
 - `MergeDgtDatex2IntoPayload.groovy`: fusiona incidencias DGT y, si no hay clima OpenWeather disponible (`simlog.weather.available=false` o `clima_hubs` vacío), crea `clima_hubs` alternativo a partir de `condiciones_meteorologicas`, `estado_carretera` y `visibilidad`.
 
 En otras palabras, el flujo se ha configurado para que **OpenWeather no bloquee la ingesta**: la meteorología alternativa entra en el último merge y mantiene intactos Kafka, HDFS y el contrato del payload.
+
+## 6.b Reconfiguración logística en tiempo real
+
+La lógica de resiliencia del grafo se ha separado en:
+
+- `procesamiento/reconfiguracion_grafo.py`: eventos `NODE_DOWN` / `NODE_UP` / `ROUTE_DOWN` / `ROUTE_UP`, cálculo de estado activo del grafo, rutas alternativas y alertas.
+- `procesamiento/procesamiento_grafos.py`: integración con Spark, Cassandra e Hive.
+- `persistencia_hive.py`: histórico de `alertas_historicas` y `eventos_grafo`.
+
+Estado actual:
+
+- Cassandra conserva `estado_nodos`, `estado_rutas` y `alertas_activas`.
+- Hive conserva `alertas_historicas` y `eventos_grafo`.
+- Streamlit pinta el overlay de reconfiguración sobre el mapa operativo.
+
+Documento de referencia: `docs/RECONFIGURACION_LOGISTICA_CRITICA.md`.
 
 ## 5. Requisitos para correr Graph AI (FastAPI) en tu entorno
 
