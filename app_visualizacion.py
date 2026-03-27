@@ -60,6 +60,9 @@ from servicios.kdd_vista_grafo import render_bloque_grafo_fases_spark
 from servicios.kdd_reglas_ui import render_panel_reglas_grafo
 from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
 from servicios.ui_faq_ia import render_faq_ia_panel
+from servicios.ui_pruebas_ingesta import render_pruebas_ingesta_tab
+from servicios.pruebas_ingesta import registrar_prueba_ingesta
+from servicios.pipeline_verificacion import leer_ultima_ingesta
 
 COLORES_ESTADO = {
     "ok": "green",
@@ -75,6 +78,7 @@ COLORES_ESTADO = {
 TAB_LABELS = [
     "Ciclo KDD",
     "Resultados pipeline",
+    "Pruebas",
     "Cuadro de mando",
     "Asistente flota",
     "Rutas híbridas",
@@ -83,6 +87,31 @@ TAB_LABELS = [
     "Mapa y métricas",
     "Verificación técnica",
 ]
+
+
+def _render_resumen_dgt_ui() -> None:
+    ing = leer_ultima_ingesta()
+    if not ing.get("disponible"):
+        st.caption("Sin snapshot local todavía para mostrar el estado DGT.")
+        return
+
+    alerta = ing.get("alerta_bloqueos") or {}
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Modo DGT", str(ing.get("dgt_source_mode") or "disabled"))
+    c2.metric("Incidencias DGT", str(ing.get("dgt_incidencias_totales", 0)))
+    c3.metric("Nodos DGT", str(ing.get("dgt_nodos_afectados", 0)))
+    c4.metric("Bloqueos", str(alerta.get("bloqueados", 0)))
+
+    if alerta:
+        ratio = alerta.get("ratio_bloqueados", alerta.get("ratio", 0))
+        msg = (
+            f"Alerta operativa: `{alerta.get('nivel', 'normal')}` · "
+            f"bloqueados `{alerta.get('bloqueados', 0)}` · ratio `{ratio}`"
+        )
+        if str(alerta.get("nivel", "")).lower() in ("alta", "critica"):
+            st.warning(msg)
+        else:
+            st.info(msg)
 
 
 def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
@@ -98,6 +127,8 @@ def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
         {"tab": "Rutas híbridas", "titulo": "Planificación origen-destino y alternativas", "keywords": "ruta hibrida alternativa origen destino bfs"},
         {"tab": "Mapa y métricas", "titulo": "Mapa operativo y PageRank", "keywords": "mapa metrica pagerank nodos aristas tracking"},
         {"tab": "Resultados pipeline", "titulo": "Resultado de fases y persistencia", "keywords": "pipeline resultado fases ingesta spark"},
+        {"tab": "Resultados pipeline", "titulo": "Estado DGT y alertas de bloqueos", "keywords": "dgt datex2 live cache disabled alertas bloqueos provenance"},
+        {"tab": "Pruebas", "titulo": "Registro de pruebas y trazabilidad", "keywords": "pruebas test evidencias nifi airflow script ingesta historico"},
         {"tab": "Verificación técnica", "titulo": "Checks rápidos HDFS/Kafka/Cassandra", "keywords": "verificacion tecnica hdfs kafka cassandra checks"},
         {"tab": "Ciclo KDD", "titulo": "Fases KDD y ejecución por fase", "keywords": "kdd fases seleccion preprocesamiento transformacion mineria interpretacion"},
         {"tab": "Gemelo digital", "titulo": "Visualización del gemelo y red", "keywords": "gemelo digital red nodos aristas"},
@@ -482,10 +513,25 @@ def main() -> None:
             if code == 0:
                 if st.session_state.ingesta_paso_automatico:
                     st.session_state.timeline.append(f"{ts} — Ingesta OK (paso automático)")
+                    detalle_prueba = "Ingesta ejecutada desde Streamlit con paso automático."
                 else:
                     st.session_state.timeline.append(f"{ts} — Ingesta OK (paso {st.session_state.paso_15min})")
+                    detalle_prueba = f"Ingesta ejecutada desde Streamlit en el paso {st.session_state.paso_15min}."
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="OK",
+                    detalle=detalle_prueba,
+                )
                 st.success("Ingesta terminada.")
             else:
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="FAIL",
+                    detalle=f"Ingesta lanzada desde Streamlit terminó con código {code}.",
+                    observaciones=(err[-1000:] or out[-1000:]),
+                )
                 st.error(f"Código {code}")
                 st.code(err[-2000:] or out[-2000:])
             st.session_state.last_ingesta_out = out
@@ -516,8 +562,21 @@ def main() -> None:
             if c1 == 0 and c2 == 0:
                 st.session_state.paso_15min = p + 1
                 st.session_state.timeline.append(f"{ts} — Pipeline completo (ingesta paso {p})")
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="OK",
+                    detalle=f"Pipeline completo desde Streamlit con ingesta en paso {p} y procesamiento Spark posterior.",
+                )
                 st.success("Pipeline OK.")
             else:
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit",
+                    resultado="FAIL",
+                    detalle=f"Pipeline completo desde Streamlit falló (ingesta {c1} | procesamiento {c2}).",
+                    observaciones=((e1 or o1) + "\n---\n" + (e2 or o2))[-1500:],
+                )
                 st.error(f"Ingesta {c1} | Procesamiento {c2}")
                 st.code((e1 or o1) + "\n---\n" + (e2 or o2))
             st.rerun()
@@ -549,6 +608,9 @@ def main() -> None:
             "Las fases **1–2** se realizan en `ingesta/ingesta_kdd.py`. "
             "Las fases **3–5** se concentran en `procesamiento/procesamiento_grafos.py` (Spark)."
         )
+        with st.container(border=True):
+            st.markdown("**Estado actual de la fuente DGT**")
+            _render_resumen_dgt_ui()
         idx = _render_kdd_prev_next()
         fase_actual = FASES_KDD[idx]
 
@@ -621,6 +683,9 @@ def main() -> None:
 
     if active_tab == "Resultados pipeline":
         render_pipeline_resultados_tab()
+
+    if active_tab == "Pruebas":
+        render_pruebas_ingesta_tab()
 
     if active_tab == "Cuadro de mando":
         render_cuadro_mando_tab()
@@ -712,6 +777,9 @@ def main() -> None:
                 else:
                     st.caption("Sin datos de PageRank. Ejecuta procesamiento Spark.")
 
+                st.divider()
+                st.markdown("**Estado DGT y alertas**")
+                _render_resumen_dgt_ui()
                 st.divider()
                 st.caption("Leyenda aristas: verde OK · naranja congestión · rojo bloqueo")
             else:

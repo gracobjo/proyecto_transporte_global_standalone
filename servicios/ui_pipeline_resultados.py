@@ -87,12 +87,28 @@ def render_pipeline_resultados_tab() -> None:
                 c2.metric("Paso 15 min", str(ing["paso_15min"]))
             c3.metric("Hubs con clima", str(ing.get("hubs_clima", "—")))
             c4.metric("Camiones simulados", str(ing.get("camiones", "—")))
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Modo DGT", str(ing.get("dgt_source_mode") or "disabled"))
+            d2.metric("Incidencias DGT", str(ing.get("dgt_incidencias_totales", 0)))
+            d3.metric("Nodos afectados DGT", str(ing.get("dgt_nodos_afectados", 0)))
             if "meta" in ing:
                 m = ing["meta"]
                 st.write(
                     f"**Kafka publicado:** {'✅' if m.get('ok_kafka') else '❌'} · "
                     f"**HDFS backup:** {'✅' if m.get('ok_hdfs') else '❌'}"
                 )
+            alerta = ing.get("alerta_bloqueos")
+            if alerta:
+                nivel = str(alerta.get("nivel") or "normal").lower()
+                msg = (
+                    f"Alerta de bloqueos: nivel `{alerta.get('nivel')}` · "
+                    f"bloqueados `{alerta.get('bloqueados')}` · "
+                    f"ratio `{alerta.get('ratio_bloqueados') or alerta.get('ratio')}`"
+                )
+                if nivel in ("alta", "critica"):
+                    st.warning(msg)
+                else:
+                    st.info(msg)
             p = Path(ing["ruta_payload"])
             if p.exists():
                 with st.expander("Vista previa JSON (truncada)", expanded=False):
