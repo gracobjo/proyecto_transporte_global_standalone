@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import folium
+import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
@@ -13,6 +14,8 @@ from servicios.gemelo_digital_datos import (
     cargar_red_gemelo,
     cargar_tracking_gemelo_cassandra,
     cargar_transporte_ingesta_real_hive,
+    cargar_historial_tracking_hive,
+    cargar_trayectorias_por_camion,
 )
 from servicios.gemelo_digital_rutas import (
     comparar_original_vs_bloqueo,
@@ -20,7 +23,50 @@ from servicios.gemelo_digital_rutas import (
     nodo_mas_cercano,
     tiempo_estimado_horas,
 )
+from servicios.red_hibrida_rutas import estimar_retraso_tramo, COSTE_EURO_MINUTO_RETASO
 from servicios.ingesta_csv_gemelo import ingerir_csv_gemelo
+
+
+def _cargar_retrasos_cassandra(
+    nodos: List[Dict[str, Any]],
+    aristas: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Carga nodos/aristas desde Cassandra y calcula retrasos por tramo."""
+    try:
+        from cassandra.cluster import Cluster
+        from config import CASSANDRA_HOST, KEYSPACE
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+
+        rows_nodos = list(session.execute("SELECT id_nodo, estado, motivo_retraso FROM nodos_estado"))
+        rows_aristas = list(session.execute("SELECT src, dst, estado FROM aristas_estado"))
+
+        cluster.shutdown()
+
+        nodos_map = {}
+        for r in rows_nodos:
+            d = dict(r._asdict()) if hasattr(r, "_asdict") else dict(r)
+            nodos_map[d["id_nodo"]] = d
+
+        aristas_map = {}
+        for r in rows_aristas:
+            d = dict(r._asdict()) if hasattr(r, "_asdict") else dict(r)
+            key = (d.get("src", ""), d.get("dst", ""))
+            aristas_map[key] = d
+
+        retrasos = {}
+        for e in aristas:
+            src, dst = e.get("src"), e.get("dst")
+            if not src or not dst:
+                continue
+            key = f"{src}|{dst}"
+            resultado = estimar_retraso_tramo(src, dst, nodos_map, aristas_map, None)
+            retrasos[key] = resultado
+
+        return retrasos
+    except Exception:
+        return {}
 
 
 def render_gemelo_digital_sidebar() -> None:
@@ -62,6 +108,9 @@ def _crear_mapa_gemelo(
     tracking: List[Dict[str, Any]],
     ruta1: Optional[List[str]] = None,
     ruta2: Optional[List[str]] = None,
+    retrasos_tramos: Optional[Dict[str, Dict[str, Any]]] = None,
+    trayectorias: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    camion_seleccionado: Optional[str] = None,
 ) -> folium.Map:
     m = folium.Map(location=[40.2, -3.8], zoom_start=6, tiles="OpenStreetMap")
     pos: Dict[str, Tuple[float, float]] = {}
@@ -72,48 +121,147 @@ def _crear_mapa_gemelo(
         lat, lon = float(n["lat"]), float(n["lon"])
         pos[nid] = (lat, lon)
         color = "red" if (n.get("tipo") or "").lower() == "capital" else "blue"
+        popup_texto = nid
+        if n.get("estado") and n.get("estado") != "OK":
+            popup_texto = f"{nid}\nEstado: {n.get('estado')}\nMotivo: {n.get('motivo_retraso', 'N/A')}"
         folium.CircleMarker(
             location=[lat, lon],
             radius=5 if color == "blue" else 7,
             color=color,
             fill=True,
             fill_opacity=0.85,
-            popup=nid,
+            popup=folium.Popup(popup_texto, max_width=300),
+            tooltip=nid,
         ).add_to(m)
 
+    retrasos = retrasos_tramos or {}
     for e in aristas:
         a, b = e.get("src"), e.get("dst")
         if not a or not b or a not in pos or b not in pos:
             continue
+        key = f"{a}|{b}"
+        r = retrasos.get(key, {})
+        minutos = r.get("minutos", 0)
+        coste_eur = r.get("coste_eur")
+        motivos = r.get("motivos", [])
+        
+        if minutos > 0 and minutos < 1000:
+            color_arista = "orange" if minutos < 30 else "red"
+            peso = 3 if minutos < 30 else 5
+            tooltip_parts = [f"{a} → {b}", f"Retraso: ~{minutos:.0f} min"]
+            if coste_eur is not None:
+                tooltip_parts.append(f"Coste: {coste_eur:.2f} €")
+            if motivos:
+                tooltip_parts.append(f"Motivo: {'; '.join(motivos[:2])}")
+            tooltip_texto = "\n".join(tooltip_parts)
+        elif minutos >= 1000:
+            color_arista = "darkred"
+            peso = 5
+            tooltip_texto = f"{a} → {b}\nBLOQUEADO"
+        else:
+            color_arista = "gray"
+            peso = 1
+            distancia = e.get("distancia_km", 0)
+            tooltip_texto = f"{a} → {b}\n{distancia:.1f} km"
+        
         folium.PolyLine(
             [list(pos[a]), list(pos[b])],
-            color="gray",
-            weight=1,
-            opacity=0.35,
+            color=color_arista,
+            weight=peso,
+            opacity=0.7,
+            tooltip=tooltip_texto,
         ).add_to(m)
 
-    def dibujar_ruta(ruta: List[str], color: str, label: str) -> None:
+    def dibujar_ruta(ruta: List[str], color: str, label: str, mostrar_coste: bool = False) -> None:
         if len(ruta) < 2:
             return
         pts = [[pos[x][0], pos[x][1]] for x in ruta if x in pos]
         if len(pts) < 2:
             return
-        folium.PolyLine(pts, color=color, weight=4, opacity=0.85, tooltip=label).add_to(m)
+        tooltip_label = label
+        if mostrar_coste and retrasos:
+            total_min = 0.0
+            total_eur = 0.0
+            for i in range(len(ruta) - 1):
+                key = f"{ruta[i]}|{ruta[i+1]}"
+                r = retrasos.get(key, {})
+                total_min += r.get("minutos", 0) or 0
+                ce = r.get("coste_eur")
+                if ce is not None:
+                    total_eur += ce
+            if total_min > 0:
+                tooltip_label = f"{label}\nRetraso total: ~{total_min:.0f} min"
+                if total_eur > 0:
+                    tooltip_label += f" | Coste: {total_eur:.2f} €"
+        folium.PolyLine(pts, color=color, weight=4, opacity=0.85, tooltip=tooltip_label).add_to(m)
 
     if ruta1:
-        dibujar_ruta(ruta1, "green", "Ruta referencia")
+        dibujar_ruta(ruta1, "green", "Ruta referencia", mostrar_coste=True)
     if ruta2:
-        dibujar_ruta(ruta2, "orange", "Ruta alternativa")
+        dibujar_ruta(ruta2, "orange", "Ruta alternativa", mostrar_coste=True)
+
+    colores_trayectoria = ["blue", "purple", "darkgreen", "darkorange", "darkblue", "pink", "brown", "gray"]
+    tray = trayectorias or {}
+    mostrar_todas = not camion_seleccionado
+    
+    for idx, (cid, puntos) in enumerate(tray.items()):
+        if not mostrar_todas and cid != camion_seleccionado:
+            continue
+        if len(puntos) < 2:
+            continue
+        
+        color_track = colores_trayectoria[idx % len(colores_trayectoria)]
+        pts_track = [[p["lat"], p["lon"]] for p in puntos if p.get("lat") and p.get("lon")]
+        
+        if len(pts_track) >= 2:
+            tooltip_track = f"Trayectoria {cid}"
+            if puntos[0].get("origen") and puntos[-1].get("destino"):
+                tooltip_track += f"\n{puntos[0]['origen']} → {puntos[-1]['destino']}"
+            tooltip_track += f"\n{puntos[0]['timestamp'][:19] if puntos[0].get('timestamp') else '?'} (inicio)"
+            
+            folium.PolyLine(
+                pts_track,
+                color=color_track,
+                weight=3,
+                opacity=0.8,
+                tooltip=tooltip_track,
+                dash_array="5, 10" if cid == camion_seleccionado else None,
+            ).add_to(m)
+            
+            inicio = pts_track[0]
+            fin = pts_track[-1]
+            
+            folium.Marker(
+                inicio,
+                icon=folium.DivIcon(html=f'<div style="font-size:12px;color:{color_track}">▶ {cid}</div>'),
+                tooltip=f"{cid} - Inicio",
+            ).add_to(m)
+            
+            folium.Marker(
+                fin,
+                icon=folium.DivIcon(html=f'<div style="font-size:12px;color:{color_track}">■ {cid}</div>'),
+                tooltip=f"{cid} - Fin (actual)",
+            ).add_to(m)
 
     for t in tracking:
         lat, lon = t.get("lat"), t.get("lon")
         if lat is None or lon is None:
             continue
         cid = str(t.get("id_camion", "?"))
+        estado = t.get("estado_ruta", "")
+        tooltip_camion = f"Camión {cid}"
+        if estado and estado != "En ruta":
+            tooltip_camion += f"\nEstado: {estado}"
+        if t.get("motivo_retraso"):
+            tooltip_camion += f"\nMotivo: {t['motivo_retraso']}"
+        
+        es_seleccionado = cid == camion_seleccionado
+        color_icono = "red" if es_seleccionado else "blue"
+        
         folium.Marker(
             [float(lat), float(lon)],
-            icon=folium.DivIcon(html=f'<div style="font-size:22px" title="{cid}">🚛</div>'),
-            tooltip=f"Camión {cid}",
+            icon=folium.DivIcon(html=f'<div style="font-size:24px;color:{color_icono}" title="{tooltip_camion}">🚛</div>'),
+            tooltip=tooltip_camion,
         ).add_to(m)
 
     return m
@@ -140,16 +288,32 @@ def render_gemelo_digital_tab() -> None:
 
     tracking = cargar_tracking_gemelo_cassandra()
 
+    retrasos_tramos = _cargar_retrasos_cassandra(nodos, aristas)
+
+    historial = cargar_historial_tracking_hive(limite=500)
+    trayectorias = cargar_trayectorias_por_camion(historial)
+    ids_camiones_hist = sorted(trayectorias.keys())
+
     col_a, col_b = st.columns([2, 1])
     with col_a:
         st.markdown("**Planificación de ruta (Dijkstra / NetworkX)**")
         id_camiones = [str(t.get("id_camion")) for t in tracking if t.get("id_camion")]
+        
+        all_camion_options = ["(ninguno)"] + sorted(set(id_camiones + ids_camiones_hist))
         sel_camion = st.selectbox(
-            "Camión (referencia)",
-            options=(id_camiones if id_camiones else ["(sin datos Cassandra)"]),
+            "Ver trayectoria de camión (desde Hive)",
+            options=all_camion_options,
             key="gemelo_sel_camion",
         )
-
+        camion_seleccionado = sel_camion if sel_camion != "(ninguno)" else None
+        
+        if camion_seleccionado and camion_seleccionado in trayectorias:
+            pts = trayectorias[camion_seleccionado]
+            st.caption(f"📍 {camion_seleccionado}: **{len(pts)}** posiciones en historial (ordenadas cronológicamente)")
+            if len(pts) >= 2:
+                st.caption(f"   Trayectoria: {pts[0].get('origen', '?')} → {pts[-1].get('destino', '?')}")
+                st.caption(f"   Período: {pts[0].get('timestamp', '?')[:19]} → {pts[-1].get('timestamp', '?')[:19]}")
+        
         destino = st.selectbox("Destino (nodo capital)", options=cap_ids or ["—"], key="gemelo_destino")
 
         origen_manual = st.selectbox(
@@ -225,15 +389,36 @@ def render_gemelo_digital_tab() -> None:
                     tracking,
                     ruta1=r1,
                     ruta2=r_alt if cmp_out.get("recalculado") and r_alt else None,
+                    retrasos_tramos=retrasos_tramos,
+                    trayectorias=trayectorias,
+                    camion_seleccionado=camion_seleccionado,
                 )
             else:
                 st.warning("No hay ruta entre origen y destino con los pesos actuales.")
-                mapa = _crear_mapa_gemelo(nodos, aristas, tracking)
+                mapa = _crear_mapa_gemelo(nodos, aristas, tracking, retrasos_tramos=retrasos_tramos, trayectorias=trayectorias, camion_seleccionado=camion_seleccionado)
         else:
             st.info("Selecciona origen y destino válidos en la red.")
-            mapa = _crear_mapa_gemelo(nodos, aristas, tracking)
+            mapa = _crear_mapa_gemelo(nodos, aristas, tracking, retrasos_tramos=retrasos_tramos, trayectorias=trayectorias, camion_seleccionado=camion_seleccionado)
 
         st_folium(mapa, width=None, height=520, returned_objects=[], key="folium_gemelo")
+
+        if ids_camiones_hist:
+            with st.expander("📊 Historial de posiciones (últimas 500)", expanded=False):
+                for cid in ids_camiones_hist[:5]:
+                    pts = trayectorias.get(cid, [])
+                    if pts:
+                        df_hist = pd.DataFrame([
+                            {
+                                "timestamp": p.get("timestamp", "")[:19] if p.get("timestamp") else "",
+                                "lat": p.get("lat"),
+                                "lon": p.get("lon"),
+                                "nodo": p.get("nodo_actual", ""),
+                                "progreso": f"{p.get('progreso_pct', 0):.1f}%",
+                            }
+                            for p in pts[:20]
+                        ])
+                        st.markdown(f"**{cid}** ({len(pts)} posiciones)")
+                        st.dataframe(df_hist, hide_index=True, use_container_width=True)
 
     with col_b:
         st.markdown("**Hive — transporte_ingesta_real**")

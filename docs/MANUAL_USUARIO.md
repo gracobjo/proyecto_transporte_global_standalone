@@ -131,12 +131,15 @@ Qué incluye:
    - Refrescar clima (si aplica para las slides)
 3. **Verificación Kafka**: estado del topic del proyecto.
 4. **Consultas supervisadas — Cassandra**:
-   - Selecciona una consulta aprobada (por lista).
+   - Las consultas están organizadas por **categorías** (📍 Estado de Nodos, 🟤 Estado de Rutas, 🚛 Tracking Camiones, 📊 PageRank, 📋 Eventos, 👤 Gestor).
+   - Selecciona una categoría del primer desplegable y luego una consulta específica.
    - Pulsas **“Ejecutar consulta Cassandra”**.
    - Se muestra un `st.dataframe`.
    - (Siempre puedes ver la CQL exacta en el expander “CQL ejecutado”.)
    - También dispones de un bloque **“CQL (copiar / pegar / ejecutar)”** para consultas `SELECT` directas.
 5. **Consultas supervisadas — Hive (histórico)**:
+   - Las consultas están organizadas por **categorías** (🔧 Diagnóstico, 📋 Eventos Histórico, 🌤 Clima Histórico, 🚛 Tracking Camiones, 📦 Transporte Ingestado, 🟤 Rutas Alternativas, 📊 Agregaciones Diarias, 👤 Gestor).
+   - Selecciona una categoría del primer desplegable y luego una consulta específica.
    - Igual que Cassandra, pero usando HiveServer2 con PyHive.
    - Se limita para evitar bloqueos del UI.
    - También dispones de **“SQL (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.

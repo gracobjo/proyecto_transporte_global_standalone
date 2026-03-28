@@ -20,11 +20,15 @@ from servicios.clima_retrasos import (
 )
 from servicios.consultas_cuadro_mando import (
     CASSANDRA_CONSULTAS,
+    CASSANDRA_CATEGORIAS,
     HIVE_CONSULTAS,
+    HIVE_CATEGORIAS,
     ejecutar_cassandra_consulta,
     ejecutar_cassandra_cql_seguro,
     ejecutar_hive_consulta,
     ejecutar_hive_sql_seguro,
+    listar_categorias_cassandra,
+    listar_categorias_hive,
     listar_columnas_cassandra,
     listar_columnas_hive,
     listar_claves_cassandra,
@@ -32,6 +36,14 @@ from servicios.consultas_cuadro_mando import (
     listar_keyspaces_cassandra,
     listar_tablas_cassandra,
     listar_tablas_hive,
+    nombre_categoria,
+    nombre_categoria_cassandra,
+    descripcion_categoria,
+    descripcion_categoria_cassandra,
+    obtener_categoria,
+    obtener_categoria_cassandra,
+    obtener_consultas_de_categoria,
+    obtener_consultas_de_categoria_cassandra,
     titulo_cassandra,
     titulo_hive,
 )
@@ -143,65 +155,100 @@ def render_acciones_rapidas() -> None:
 
 
 def render_consultas_cassandra() -> None:
-    st.subheader("Consultas supervisadas — Cassandra")
+    st.subheader("Consultas supervisadas — Cassandra (tiempo real)")
     st.caption(
-        "Solo consultas **aprobadas** (lectura). Para ver el estado actual de la red, nodos, "
-        "aristas, tracking y PageRank."
+        "Solo consultas **aprobadas** (lectura). Datos en **tiempo real** desde Cassandra. "
+        "Tablas: `nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`, `eventos_historico`."
     )
-    claves = listar_claves_cassandra()
-    etiquetas = {k: f"{titulo_cassandra(k)} (`{k}`)" for k in claves}
-    sel = st.selectbox("Consulta", options=claves, format_func=lambda k: etiquetas[k], key="cql_sel")
+
+    # Estado para guardar la consulta seleccionada
+    if "cass_categoria_seleccionada" not in st.session_state:
+        st.session_state["cass_categoria_seleccionada"] = "nodos"
+    if "cass_consulta_seleccionada" not in st.session_state:
+        st.session_state["cass_consulta_seleccionada"] = "nodos_estado_resumen"
+
+    # Selector de categoría
+    categorias = listar_categorias_cassandra()
+    cat_seleccionada = st.selectbox(
+        "Categoría",
+        options=categorias,
+        format_func=lambda c: nombre_categoria_cassandra(c),
+        index=categorias.index(st.session_state["cass_categoria_seleccionada"])
+            if st.session_state["cass_categoria_seleccionada"] in categorias else 0,
+        key="cass_cat_select",
+    )
+    st.session_state["cass_categoria_seleccionada"] = cat_seleccionada
+
+    # Obtener consultas de la categoría
+    consultas_categoria = obtener_consultas_de_categoria_cassandra(cat_seleccionada)
+    opciones_consultas = [
+        titulo_cassandra(c) for c in consultas_categoria
+    ]
+    
+    # Mostrar información de la categoría
+    st.caption(f"📋 {descripcion_categoria_cassandra(cat_seleccionada)}")
+
+    # Selector de consulta
+    consulta_seleccionada = st.selectbox(
+        "Consulta",
+        options=consultas_categoria,
+        format_func=lambda c: titulo_cassandra(c),
+        key="cass_consulta_select",
+    )
+    st.session_state["cass_consulta_seleccionada"] = consulta_seleccionada
+
+    # Ejecutar consulta
     if st.button("Ejecutar consulta Cassandra", key="btn_cql", type="primary"):
-        ok, err, rows = ejecutar_cassandra_consulta(sel)
+        with st.spinner("Ejecutando Cassandra…"):
+            ok, err, rows = ejecutar_cassandra_consulta(consulta_seleccionada)
         if ok and rows:
             st.dataframe(pd.DataFrame(rows), width="stretch")
-            st.caption(f"{len(rows)} fila(s).")
+            st.caption(f"✅ {len(rows)} fila(s) devueltas.")
         elif ok:
-            st.info("Consulta vacía (sin filas o tablas sin datos).")
+            st.info("Consulta correcta pero sin filas (tabla vacía).")
         else:
-            st.error(err)
+            st.error(f"Error Cassandra: {err}")
 
-    with st.expander("CQL (copiar / pegar / ejecutar)", expanded=False):
-        st.caption("Ejecuta CQL pegado aquí. Por seguridad solo se permite `SELECT`.")
-        cql_default = (CASSANDRA_CONSULTAS.get(sel, {}) or {}).get("cql", "").strip()
+    # CQL personalizado
+    with st.expander("CQL personalizado (copiar / pegar / ejecutar)", expanded=False):
+        st.caption("Ejecuta CQL pegado aquí. Solo se permite `SELECT`.")
+        cql_default = (CASSANDRA_CONSULTAS.get(consulta_seleccionada, {}) or {}).get("cql", "").strip()
         cql_edit = st.text_area(
             "CQL",
             value=cql_default,
             height=140,
-            key=f"cql_edit_{sel}",
+            key="cql_edit_custom",
         ).strip()
         c1, c2 = st.columns([1, 3])
         with c1:
-            run_cql = st.button("Ejecutar CQL", key=f"btn_cql_run_{sel}", type="secondary")
+            run_cql = st.button("Ejecutar CQL", key="btn_cql_run_custom", type="secondary")
         with c2:
-            st.caption("Sugerencia: añade `LIMIT` si no lo tiene.")
+            st.caption("💡 Sugerencia: usa `ALLOW FILTERING` con moderación.")
 
-        if run_cql:
+        if run_cql and cql_edit:
             with st.spinner("Ejecutando Cassandra…"):
                 ok, err, rows = ejecutar_cassandra_cql_seguro(cql_edit)
             if ok and rows:
                 st.dataframe(pd.DataFrame(rows), width="stretch")
-                st.caption(f"{len(rows)} fila(s).")
+                st.caption(f"✅ {len(rows)} fila(s).")
             elif ok:
                 st.info("Consulta correcta pero sin filas.")
             else:
-                st.error(err or "Error Cassandra")
+                st.error(f"Error: {err or 'Error desconocido'}")
+        elif run_cql and not cql_edit:
+            st.warning("Introduce una consulta CQL primero.")
 
 
 def render_consultas_hive() -> None:
     st.subheader("Consultas supervisadas — Hive (histórico)")
     st.caption(
         "Requiere **HiveServer2** (puerto **10000**). Las consultas usan **PyHive** (Thrift), no `beeline`. "
-        "Variables: `HIVE_JDBC_URL` o `HIVE_SERVER` (ej. `jdbc:hive2://localhost:10000`), "
-        "`SIMLOG_HIVE_BEELINE_USER` / usuario efectivo (`hadoop`). "
-        "Timeout: `HIVE_QUERY_TIMEOUT_SEC=300`. Si va lento, prueba `diag_smoke_hive` (SELECT 1). "
-        "El fallback Spark tras timeout suele fallar con metastore Derby; deja `SIMLOG_HIVE_EXEC_FALLBACK_SPARK=0`. "
-        "Por defecto se consultan `historico_nodos` y `nodos_maestro` (como escribe Spark). "
-        "Si tus tablas tienen otro nombre, define `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y "
-        "`SIMLOG_HIVE_TABLE_NODOS_MAESTRO` en el entorno o en `.env`."
+        "Timeout: `HIVE_QUERY_TIMEOUT_SEC=300`. "
+        "Tablas: `eventos_historico`, `clima_historico`, `tracking_camiones_historico`, "
+        "`transporte_ingesta_completa`, `rutas_alternativas_historico`, `agg_estadisticas_diarias`."
     )
-    # Descubrir tablas realmente existentes para evitar “solo funciona la primera”.
-    # (En muchos entornos local/dev no se generan `historico_nodos`/`nodos_maestro` hasta que Spark corre con Hive.)
+
+    # Descubrir tablas existentes
     tablas_en_hive: set[str] = set()
     ok_tabs, err_tabs, out_tabs = ejecutar_hive_consulta("tablas_bd")
     if ok_tabs and out_tabs:
@@ -210,87 +257,125 @@ def render_consultas_hive() -> None:
             partes = ln.split("\t")
             tablas_en_hive.add(partes[-1].strip())
 
-    # Requisitos por consulta (tablas físicas).
+    # Requisitos por consulta (tablas físicas)
     requiere: dict[str, set[str]] = {
         "diag_smoke_hive": set(),
         "tablas_bd": set(),
-        "historico_nodos_muestra": {"historico_nodos"},
-        "historico_nodos_conteo": {"historico_nodos"},
-        "historico_nodos_muestra_24h": {"historico_nodos"},
-        "diag_fecha_proceso_24h": {"historico_nodos"},
-        "severidad_resumen_24h": {"historico_nodos"},
-        "riesgo_hub_24h": {"historico_nodos", "nodos_maestro"},
-        "top_causas_24h": {"historico_nodos"},
-        "nodos_maestro": {"nodos_maestro"},
-        "nodos_maestro_conteo": {"nodos_maestro"},
-        "gemelo_red_nodos": {"red_gemelo_nodos"},
-        "gemelo_red_aristas": {"red_gemelo_aristas"},
-        "transporte_ingesta_real_muestra": {"transporte_ingesta_real"},
-        # Tabla configurable (por defecto `transporte_ingesta_completa`, que sí suele existir)
-        "gestor_historial_rutas_camion": set(),
+        "eventos_historico_muestra": {"eventos_historico"},
+        "eventos_nodos_24h": {"eventos_historico"},
+        "eventos_bloqueos_24h": {"eventos_historico"},
+        "eventos_evolucion_dia": {"eventos_historico"},
+        "clima_historico_muestra": {"clima_historico"},
+        "clima_historico_hoy": {"clima_historico"},
+        "clima_estado_carretera": {"clima_historico"},
+        "tracking_historico_muestra": {"tracking_camiones_historico"},
+        "tracking_camion_especifico": {"tracking_camiones_historico"},
+        "tracking_ultima_posicion": {"tracking_camiones_historico"},
+        "transporte_ingesta_real_muestra": {"transporte_ingesta_completa"},
+        "transporte_ingesta_hoy": {"transporte_ingesta_completa"},
+        "transporte_retrasos_hoy": {"transporte_ingesta_completa"},
+        "gestor_historial_rutas_camion": {"transporte_ingesta_completa"},
+        "rutas_alternativas_muestra": {"rutas_alternativas_historico"},
+        "rutas_alternativas_bloqueos": {"rutas_alternativas_historico"},
+        "agg_estadisticas_diarias": {"agg_estadisticas_diarias"},
+        "agg_ultima_semana": {"agg_estadisticas_diarias"},
+        "gestor_eventos_por_hub": {"eventos_historico"},
+        "gestor_clima_afecta_transporte": {"clima_historico", "transporte_ingesta_completa"},
+        "gestor_incidencias_resumen": {"eventos_historico"},
+        "gestor_pagerank_historico": {"eventos_historico"},
     }
 
     def _disponible(codigo: str) -> bool:
         req = requiere.get(codigo)
         if req is None:
-            # Si no conocemos los requisitos, no la ocultamos.
             return True
         return req.issubset(tablas_en_hive)
 
-    claves = listar_claves_hive()
-    # Orden “rápido” (lo más útil al principio)
-    claves_rapidas = ["diag_smoke_hive", "tablas_bd", "transporte_ingesta_real_muestra"]
-    claves_ordenadas = [k for k in claves_rapidas if k in claves] + [k for k in claves if k not in claves_rapidas]
-
-    # Por defecto, solo las que tienen pinta de funcionar con las tablas actuales.
-    disponibles = [k for k in claves_ordenadas if _disponible(k)]
-    no_disp = [k for k in claves_ordenadas if k not in disponibles]
-
     if not ok_tabs:
-        st.warning(
-            "Hive responde a `SELECT 1` pero falló al listar tablas (`SHOW TABLES`). "
-            f"Detalle: {err_tabs or 'error'}. Si HS2 va lento, sube `HIVE_QUERY_TIMEOUT_SEC`."
-        )
+        st.warning(f"Hive conectó pero falló al listar tablas: {err_tabs or 'error'}")
     elif tablas_en_hive:
-        st.caption(f"Tablas detectadas en Hive: {len(tablas_en_hive)}")
+        st.caption(f"Tablas detectadas en Hive: **{len(tablas_en_hive)}**")
 
-    if no_disp:
-        faltan = sorted({t for k in no_disp for t in requiere.get(k, set()) if t not in tablas_en_hive})
-        if faltan:
-            st.info(
-                "Algunas consultas no están disponibles porque faltan tablas en Hive: "
-                + ", ".join(f"`{t}`" for t in faltan)
-                + ". Esto se arregla ejecutando la fase Spark que escribe Hive (con `SIMLOG_ENABLE_HIVE=1`)."
-            )
-        ver_todo = st.toggle("Mostrar también consultas que ahora fallarán", value=False, key="hive_show_all")
+    # ==========================================================================
+    # Interfaz por categorías con expanders
+    # ==========================================================================
+    
+    # Estado para guardar la consulta seleccionada actualmente
+    if "hive_categoria_seleccionada" not in st.session_state:
+        st.session_state["hive_categoria_seleccionada"] = "diagnostico"
+    if "hive_consulta_seleccionada" not in st.session_state:
+        st.session_state["hive_consulta_seleccionada"] = "diag_smoke_hive"
+
+    # Selector de categoría principal
+    categorias = listar_categorias_hive()
+    opciones_categorias = [nombre_categoria(c) for c in categorias]
+    cat_seleccionada = st.selectbox(
+        "Categoría",
+        options=categorias,
+        format_func=lambda c: nombre_categoria(c),
+        index=categorias.index(st.session_state["hive_categoria_seleccionada"]) 
+            if st.session_state["hive_categoria_seleccionada"] in categorias else 0,
+        key="hive_cat_select",
+    )
+    st.session_state["hive_categoria_seleccionada"] = cat_seleccionada
+
+    # Obtener consultas de la categoría seleccionada
+    consultas_categoria = obtener_consultas_de_categoria(cat_seleccionada)
+    disponibles_categoria = [c for c in consultas_categoria if _disponible(c)]
+    no_disp_categoria = [c for c in consultas_categoria if c not in disponibles_categoria]
+    
+    # Mostrar información de la categoría
+    info_cat = obtener_categoria(cat_seleccionada)
+    st.caption(f"📋 {descripcion_categoria(cat_seleccionada)}")
+
+    # Selector de consulta dentro de la categoría
+    if disponibles_categoria:
+        opciones_consultas = [
+            titulo_hive(c) for c in disponibles_categoria
+        ]
+        consulta_seleccionada = st.selectbox(
+            "Consulta",
+            options=disponibles_categoria,
+            format_func=lambda c: titulo_hive(c),
+            key="hive_consulta_select",
+        )
+        st.session_state["hive_consulta_seleccionada"] = consulta_seleccionada
+    elif no_disp_categoria:
+        # Mostrar consultas no disponibles
+        st.warning("Esta categoría requiere tablas que aún no existen en Hive.")
+        opciones_consultas = [titulo_hive(c) + " ⚠️" for c in no_disp_categoria]
+        st.selectbox(
+            "Consultas (no disponibles)",
+            options=no_disp_categoria,
+            format_func=lambda c: titulo_hive(c) + " ⚠️",
+            disabled=True,
+            key="hive_consulta_disabled",
+        )
+        consulta_seleccionada = None
     else:
-        ver_todo = False
+        st.info("No hay consultas definidas para esta categoría.")
+        consulta_seleccionada = None
 
-    claves_para_ui = claves_ordenadas if ver_todo else disponibles
-    if not claves_para_ui:
-        # Mínimo: siempre dejar el diagnóstico.
-        claves_para_ui = ["diag_smoke_hive"]
+    # Si hay no disponibles, mostrar toggle para verlas
+    if no_disp_categoria:
+        ver_no_disponibles = st.checkbox(
+            f"Mostrar {len(no_disp_categoria)} consulta(s) no disponible(s)",
+            value=False,
+            key="hive_ver_no_disp",
+        )
+        if ver_no_disponibles:
+            st.caption("⚠️ Estas consultas requieren tablas que se crean ejecutando Spark con `SIMLOG_ENABLE_HIVE=1`")
 
-    def _label(k: str) -> str:
-        base = f"{titulo_hive(k)} (`{k}`)"
-        if ver_todo and (k in no_disp):
-            req = sorted(requiere.get(k, set()))
-            if req:
-                base += " — no disponible (falta: " + ", ".join(req) + ")"
-            else:
-                base += " — puede fallar"
-        return base
+    sel = st.session_state["hive_consulta_seleccionada"] if consulta_seleccionada else None
 
-    etiquetas = {k: _label(k) for k in claves_para_ui}
-    label_a_clave = {etiquetas[k]: k for k in claves_para_ui}
-    sel_label = st.radio("Consulta", options=list(label_a_clave.keys()), key="hive_sel_radio")
-    sel = label_a_clave[sel_label]
+    # ==========================================================================
+    # Funciones auxiliares para renderizar resultados
+    # ==========================================================================
 
     def _hive_tsv_a_dataframe(tsv: str) -> pd.DataFrame:
         if not (tsv or "").strip():
             return pd.DataFrame()
         df = pd.read_csv(io.StringIO(tsv), sep="\t")
-        # Quitar prefijos tipo "h.id_nodo" o "tabla.col"
         df.columns = [c.split(".")[-1].strip() for c in df.columns]
         return df
 
@@ -298,9 +383,7 @@ def render_consultas_hive() -> None:
         if v is None:
             return ""
         s = str(v)
-        if len(s) <= max_len:
-            return s
-        return s[: max_len - 1] + "…"
+        return s if len(s) <= max_len else s[: max_len - 1] + "…"
 
     def _limpiar_clima(v: object) -> str:
         if v is None:
@@ -322,13 +405,19 @@ def render_consultas_hive() -> None:
             "motivo_retraso": "Motivo",
             "clima_actual": "Clima",
             "fecha_proceso": "Fecha",
+            "timestamp": "Fecha/Hora",
+            "id_camion": "Camión",
+            "origen": "Origen",
+            "destino": "Destino",
+            "lat_actual": "Lat",
+            "lon_actual": "Lon",
+            "progreso_pct": "Progreso %",
         }
         df2 = df.copy()
         for c in list(df2.columns):
             if c in ren:
                 df2.rename(columns={c: ren[c]}, inplace=True)
 
-        # Limpieza: clima muy largo cuando no hay DNS
         if "Clima" in df2.columns:
             df2["Clima"] = df2["Clima"].map(_limpiar_clima)
 
@@ -340,80 +429,82 @@ def render_consultas_hive() -> None:
             estados = sorted({str(x) for x in df2.get("Estado", pd.Series(dtype=str)).dropna().unique()})
             estados_sel = st.multiselect("Estado", options=estados, default=estados, key="hive_f_estados")
         with c3:
-            q = st.text_input("Buscar nodo", value="", key="hive_f_buscar").strip().lower()
+            q = st.text_input("Buscar", value="", key="hive_f_buscar").strip().lower()
 
         if solo_hubs and "Tipo" in df2.columns:
             df2 = df2[df2["Tipo"].astype(str).str.lower() == "hub"]
         if "Estado" in df2.columns and estados_sel:
             df2 = df2[df2["Estado"].astype(str).isin(estados_sel)]
-        if q and "Nodo" in df2.columns:
-            df2 = df2[df2["Nodo"].astype(str).str.lower().str.contains(q, na=False)]
-
-        if "Estado" in df2.columns and "Nodo" in df2.columns:
-            df2 = df2.sort_values(["Estado", "Nodo"], ascending=[True, True])
+        if q:
+            for col in ["Nodo", "Camión", "Origen", "Destino"]:
+                if col in df2.columns:
+                    df2 = df2[df2[col].astype(str).str.lower().str.contains(q, na=False)]
+                    break
 
         st.dataframe(df2, width="stretch", hide_index=True)
-    if st.button("Ejecutar consulta Hive", key="btn_hive", type="primary"):
+
+    # ==========================================================================
+    # Ejecutar consulta seleccionada
+    # ==========================================================================
+    
+    if sel and st.button("Ejecutar consulta Hive", key="btn_hive", type="primary"):
         t0 = time.monotonic()
         with st.spinner("Ejecutando Hive (PyHive)…"):
             ok, err, out = ejecutar_hive_consulta(sel)
         elapsed = time.monotonic() - t0
         if ok:
             out_s = out or ""
-            st.caption(f"Tiempo Hive: {elapsed:.1f}s")
-            st.caption(f"Salida TSV: {len(out_s)} caracteres.")
+            st.caption(f"⏱️ Tiempo: **{elapsed:.1f}s** | Resultado: **{len(out_s)}** caracteres")
             if not out_s.strip():
-                st.caption("La consulta se ejecutó pero Hive devolvió salida TSV vacía (posible: 0 filas en las últimas 24h).")
-                st.caption("Sugerencia: prueba `Resumen severidad (últimas 24h) — estado derivado` o `Muestra histórico (últimas 24h) — nodos`.")
+                st.info("Consulta correcta pero sin filas para los filtros actuales.")
             else:
                 df = _hive_tsv_a_dataframe(out_s)
                 _render_df_usuario(df)
                 with st.expander("Ver salida raw (TSV)"):
                     st.text_area("Salida (TSV)", value=out_s, height=220)
         else:
-            st.error(err)
-            if "Table not found" in (err or "") or "tabla no encontrada" in (err or "").lower():
+            st.error(f"Error Hive: {err}")
+            if "Table not found" in (err or ""):
                 st.info(
-                    "Pista: esa consulta requiere tablas que aún no existen en el metastore de Hive. "
-                    "Ejecuta Spark con Hive habilitado (`SIMLOG_ENABLE_HIVE=1`) para crear/poblar "
-                    "`historico_nodos` y/o `nodos_maestro`, o ajusta `SIMLOG_HIVE_TABLE_*` si tus nombres difieren."
+                    "La tabla no existe. Ejecuta Spark con `SIMLOG_ENABLE_HIVE=1` para crear las tablas."
                 )
-            if out:
-                st.text_area("Detalle", value=out, height=160)
 
-    with st.expander("SQL (copiar / pegar / ejecutar)", expanded=False):
-        st.caption("Ejecuta SQL pegado aquí. Por seguridad solo se permiten `SHOW`, `SELECT` o `WITH`.")
-        sql_default = (HIVE_CONSULTAS.get(sel, {}) or {}).get("sql", "").strip()
+    # ==========================================================================
+    # SQL personalizado
+    # ==========================================================================
+    with st.expander("SQL personalizado (copiar / pegar / ejecutar)", expanded=False):
+        st.caption("Ejecuta SQL pegado aquí. Solo se permiten `SHOW`, `SELECT` o `WITH`.")
+        sql_default = (HIVE_CONSULTAS.get(sel, {}) or {}).get("sql", "").strip() if sel else ""
         sql_edit = st.text_area(
             "SQL",
             value=sql_default,
             height=160,
-            key=f"hive_sql_edit_{sel}",
+            key="hive_sql_edit_custom",
         ).strip()
+        
         c_sql1, c_sql2 = st.columns([1, 3])
         with c_sql1:
-            run_sql = st.button("Ejecutar SQL", key=f"btn_hive_sql_{sel}", type="secondary")
+            run_sql = st.button("Ejecutar SQL", key="btn_hive_sql_custom", type="secondary")
         with c_sql2:
-            st.caption("Sugerencia: añade `LIMIT` si la tabla es grande.")
+            st.caption("💡 Sugerencia: añade `LIMIT 100` si la tabla es grande.")
 
-        if run_sql:
+        if run_sql and sql_edit:
             t0 = time.monotonic()
-            with st.spinner("Ejecutando SQL en Hive (PyHive)…"):
+            with st.spinner("Ejecutando SQL en Hive…"):
                 ok, err, out = ejecutar_hive_sql_seguro(sql_edit)
             elapsed = time.monotonic() - t0
             if ok:
                 out_s = out or ""
-                st.caption(f"Tiempo Hive: {elapsed:.1f}s")
-                st.caption(f"Salida TSV: {len(out_s)} caracteres.")
+                st.caption(f"⏱️ Tiempo: **{elapsed:.1f}s** | Resultado: **{len(out_s)}** caracteres")
                 if not out_s.strip():
                     st.info("Consulta correcta pero sin filas.")
                 else:
                     df = _hive_tsv_a_dataframe(out_s)
                     _render_df_usuario(df)
-                    with st.expander("Ver salida raw (TSV)"):
-                        st.text_area("Salida (TSV)", value=out_s, height=220)
             else:
-                st.error(err or "Error Hive")
+                st.error(f"Error: {err or 'Error desconocido'}")
+        elif run_sql and not sql_edit:
+            st.warning("Introduce una consulta SQL primero.")
 
 
 def render_slides_clima_retrasos() -> None:

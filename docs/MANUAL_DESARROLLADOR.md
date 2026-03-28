@@ -148,6 +148,110 @@ La primera consulta tras arrancar servicios puede tardar varios minutos (arranqu
    - Para Hive: define tabla/DDL existente (y ajusta `SIMLOG_HIVE_TABLA_TRANSPORTE` si el nombre difiere).
 3. Si necesitas post-procesado (p.ej. ordenar top por `pagerank`), implementa el ajuste en el cliente antes del render (el asistente ya lo soporta en `aplicar_postproceso_gestor`).
 
+
+
+### 2.5 Añadir nuevas consultas con categorías
+
+Las consultas supervisadas de Cassandra y Hive están organizadas en **categorías** para facilitar la navegación en la UI.
+
+#### Estructura de categorías (Cassandra)
+
+```python
+# En servicios/consultas_cuadro_mando.py
+
+CASSANDRA_CATEGORIAS: Dict[str, Dict[str, Any]] = {
+    "nodos": {
+        "nombre": "Estado de Nodos",
+        "descripcion": "Estado operativo de los nodos",
+        "icono": "\U0001f4cd",  # pin
+        "consultas": ["nodos_estado_resumen", "gestor_nodos_con_incidencias"],
+    },
+    "tracking": {
+        "nombre": "Tracking Camiones",
+        "descripcion": "Posición GPS y estado de flota",
+        "icono": "\U0001f69b",  # truck
+        "consultas": ["tracking_camiones", "gestor_camiones_mapa"],
+    },
+    # ... m�xa1s categorías
+}
+
+def listar_categorias_cassandra() -> List[str]:
+    orden = ["nodos", "aristas", "tracking", "pagerank", "eventos", "gestor"]
+    return [c for c in orden if c in CASSANDRA_CATEGORIAS]
+```
+
+#### Estructura de categorías (Hive)
+
+```python
+HIVE_CATEGORIAS: Dict[str, Dict[str, List[str]]] = {
+    "diagnostico": {
+        "nombre": "Diagnóstico",
+        "descripcion": "Verificación de conexión y tablas",
+        "icono": "\U0001f527",  # wrench
+        "consultas": ["diag_smoke_hive", "tablas_bd"],
+    },
+    "eventos": {
+        "nombre": "Eventos Histórico",
+        "descripcion": "Histórico de eventos de nodos",
+        "icono": "\U0001f4cb",  # clipboard
+        "consultas": ["eventos_historico_muestra", "eventos_nodos_24h"],
+    },
+    # ... m�xa1s categorías
+}
+
+def listar_categorias_hive() -> List[str]:
+    orden = ["diagnostico", "eventos", "clima", "tracking", "transporte", "rutas", "agregaciones", "gestor"]
+    return [c for c in orden if c in HIVE_CATEGORIAS]
+```
+
+#### Pasos para añadir una nueva consulta
+
+1. **Definir la consulta** en `CASSANDRA_CONSULTAS` o `HIVE_CONSULTAS`:
+   ```python
+   "mi_nueva_consulta": {
+       "titulo": "Mi nueva consulta",
+       "cql": "SELECT ... FROM ..."
+   }
+   ```
+
+2. **Añadir a una categoría existente** (o crear nueva):
+   ```python
+   CASSANDRA_CATEGORIAS["nodos"]["consultas"].append("mi_nueva_consulta")
+   ```
+
+3. **La UI se actualiza autom�xa1ticamente** - no hace falta modificar `cuadro_mando_ui.py`.
+
+#### Categorías disponibles actualmente
+
+**Cassandra:**
+| Clave | Nombre | Icono |
+|-------|--------|-------|
+| nodos | Estado de Nodos | pin |
+| aristas | Estado de Rutas | rail |
+| tracking | Tracking Camiones | truck |
+| pagerank | PageRank | chart |
+| eventos | Eventos | clipboard |
+| gestor | Gestor | person |
+
+**Hive:**
+| Clave | Nombre | Icono |
+|-------|--------|-------|
+| diagnostico | Diagnóstico | wrench |
+| eventos | Eventos Histórico | clipboard |
+| clima | Clima Histórico | sun |
+| tracking | Tracking Camiones | truck |
+| transporte | Transporte Ingestado | box |
+| rutas | Rutas Alternativas | rail |
+| agregaciones | Agregaciones Diarias | chart |
+| gestor | Gestor | person |
+
+#### Notas importantes
+
+- El **orden de categorías** en `listar_categorias_*()` determina el orden en la UI.
+- Los **iconos** son emojis UTF-8; usa caracteres v�xa1lidos.
+- Cada consulta solo puede estar en **una categoría**.
+- Valida siempre que las columnas de la consulta coincidan con el esquema real (`cassandra/esquema_logistica.cql` o `persistencia_hive.py`).
+
 ## 3.b Integración DATEX2 DGT
 
 ### Qué hace

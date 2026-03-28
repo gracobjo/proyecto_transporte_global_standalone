@@ -19,9 +19,6 @@ from config import (
     HIVE_DB,
     HIVE_JDBC_URL,
     HIVE_METASTORE_URIS,
-    HIVE_TABLE_HISTORICO_NODOS,
-    HIVE_TABLE_NODOS_MAESTRO,
-    HIVE_TABLE_TRANSPORTE_HIST,
     KEYSPACE,
 )
 
@@ -93,7 +90,203 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
             "FROM pagerank_nodos LIMIT 500"
         ),
     },
+    # --- Consultas mejoradas para el Gestor ---
+    "gestor_nodos_con_incidencias": {
+        "titulo": "Gestor — nodos con incidencias (estado != OK)",
+        "cql": (
+            "SELECT id_nodo, tipo, estado, motivo_retraso, municipio, provincia, carretera, "
+            "descripcion_incidencia, source, severity FROM nodos_estado "
+            "WHERE estado != 'OK' LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_nodos_madrid_barcelona": {
+        "titulo": "Gestor — estado Madrid y Barcelona (ejes principales)",
+        "cql": (
+            "SELECT id_nodo, estado, motivo_retraso, clima_actual, temperatura, "
+            "municipio, provincia FROM nodos_estado "
+            "WHERE id_nodo IN ('Madrid', 'Barcelona') LIMIT 10"
+        ),
+    },
+    "gestor_aristas_bloqueadas": {
+        "titulo": "Gestor — rutas bloqueadas entre nodos",
+        "cql": (
+            "SELECT src, dst, distancia_km, estado, peso_penalizado FROM aristas_estado "
+            "WHERE estado = 'Bloqueado' LIMIT 50 ALLOW FILTERING"
+        ),
+    },
+    "gestor_aristas_congestionadas": {
+        "titulo": "Gestor — rutas congestionadas",
+        "cql": (
+            "SELECT src, dst, distancia_km, estado, peso_penalizado FROM aristas_estado "
+            "WHERE estado = 'Congestionado' LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_camiones_en_ruta": {
+        "titulo": "Gestor — camiones en ruta con progreso",
+        "cql": (
+            "SELECT id_camion, lat, lon, ruta_origen, ruta_destino, estado_ruta, "
+            "motivo_retraso, ultima_posicion FROM tracking_camiones "
+            "WHERE estado_ruta = 'En ruta' LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_camiones_bloqueados": {
+        "titulo": "Gestor — camiones con retrasos o bloqueados",
+        "cql": (
+            "SELECT id_camion, lat, lon, ruta_origen, ruta_destino, estado_ruta, "
+            "motivo_retraso FROM tracking_camiones "
+            "WHERE estado_ruta != 'En ruta' LIMIT 50 ALLOW FILTERING"
+        ),
+    },
+    "gestor_eventos_cambios_estado": {
+        "titulo": "Gestor — últimos cambios de estado en la red",
+        "cql": (
+            "SELECT tipo_entidad, id_entidad, estado_anterior, estado_nuevo, motivo, "
+            "timestamp_evento FROM eventos_historico LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_incidencias_por_provincia": {
+        "titulo": "Gestor — incidencias agrupadas por provincia",
+        "cql": (
+            "SELECT provincia, COUNT(*) AS total_incidencias, estado, motivo_retraso "
+            "FROM nodos_estado WHERE provincia IS NOT NULL "
+            "GROUP BY provincia, estado, motivo_retraso LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_nodos_clima_adverso": {
+        "titulo": "Gestor — nodos con clima adverso (nieve, lluvia, niebla)",
+        "cql": (
+            "SELECT id_nodo, tipo, clima_actual, temperatura, humedad, viento_velocidad, "
+            "estado, motivo_retraso FROM nodos_estado "
+            "WHERE clima_actual LIKE '%nieve%' OR clima_actual LIKE '%lluvia%' "
+            "OR clima_actual LIKE '%niebla%' OR clima_actual LIKE '%hielo%' "
+            "LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_nodos_severidad_alta": {
+        "titulo": "Gestor — nodos con severidad alta/crítica",
+        "cql": (
+            "SELECT id_nodo, tipo, estado, severity, motivo_retraso, municipio, provincia, "
+            "carretera, descripcion_incidencia, source FROM nodos_estado "
+            "WHERE severity IN ('high', 'highest') LIMIT 100 ALLOW FILTERING"
+        ),
+    },
+    "gestor_pagerank_nodos_criticos": {
+        "titulo": "Gestor — nodos más críticos según PageRank (top 20)",
+        "cql": (
+            "SELECT id_nodo, pagerank, peso_pagerank, estado, source, ultima_actualizacion "
+            "FROM pagerank_nodos ORDER BY pagerank DESC LIMIT 20"
+        ),
+    },
+    "gestor_tracking_ruta_completa": {
+        "titulo": "Gestor — tracking completo con coordenadas",
+        "cql": (
+            "SELECT id_camion, lat, lon, ruta_origen, ruta_destino, estado_ruta, "
+            "motivo_retraso, temperatura AS temp_aprox, ultima_posicion FROM tracking_camiones "
+            "LIMIT 200"
+        ),
+    },
 }
+
+
+# ============================================================================
+# Categorías Cassandra para organizar las consultas en el frontend
+# ============================================================================
+CASSANDRA_CATEGORIAS: Dict[str, Dict[str, List[str]]] = {
+    "nodos": {
+        "nombre": "Estado de Nodos",
+        "descripcion": "Estado actual de hubs y nodos de la red",
+        "icono": "📍",
+        "consultas": [
+            "nodos_estado_resumen",
+            "nodos_hub_congestion",
+            "gestor_nodos_con_incidencias",
+            "gestor_nodos_madrid_barcelona",
+            "gestor_nodos_severidad_alta",
+            "gestor_nodos_clima_adverso",
+        ],
+    },
+    "aristas": {
+        "nombre": "Estado de Rutas",
+        "descripcion": "Estado de aristas (conexiones entre nodos)",
+        "icono": "🛤️",
+        "consultas": [
+            "aristas_estado",
+            "gestor_aristas_bloqueadas",
+            "gestor_aristas_congestionadas",
+        ],
+    },
+    "tracking": {
+        "nombre": "Tracking Camiones",
+        "descripcion": "Posición GPS actual y estado de la flota",
+        "icono": "🚛",
+        "consultas": [
+            "tracking_camiones",
+            "tracking_camiones_gemelo",
+            "gestor_camiones_mapa",
+            "gestor_camiones_en_ruta",
+            "gestor_camiones_bloqueados",
+            "gestor_tracking_ruta_completa",
+        ],
+    },
+    "pagerank": {
+        "nombre": "PageRank",
+        "descripcion": "Criticidad de nodos según algoritmo PageRank",
+        "icono": "📊",
+        "consultas": [
+            "pagerank_top",
+            "gestor_nodo_critico_pagerank",
+            "gestor_pagerank_nodos_criticos",
+        ],
+    },
+    "eventos": {
+        "nombre": "Eventos",
+        "descripcion": "Histórico de eventos y cambios de estado",
+        "icono": "📋",
+        "consultas": [
+            "eventos_recientes",
+            "gestor_eventos_cambios_estado",
+        ],
+    },
+    "gestor": {
+        "nombre": "Gestor",
+        "descripcion": "Consultas específicas para el gestor de operaciones",
+        "icono": "👤",
+        "consultas": [
+            "gestor_ciudades_trafico",
+            "gestor_incidencias_por_provincia",
+        ],
+    },
+}
+
+
+def listar_categorias_cassandra() -> List[str]:
+    """Lista de claves de categorías Cassandra ordenadas."""
+    orden = ["nodos", "aristas", "tracking", "pagerank", "eventos", "gestor"]
+    return [c for c in orden if c in CASSANDRA_CATEGORIAS]
+
+
+def obtener_categoria_cassandra(nombre_categoria: str) -> Dict[str, Any]:
+    """Obtiene la información de una categoría Cassandra."""
+    return CASSANDRA_CATEGORIAS.get(nombre_categoria, {})
+
+
+def obtener_consultas_de_categoria_cassandra(nombre_categoria: str) -> List[str]:
+    """Obtiene las claves de consultas de una categoría Cassandra."""
+    cat = CASSANDRA_CATEGORIAS.get(nombre_categoria, {})
+    return cat.get("consultas", [])
+
+
+def nombre_categoria_cassandra(nombre_categoria: str) -> str:
+    """Obtiene el nombre amigable de una categoría Cassandra."""
+    cat = CASSANDRA_CATEGORIAS.get(nombre_categoria, {})
+    icono = cat.get("icono", "📁")
+    nombre = cat.get("nombre", nombre_categoria)
+    return f"{icono} {nombre}"
+
+
+def descripcion_categoria_cassandra(nombre_categoria: str) -> str:
+    """Obtiene la descripción de una categoría Cassandra."""
+    return CASSANDRA_CATEGORIAS.get(nombre_categoria, {}).get("descripcion", "")
 
 
 def _row_to_dict(row: Any) -> Dict[str, Any]:
@@ -246,14 +439,26 @@ def listar_columnas_hive(tabla: str) -> Tuple[bool, str, List[str]]:
 
 
 # --- Hive (solo SELECT, whitelist) ---
+# Tablas reales creadas por persistencia_hive.py y procesamiento_grafos.py:
+# - eventos_historico: histórico de eventos nodos/aristas
+# - clima_historico: histórico climático por ciudad
+# - tracking_camiones_historico: tracking histórico de camiones
+# - transporte_ingesta_completa: transporte plano para UI
+# - rutas_alternativas_historico: rutas alternativas calculadas
+# - agg_estadisticas_diarias: agregaciones diarias
+# Tablas en HDFS (compatibilidad):
+# - nodos_maestro: datos maestros de nodos (CSV en HDFS)
 
-# Nombres físicos: `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` y `SIMLOG_HIVE_TABLE_NODOS_MAESTRO` (config.py).
 HIVE_DB_NAME = HIVE_DB or "logistica_espana"
-_T_HIST = HIVE_TABLE_HISTORICO_NODOS
-_T_MAESTRO = HIVE_TABLE_NODOS_MAESTRO
-_T_TRANSP = HIVE_TABLE_TRANSPORTE_HIST
+_T_EVENTOS = "eventos_historico"
+_T_CLIMA = "clima_historico"
+_T_TRACKING = "tracking_camiones_historico"
+_T_TRANSPORTE = "transporte_ingesta_completa"
+_T_RUTAS = "rutas_alternativas_historico"
+_T_AGG = "agg_estadisticas_diarias"
 
 HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
+    # --- Diagnóstico ---
     "diag_smoke_hive": {
         "titulo": "Diagnóstico — conexión Hive (SELECT 1; sin tablas)",
         "sql": "SELECT 1 AS ok",
@@ -262,151 +467,239 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
         "titulo": "Listar tablas en la base logística",
         "sql": f"SHOW TABLES IN {HIVE_DB_NAME}",
     },
-    "historico_nodos_muestra": {
-        "titulo": "Histórico de nodos (muestra; requiere tabla creada por Spark)",
-        "sql": f"SELECT * FROM {HIVE_DB_NAME}.{_T_HIST} LIMIT 50",
+    # --- Eventos histórico (eventos_historico) ---
+    "eventos_historico_muestra": {
+        "titulo": "Eventos histórico — todos (muestra)",
+        "sql": f"""
+SELECT timestamp, tipo_evento, id_elemento, tipo_elemento, estado, motivo, hub_asociado, pagerank
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+ORDER BY timestamp DESC
+LIMIT 100
+        """.strip(),
     },
-    "historico_nodos_conteo": {
-        "titulo": "Conteo de registros en histórico de nodos",
-        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.{_T_HIST}",
-    },
-    "nodos_maestro": {
-        "titulo": "Maestro de nodos (Hive)",
-        "sql": f"SELECT * FROM {HIVE_DB_NAME}.{_T_MAESTRO} LIMIT 100",
-    },
-    "nodos_maestro_conteo": {
-        "titulo": "Conteo de nodos maestro",
-        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.{_T_MAESTRO}",
-    },
-    "gemelo_red_nodos": {
-        "titulo": "Gemelo digital — nodos (red estática)",
-        "sql": (
-            f"SELECT id_nodo, tipo, lat, lon, id_capital_ref, nombre "
-            f"FROM {HIVE_DB_NAME}.red_gemelo_nodos"
-        ),
-    },
-    "gemelo_red_aristas": {
-        "titulo": "Gemelo digital — aristas",
-        "sql": f"SELECT src, dst, distancia_km FROM {HIVE_DB_NAME}.red_gemelo_aristas",
-    },
-    "transporte_ingesta_real_muestra": {
-        "titulo": "Transporte histórico — camiones normalizados",
-        "sql": (
-            f"SELECT id_camion AS id, lat, lon, progreso_pct, origen, destino, estado_ruta "
-            f"FROM {HIVE_DB_NAME}.{_T_TRANSP} LIMIT 500"
-        ),
-    },
-    "gestor_historial_rutas_camion": {
-        "titulo": "Gestor — histórico transporte (Hive; robusto con camiones raw)",
-        # En varios entornos `camiones` llega como STRING y no como array<struct>.
-        # Esta versión devuelve histórico util sin depender del parseo estructurado.
-        "sql": os.environ.get("SIMLOG_HIVE_SQL_HISTORIAL_CAMION", "").strip()
-        or f"""
-SELECT
-  t.`timestamp`,
-  t.camiones
-FROM {HIVE_DB_NAME}.{HIVE_TABLE_TRANSPORTE_HIST} t
-WHERE t.id_camion IS NOT NULL
+    "eventos_nodos_24h": {
+        "titulo": "Eventos — nodos últimas 24h",
+        "sql": f"""
+SELECT timestamp, id_elemento, estado, motivo, hub_asociado, pagerank
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+WHERE tipo_evento = 'nodo'
+  AND timestamp >= date_sub(current_timestamp(), 1)
+ORDER BY timestamp DESC
 LIMIT 200
         """.strip(),
     },
-    "gestor_historico_incidencias_24h": {
-        "titulo": "Gestor — histórico incidencias nodos (24h)",
+    "eventos_bloqueos_24h": {
+        "titulo": "Eventos — bloqueos últimas 24h",
         "sql": f"""
-SELECT
-  h.id_nodo,
-  h.tipo,
-  h.estado,
-  h.motivo_retraso,
-  h.clima_actual,
-  h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
-LIMIT 300
+SELECT timestamp, id_elemento, estado, motivo, hub_asociado
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+WHERE estado IN ('bloqueado', 'Bloqueado')
+  AND timestamp >= date_sub(current_timestamp(), 1)
+ORDER BY timestamp DESC
+LIMIT 100
         """.strip(),
     },
-    "gestor_historico_evolucion_nodos_24h": {
-        "titulo": "Gestor — evolución estados por nodo (24h)",
+    "eventos_evolucion_dia": {
+        "titulo": "Eventos — evolución por día (últimos 7 días)",
         "sql": f"""
-SELECT
-  h.id_nodo,
-  h.estado,
-  h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
-LIMIT 400
-        """.strip(),
-    },
-    "historico_nodos_muestra_24h": {
-        "titulo": "Muestra histórico (últimas 24h) — nodos",
-        "sql": f"""
-SELECT
-    h.id_nodo,
-    h.estado,
-    h.motivo_retraso,
-    h.clima_actual,
-    h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
-LIMIT 20
-        """.strip(),
-    },
-    "severidad_resumen_24h": {
-        "titulo": "Resumen severidad (últimas 24h) — estado derivado",
-        # En entornos standalone (sin Tez/YARN) las agregaciones suelen disparar MapReduce y fallar.
-        # Devolvemos una muestra "segura" para que la UI no reviente.
-        "sql": f"""
-SELECT
-  h.estado,
-  h.motivo_retraso,
-  h.clima_actual,
-  h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+SELECT dia, tipo_evento, estado, COUNT(*) as total
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+WHERE timestamp >= date_sub(current_timestamp(), 7)
+GROUP BY dia, tipo_evento, estado
+ORDER BY dia DESC, total DESC
 LIMIT 200
         """.strip(),
     },
-    "diag_fecha_proceso_24h": {
-        "titulo": f"Diagnóstico — rango y registros (últimas 24h) en {_T_HIST}",
-        # Evitar MIN/MAX/COUNT (agregación) por el mismo motivo que arriba.
+    # --- Clima histórico (clima_historico) ---
+    "clima_historico_muestra": {
+        "titulo": "Clima histórico — todos (muestra)",
         "sql": f"""
-SELECT
-  h.id_nodo,
-  h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
-LIMIT 200
+SELECT timestamp, ciudad, temperatura, humedad, descripcion, visibilidad, estado_carretera
+FROM {HIVE_DB_NAME}.{_T_CLIMA}
+ORDER BY timestamp DESC
+LIMIT 100
         """.strip(),
     },
-    "riesgo_hub_24h": {
-        "titulo": "Riesgo por hub (últimas 24h) — incidencia derivada",
-        # Versión "safe": evita CTEs + agregaciones (MapReduce) y devuelve filas por hub para que
-        # el dashboard pueda mostrar/filtrar en cliente.
+    "clima_historico_hoy": {
+        "titulo": "Clima histórico — hoy",
         "sql": f"""
-SELECT
-  h.id_nodo,
-  h.tipo,
-  h.estado,
-  h.motivo_retraso,
-  h.clima_actual,
-  h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+SELECT timestamp, ciudad, temperatura, humedad, descripcion, estado_carretera
+FROM {HIVE_DB_NAME}.{_T_CLIMA}
+WHERE dia = current_date()
+ORDER BY timestamp DESC
+LIMIT 50
+        """.strip(),
+    },
+    "clima_estado_carretera": {
+        "titulo": "Clima — estado de carreteras por clima",
+        "sql": f"""
+SELECT estado_carretera, descripcion, COUNT(*) as total
+FROM {HIVE_DB_NAME}.{_T_CLIMA}
+WHERE timestamp >= date_sub(current_timestamp(), 1)
+GROUP BY estado_carretera, descripcion
+ORDER BY total DESC
+LIMIT 50
+        """.strip(),
+    },
+    # --- Tracking camiones histórico (tracking_camiones_historico) ---
+    "tracking_historico_muestra": {
+        "titulo": "Tracking histórico — muestra",
+        "sql": f"""
+SELECT timestamp, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km
+FROM {HIVE_DB_NAME}.{_T_TRACKING}
+ORDER BY timestamp DESC
+LIMIT 100
+        """.strip(),
+    },
+    "tracking_camion_especifico": {
+        "titulo": "Tracking — por camión (filtrar en cliente)",
+        "sql": f"""
+SELECT timestamp, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km, tiene_ruta_alternativa
+FROM {HIVE_DB_NAME}.{_T_TRACKING}
+WHERE timestamp >= date_sub(current_timestamp(), 7)
+ORDER BY timestamp DESC
 LIMIT 500
         """.strip(),
     },
-    "top_causas_24h": {
-        "titulo": "Top causas (últimas 24h) — incidencia derivada",
-        # Versión "safe": sin agregaciones.
+    "tracking_ultima_posicion": {
+        "titulo": "Tracking — última posición por camión",
         "sql": f"""
-SELECT
-  h.estado,
-  h.motivo_retraso,
-  h.clima_actual,
-  h.fecha_proceso
-FROM {HIVE_DB_NAME}.{_T_HIST} h
-WHERE h.fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS)
+SELECT id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, timestamp
+FROM {HIVE_DB_NAME}.{_T_TRACKING}
+WHERE timestamp >= date_sub(current_timestamp(), 1)
 LIMIT 200
+        """.strip(),
+    },
+    # --- Transporte ingestado (transporte_ingesta_completa) ---
+    "transporte_ingesta_real_muestra": {
+        "titulo": "Transporte ingestado — muestra",
+        "sql": f"""
+SELECT timestamp, id_camion, origen, destino, nodo_actual, lat, lon, progreso_pct, estado_ruta, motivo_retraso, ruta
+FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
+ORDER BY timestamp DESC
+LIMIT 100
+        """.strip(),
+    },
+    "transporte_ingesta_hoy": {
+        "titulo": "Transporte ingestado — hoy",
+        "sql": f"""
+SELECT timestamp, id_camion, origen, destino, estado_ruta, motivo_retraso, progreso_pct
+FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
+WHERE dia = current_date()
+ORDER BY timestamp DESC
+LIMIT 200
+        """.strip(),
+    },
+    "transporte_retrasos_hoy": {
+        "titulo": "Transporte — camiones con retrasos hoy",
+        "sql": f"""
+SELECT timestamp, id_camion, origen, destino, estado_ruta, motivo_retraso
+FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
+WHERE estado_ruta != 'En ruta'
+  AND dia = current_date()
+ORDER BY timestamp DESC
+LIMIT 100
+        """.strip(),
+    },
+    "gestor_historial_rutas_camion": {
+        "titulo": "Gestor — histórico transporte por camión",
+        "sql": f"""
+SELECT timestamp, id_camion, origen, destino, nodo_actual, progreso_pct, estado_ruta, motivo_retraso
+FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
+WHERE timestamp >= date_sub(current_timestamp(), 7)
+ORDER BY id_camion, timestamp DESC
+LIMIT 500
+        """.strip(),
+    },
+    # --- Rutas alternativas (rutas_alternativas_historico) ---
+    "rutas_alternativas_muestra": {
+        "titulo": "Rutas alternativas — muestra",
+        "sql": f"""
+SELECT timestamp, origen, destino, ruta_original, ruta_alternativa, distancia_original_km, distancia_alternativa_km, motivo_bloqueo, ahorro_km
+FROM {HIVE_DB_NAME}.{_T_RUTAS}
+ORDER BY timestamp DESC
+LIMIT 100
+        """.strip(),
+    },
+    "rutas_alternativas_bloqueos": {
+        "titulo": "Rutas alternativas — bloqueos detectados",
+        "sql": f"""
+SELECT timestamp, origen, destino, ruta_original, motivo_bloqueo, ahorro_km
+FROM {HIVE_DB_NAME}.{_T_RUTAS}
+WHERE motivo_bloqueo IS NOT NULL
+  AND motivo_bloqueo != ''
+  AND timestamp >= date_sub(current_timestamp(), 7)
+ORDER BY timestamp DESC
+LIMIT 100
+        """.strip(),
+    },
+    # --- Agregaciones diarias (agg_estadisticas_diarias) ---
+    "agg_estadisticas_diarias": {
+        "titulo": "Agregaciones — estadísticas diarias",
+        "sql": f"""
+SELECT anio, mes, dia, tipo_evento, estado, motivo, contador, pct_total
+FROM {HIVE_DB_NAME}.{_T_AGG}
+ORDER BY anio DESC, mes DESC, dia DESC, contador DESC
+LIMIT 200
+        """.strip(),
+    },
+    "agg_ultima_semana": {
+        "titulo": "Agregaciones — última semana",
+        "sql": f"""
+SELECT anio, mes, dia, tipo_evento, estado, motivo, contador, pct_total
+FROM {HIVE_DB_NAME}.{_T_AGG}
+WHERE anio = year(current_date())
+  AND mes = month(current_date())
+  AND dia >= day(current_date()) - 7
+ORDER BY dia DESC, contador DESC
+LIMIT 200
+        """.strip(),
+    },
+    # --- Consultas específicas para el Gestor ---
+    "gestor_eventos_por_hub": {
+        "titulo": "Gestor — eventos por hub (últimas 24h)",
+        "sql": f"""
+SELECT hub_asociado, estado, COUNT(*) as total
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+WHERE timestamp >= date_sub(current_timestamp(), 1)
+GROUP BY hub_asociado, estado
+ORDER BY total DESC
+LIMIT 100
+        """.strip(),
+    },
+    "gestor_clima_afecta_transporte": {
+        "titulo": "Gestor — clima adverso que afecta transporte",
+        "sql": f"""
+SELECT c.timestamp, c.ciudad, c.estado_carretera, c.descripcion, t.estado_ruta, t.motivo_retraso
+FROM {HIVE_DB_NAME}.{_T_CLIMA} c
+LEFT JOIN {HIVE_DB_NAME}.{_T_TRANSPORTE} t ON c.timestamp = t.timestamp AND c.ciudad = t.hub_actual
+WHERE c.timestamp >= date_sub(current_timestamp(), 1)
+  AND c.estado_carretera != 'Optimo'
+ORDER BY c.timestamp DESC
+LIMIT 100
+        """.strip(),
+    },
+    "gestor_incidencias_resumen": {
+        "titulo": "Gestor — resumen de incidencias (últimas 24h)",
+        "sql": f"""
+SELECT estado, COUNT(*) as total, AVG(pagerank) as pagerank_promedio
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+WHERE timestamp >= date_sub(current_timestamp(), 1)
+GROUP BY estado
+ORDER BY total DESC
+LIMIT 20
+        """.strip(),
+    },
+    "gestor_pagerank_historico": {
+        "titulo": "Gestor — nodos por PageRank (última semana)",
+        "sql": f"""
+SELECT id_elemento as nodo, estado, motivo, pagerank, hub_asociado
+FROM {HIVE_DB_NAME}.{_T_EVENTOS}
+WHERE tipo_evento = 'nodo'
+  AND pagerank > 0
+  AND timestamp >= date_sub(current_timestamp(), 7)
+ORDER BY pagerank DESC
+LIMIT 100
         """.strip(),
     },
 }
@@ -669,3 +962,88 @@ def titulo_cassandra(codigo: str) -> str:
 
 def titulo_hive(codigo: str) -> str:
     return HIVE_CONSULTAS.get(codigo, {}).get("titulo", codigo)
+
+
+# ============================================================================
+# Categorías para organizar las consultas en el frontend
+# ============================================================================
+HIVE_CATEGORIAS: Dict[str, Dict[str, List[str]]] = {
+    "diagnostico": {
+        "nombre": "Diagnóstico",
+        "descripcion": "Verificación de conexión y tablas disponibles",
+        "icono": "🔧",
+        "consultas": ["diag_smoke_hive", "tablas_bd"],
+    },
+    "eventos": {
+        "nombre": "Eventos Histórico",
+        "descripcion": "Histórico de eventos de nodos y aristas",
+        "icono": "📋",
+        "consultas": ["eventos_historico_muestra", "eventos_nodos_24h", "eventos_bloqueos_24h", "eventos_evolucion_dia"],
+    },
+    "clima": {
+        "nombre": "Clima Histórico",
+        "descripcion": "Datos climáticos y su impacto en carreteras",
+        "icono": "🌤️",
+        "consultas": ["clima_historico_muestra", "clima_historico_hoy", "clima_estado_carretera"],
+    },
+    "tracking": {
+        "nombre": "Tracking Camiones",
+        "descripcion": "Histórico de posiciones GPS de la flota",
+        "icono": "🚛",
+        "consultas": ["tracking_historico_muestra", "tracking_camion_especifico", "tracking_ultima_posicion"],
+    },
+    "transporte": {
+        "nombre": "Transporte Ingestado",
+        "descripcion": "Datos de ingestión de transporte (pipeline KDD)",
+        "icono": "📦",
+        "consultas": ["transporte_ingesta_real_muestra", "transporte_ingesta_hoy", "transporte_retrasos_hoy", "gestor_historial_rutas_camion"],
+    },
+    "rutas": {
+        "nombre": "Rutas Alternativas",
+        "descripcion": "Rutas alternativas calculadas por el sistema",
+        "icono": "🛤️",
+        "consultas": ["rutas_alternativas_muestra", "rutas_alternativas_bloqueos"],
+    },
+    "agregaciones": {
+        "nombre": "Agregaciones Diarias",
+        "descripcion": "Estadísticas y agregaciones calculadas",
+        "icono": "📊",
+        "consultas": ["agg_estadisticas_diarias", "agg_ultima_semana"],
+    },
+    "gestor": {
+        "nombre": "Gestor",
+        "descripcion": "Consultas específicas para el gestor de operaciones",
+        "icono": "👤",
+        "consultas": ["gestor_eventos_por_hub", "gestor_clima_afecta_transporte", "gestor_incidencias_resumen", "gestor_pagerank_historico"],
+    },
+}
+
+
+def listar_categorias_hive() -> List[str]:
+    """Lista de claves de categorías ordenadas."""
+    orden = ["diagnostico", "eventos", "clima", "tracking", "transporte", "rutas", "agregaciones", "gestor"]
+    return [c for c in orden if c in HIVE_CATEGORIAS]
+
+
+def obtener_categoria(nombre_categoria: str) -> Dict[str, Any]:
+    """Obtiene la información de una categoría."""
+    return HIVE_CATEGORIAS.get(nombre_categoria, {})
+
+
+def obtener_consultas_de_categoria(nombre_categoria: str) -> List[str]:
+    """Obtiene las claves de consultas de una categoría."""
+    cat = HIVE_CATEGORIAS.get(nombre_categoria, {})
+    return cat.get("consultas", [])
+
+
+def nombre_categoria(nombre_categoria: str) -> str:
+    """Obtiene el nombre amigable de una categoría."""
+    cat = HIVE_CATEGORIAS.get(nombre_categoria, {})
+    icono = cat.get("icono", "📁")
+    nombre = cat.get("nombre", nombre_categoria)
+    return f"{icono} {nombre}"
+
+
+def descripcion_categoria(nombre_categoria: str) -> str:
+    """Obtiene la descripción de una categoría."""
+    return HIVE_CATEGORIAS.get(nombre_categoria, {}).get("descripcion", "")

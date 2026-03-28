@@ -121,3 +121,120 @@ def cargar_transporte_ingesta_real_hive() -> List[Dict[str, Any]]:
     if not ok or not txt:
         return []
     return _tsv_texto_a_filas(txt)
+
+
+def cargar_historial_tracking_hive(camion_id: str = None, limite: int = 100) -> List[Dict[str, Any]]:
+    """
+    Carga historial de tracking de camiones desde Hive (tabla tracking_camiones_hist).
+    
+    Args:
+        camion_id: Filtrar por ID de camión específico (opcional)
+        limite: Número máximo de registros a devolver
+        
+    Returns:
+        Lista de registros con lat, lon, timestamp, camion_id, origen, destino, etc.
+    """
+    from config import HIVE_DB
+    
+    db = HIVE_DB or "logistica_analytics"
+    
+    sql = f"""
+        SELECT 
+            camion_id,
+            origen,
+            destino,
+            nodo_actual,
+            lat_actual,
+            lon_actual,
+            progreso_pct,
+            distancia_total_km,
+            distancia_recorrida_km,
+            timestamp_posicion
+        FROM {db}.tracking_camiones_hist
+    """
+    
+    where_clauses = []
+    if camion_id:
+        where_clauses.append(f"camion_id = '{camion_id}'")
+    
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
+    
+    sql += f" ORDER BY timestamp_posicion DESC LIMIT {limite}"
+    
+    ok, err, txt = ejecutar_hive_consulta("custom")
+    if not ok or not txt:
+        try:
+            from pyhive import hive
+            from config import HIVE_SERVER
+            
+            parts = HIVE_SERVER.split(":")
+            host = parts[0] if parts else "localhost"
+            port = int(parts[1]) if len(parts) > 1 else 10000
+            
+            conn = hive.connect(host=host, port=port)
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            conn.close()
+            
+            columnas = [desc[0] for desc in cursor.description] if cursor.description else []
+            resultado = []
+            for row in rows:
+                d = {}
+                for i, col in enumerate(columnas):
+                    val = row[i] if i < len(row) else None
+                    if isinstance(val, float):
+                        d[col] = val
+                    elif isinstance(val, int):
+                        d[col] = val
+                    elif val is not None:
+                        try:
+                            d[col] = float(val)
+                        except (ValueError, TypeError):
+                            d[col] = str(val) if val is not None else None
+                    else:
+                        d[col] = None
+                resultado.append(d)
+            return resultado
+        except Exception:
+            return []
+    
+    return _tsv_texto_a_filas(txt)
+
+
+def cargar_trayectorias_por_camion(historial: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Agrupa posiciones por camión ordenadas cronológicamente.
+    
+    Returns:
+        Dict[str, List[Dict]] - {camion_id: [{lat, lon, timestamp, ...}, ...]}
+    """
+    trayectorias: Dict[str, List[Dict[str, Any]]] = {}
+    
+    for reg in historial:
+        cid = str(reg.get("camion_id") or reg.get("camion_id") or "")
+        if not cid:
+            continue
+        
+        lat = reg.get("lat_actual") or reg.get("lat")
+        lon = reg.get("lon_actual") or reg.get("lon")
+        ts = reg.get("timestamp_posicion") or reg.get("timestamp") or reg.get("ts")
+        
+        if lat is not None and lon is not None:
+            if cid not in trayectorias:
+                trayectorias[cid] = []
+            trayectorias[cid].append({
+                "lat": float(lat),
+                "lon": float(lon),
+                "timestamp": str(ts) if ts else None,
+                "nodo_actual": reg.get("nodo_actual"),
+                "progreso_pct": reg.get("progreso_pct"),
+                "origen": reg.get("origen"),
+                "destino": reg.get("destino"),
+            })
+    
+    for cid in trayectorias:
+        trayectorias[cid].sort(key=lambda x: x["timestamp"] or "")
+    
+    return trayectorias
