@@ -32,6 +32,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-15 | Resolver dudas operativas con FAQ IA | Analista / Operador | Respuesta semántica local con sugerencias y fuentes |
 | CU-16 | Integrar incidencias reales DATEX2 DGT | Operador / Programador | Snapshot enriquecido con señal real y prioridad sobre simulación |
 | CU-17 | Auditar procedencia de la ingesta en NiFi | Operador | Trazabilidad por relaciones y atributos de provenance |
+| CU-18 | Reconfigurar la red logística ante fallo crítico | Operador / Analista | Nodos/rutas desactivados, rutas alternativas recalculadas y alertas activas |
 
 ## Detalle breve
 
@@ -134,6 +135,12 @@ Documento funcional para la plataforma en modo standalone.
 - **Entrada:** evento generado por `PG_SIMLOG_KDD`.
 - **Flujo:** revisar `Data Provenance` y atributos `simlog.provenance.*` en los procesadores de merge.
 - **Salida:** trazabilidad sobre qué datos proceden de simulación, OpenWeather y DGT, y sobre si el clima final se obtuvo por fuente principal o por respaldo.
+
+### CU-18 — Reconfigurar la red logística ante fallo crítico
+
+- **Entrada:** evento `NODE_DOWN`, `NODE_UP`, `ROUTE_DOWN` o `ROUTE_UP`.
+- **Flujo:** `procesamiento/reconfiguracion_grafo.py` actualiza el grafo activo, desactiva rutas afectadas, recalcula alternativas y mantiene alertas activas en Cassandra.
+- **Salida:** estado actual en `estado_nodos` / `estado_rutas`, alertas activas y cierre histórico en Hive.
 
 ---
 

@@ -168,6 +168,43 @@ def cargar_pagerank_cassandra() -> List[Dict[str, Any]]:
         return []
 
 
+def cargar_estado_nodos_reconfiguracion() -> List[Dict[str, Any]]:
+    try:
+        s = _session_cassandra()
+        rows = s.execute("SELECT id_nodo, status, cause, updated_at, last_event FROM estado_nodos")
+        s.cluster.shutdown()
+        return [_row_a_dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def cargar_estado_rutas_reconfiguracion() -> List[Dict[str, Any]]:
+    try:
+        s = _session_cassandra()
+        rows = s.execute("SELECT src, dst, status, cause, updated_at, last_event, manual_down FROM estado_rutas")
+        s.cluster.shutdown()
+        return [_row_a_dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def cargar_alertas_activas_cassandra() -> List[Dict[str, Any]]:
+    try:
+        s = _session_cassandra()
+        rows = s.execute(
+            """
+            SELECT alerta_id, tipo_alerta, entidad_id, severidad, mensaje, causa,
+                   timestamp_inicio, timestamp_ultima_actualizacion, estado,
+                   ruta_original, ruta_alternativa
+            FROM alertas_activas
+            """
+        )
+        s.cluster.shutdown()
+        return [_row_a_dict(r) for r in rows]
+    except Exception:
+        return []
+
+
 def verificacion_tecnica_completa() -> Dict[str, str]:
     """Resumen de comprobaciones (mismo criterio que la pestaña Verificación del dashboard)."""
     return {

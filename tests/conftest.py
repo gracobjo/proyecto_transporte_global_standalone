@@ -19,11 +19,18 @@ if str(PROJECT_ROOT) not in sys.path:
 @pytest.fixture(scope="session")
 def spark():
     os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
+    os.environ.setdefault("SPARK_LOCAL_HOSTNAME", "localhost")
+    os.environ.setdefault("HADOOP_HOME", "")
+    os.environ.setdefault("HADOOP_CONF_DIR", "")
     session = (
         SparkSession.builder.master("local[1]")
         .appName("SIMLOG_PlanPruebas")
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "1")
+        .config("spark.eventLog.enabled", "false")
+        .config("spark.sql.warehouse.dir", str((PROJECT_ROOT / "tests" / ".spark-warehouse").resolve()))
+        .config("spark.hadoop.fs.defaultFS", "file:///")
+        .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
         .getOrCreate()
     )
     yield session

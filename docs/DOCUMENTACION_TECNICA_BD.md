@@ -316,10 +316,11 @@ Agregaciones diarias de eventos.
 | 3 | Tabla `nodos_maestro` no existía | Código esperaba una tabla que Spark no creaba |
 | 4 | Tabla `red_gemelo_nodos` no existía | Tabla inventada, no se creaba |
 | 5 | Tabla `red_gemelo_aristas` no existía | Tabla inventada, no se creaba |
-| 6 | Tabla `transporte_ingesta_completa` usaba `id_camion` pero la real tiene `camion_id` | Error en nombre de campo |
-| 7 | Tabla `transporte_ingesta_completa` usaba `lat`/`lon` pero la real tiene `lat_actual`/`lon_actual` | Error en nombre de campo |
-| 8 | `gestor_historial_rutas_camion` usaba `id_camion` y `timestamp` pero la tabla tiene `camion_id` y `timestamp_posicion` | Error en nombre de campo |
-| 9 | Todas las consultas de 24h usaban `fecha_proceso` que no existe | Campo incorrecto |
+| 6 | Consultas Hive usaban el identificador `timestamp` sin citar | En Hive 3+ `timestamp` es palabra reservada → `ParseException` cerca de `timestamp`, `ciudad` |
+| 7 | `transporte_ingesta_completa` en código real usa `id_camion`, `lat`/`lon`, `hub_actual` (no `camion_id` ni solo `lat_actual`) | Alinear consultas con `persistencia_hive.py` → `TABLE_SCHEMAS` |
+| 8 | `tracking_camiones_historico` usa `id_camion`, columna temporal `timestamp`, posición `lat_actual`/`lon_actual` | No usar `camion_id` ni `timestamp_posicion` salvo que el DDL cambie |
+| 9 | Consultas de ventana temporal usaban `fecha_proceso` (inexistente en tablas históricas) | Sustituir por la columna `timestamp` (citada como `` `timestamp` `` en HiveQL) |
+| 10 | Documentación previa contradecía el esquema real (filas 6–8 antiguas) | Fuente de verdad: `persistencia_hive.py` (`TABLE_SCHEMAS`) |
 
 ### 5.2 Soluciones Aplicadas
 
@@ -379,7 +380,7 @@ Agregaciones diarias de eventos.
 | `config_nodos.py` | Configuración de nodos y topología |
 | `cassandra/esquema_logistica.cql` | Esquema de Cassandra |
 | `sql/hive_schema.sql` | Esquema de referencia de Hive |
-| `persistenciahive.py` | Persistencia en Hive |
+| `persistencia_hive.py` | Persistencia en Hive |
 | `procesamiento/procesamiento_grafos.py` | Procesamiento con Spark |
 
 ### 6.2 Archivos de Consultas

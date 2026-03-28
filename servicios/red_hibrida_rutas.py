@@ -12,6 +12,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import COSTE_EURO_MINUTO_RETASO
 from config_nodos import get_aristas, get_nodos
+
+# En planificación híbrida, un «bloqueo» en Cassandra es penalización operativa; no usar ∞ min (evita tabla vacía de costes).
+# Valor por defecto al acotar (minutos base + extra clima, tope 500).
+_DEFAULT_CAP_BLOQUEO_PLANIFICACION = 180
 from servicios.clima_retrasos import evaluar_retraso_integrado, obtener_clima_todos_hubs_completo
 from servicios.estado_y_datos import cargar_aristas_cassandra, cargar_nodos_cassandra, cargar_tracking_cassandra
 
@@ -75,8 +79,15 @@ def estimar_retraso_tramo(
     nodos_map: Dict[str, Dict[str, Any]],
     aristas_map: Dict[Tuple[str, str], Dict[str, Any]],
     evaluacion_clima_por_hub: Optional[Dict[str, Dict[str, Any]]],
+    *,
+    cap_bloqueo_operativo_min: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Retraso agregado en el tramo u→v (arista + extremos)."""
+    """Retraso agregado en el tramo u→v (arista + extremos).
+
+    Si ``cap_bloqueo_operativo_min`` (p. ej. 180) y Cassandra indica bloqueo (999),
+    se usa esa penalización acotada en lugar de 9999 min, para poder mostrar
+    minutos/€ en la UI de planificación (el BFS ya encontró la ruta; no es corte físico del grafo).
+    """
     key = normalizar_arista(u, v)
     arow = aristas_map.get(key, {})
     nu, nv = nodos_map.get(u, {}), nodos_map.get(v, {})
@@ -103,17 +114,26 @@ def estimar_retraso_tramo(
         if extra_cli > 0:
             cli_txt = f"Clima (OWM) hubs {hu}/{hv}: +{extra_cli} min orient."
 
-    total_min = min(500, m_max + extra_cli)
-    if m_max >= 999:
-        total_min = 9999
+    incidencia_grave = m_max >= 999
+    if incidencia_grave and cap_bloqueo_operativo_min is not None:
+        total_min = min(500, cap_bloqueo_operativo_min + extra_cli)
+    else:
+        total_min = min(500, m_max + extra_cli)
+        if incidencia_grave:
+            total_min = 9999
 
     motivos = [mot for _, mot in candidatos if mot and "Sin retraso" not in mot]
     if cli_txt:
         motivos.append(cli_txt)
+    if incidencia_grave and cap_bloqueo_operativo_min is not None:
+        motivos.append(
+            f"Penalización planificación (tope {cap_bloqueo_operativo_min} min base; ruta aún viable en el modelo)"
+        )
 
     return {
         "minutos": total_min,
         "motivos": motivos,
+        "incidencia_grave": incidencia_grave,
         "coste_eur": round(total_min * COSTE_EURO_MINUTO_RETASO, 2) if total_min < 1000 else None,
     }
 
@@ -289,7 +309,9 @@ def analizar_ruta_completa(
             nodos_map,
             aristas_map,
             evaluacion_clima_por_hub if aplicar_clima_api else None,
+            cap_bloqueo_operativo_min=_DEFAULT_CAP_BLOQUEO_PLANIFICACION,
         )
+        # Tramos bloqueados usan minutos >> 1000; no sumar (evita total absurdo; la UI muestra "—").
         total_min += tr["minutos"] if tr["minutos"] < 1000 else 0
         if tr.get("coste_eur"):
             total_coste += tr["coste_eur"]
@@ -302,6 +324,7 @@ def analizar_ruta_completa(
                 "minutos": tr["minutos"],
                 "motivos": tr["motivos"],
                 "coste_eur": tr.get("coste_eur"),
+                "incidencia_grave": bool(tr.get("incidencia_grave")),
             }
         )
 

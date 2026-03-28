@@ -159,4 +159,4 @@ def render_bloque_grafo_fases_spark(
     if chart is None:
         st.warning(err)
         return
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")

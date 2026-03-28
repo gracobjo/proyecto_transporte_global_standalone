@@ -16,7 +16,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit, current_timestamp
+from pyspark.sql.functions import col, coalesce, lit, current_timestamp
 from graphframes import GraphFrame
 
 from config_nodos import get_nodos, get_aristas
@@ -31,6 +31,11 @@ from config import (
     HIVE_DB,
     HIVE_CONF_DIR,
     HIVE_METASTORE_URIS,
+)
+from procesamiento.reconfiguracion_grafo import (
+    STATUS_ACTIVE,
+    STATUS_DOWN,
+    aplicar_reconfiguracion_logistica,
 )
 
 # Pesos de penalización por clima/estado
@@ -359,7 +364,10 @@ def _persistir_historico_nodos_hive_compatible(spark, df_nodos):
     Evita `saveAsTable()` contra Hive 4 desde Spark.
     """
     df_hist = (
-        df_nodos.withColumn("motivo_retraso", col("motivo"))
+        df_nodos.withColumn(
+            "motivo_retraso",
+            coalesce(col("motivo_retraso"), lit("")),
+        )
         .withColumn("clima_actual", col("clima_desc"))
         .withColumn("temperatura", col("temp"))
         .withColumn("viento_velocidad", col("viento"))
@@ -435,6 +443,242 @@ def _construir_rutas_alternativas(camiones, estados_aristas):
     return rutas
 
 
+def _cargar_estado_reconfiguracion_actual():
+    estado_nodos = {}
+    estado_rutas = {}
+    alertas = {}
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+        try:
+            for row in session.execute("SELECT id_nodo, status, cause, updated_at, last_event FROM estado_nodos"):
+                estado_nodos[row.id_nodo] = {
+                    "status": row.status or STATUS_ACTIVE,
+                    "cause": row.cause or "",
+                    "updated_at": row.updated_at,
+                    "last_event": row.last_event or "",
+                }
+        except Exception:
+            estado_nodos = {}
+        try:
+            for row in session.execute(
+                "SELECT src, dst, status, cause, updated_at, last_event, manual_down FROM estado_rutas"
+            ):
+                estado_rutas[f"{row.src}|{row.dst}"] = {
+                    "status": row.status or STATUS_ACTIVE,
+                    "cause": row.cause or "",
+                    "updated_at": row.updated_at,
+                    "last_event": row.last_event or "",
+                    "manual_down": bool(getattr(row, "manual_down", False)),
+                }
+        except Exception:
+            estado_rutas = {}
+        try:
+            for row in session.execute(
+                """
+                SELECT alerta_id, tipo_alerta, entidad_id, severidad, mensaje, causa,
+                       timestamp_inicio, timestamp_ultima_actualizacion, estado,
+                       ruta_original, ruta_alternativa
+                FROM alertas_activas
+                """
+            ):
+                alertas[row.alerta_id] = {
+                    "alerta_id": row.alerta_id,
+                    "tipo_alerta": row.tipo_alerta,
+                    "entidad_id": row.entidad_id,
+                    "severidad": row.severidad,
+                    "mensaje": row.mensaje,
+                    "causa": row.causa,
+                    "timestamp_inicio": row.timestamp_inicio,
+                    "timestamp_ultima_actualizacion": row.timestamp_ultima_actualizacion,
+                    "estado": row.estado,
+                    "ruta_original": row.ruta_original,
+                    "ruta_alternativa": row.ruta_alternativa,
+                }
+        except Exception:
+            alertas = {}
+        cluster.shutdown()
+    except Exception:
+        pass
+    return estado_nodos, estado_rutas, alertas
+
+
+def _aplicar_reconfiguracion_a_estados(estados_nodos, estados_aristas, reconfig):
+    nodos_out = {nid: dict(info or {}) for nid, info in (estados_nodos or {}).items()}
+    aristas_out = {eid: dict(info or {}) for eid, info in (estados_aristas or {}).items()}
+
+    for nid, overlay in (reconfig.get("estado_nodos") or {}).items():
+        base = nodos_out.setdefault(nid, {})
+        base["graph_status"] = overlay.get("status", STATUS_ACTIVE)
+        base["graph_cause"] = overlay.get("cause", "")
+        if overlay.get("status") == STATUS_DOWN:
+            base["estado"] = "Bloqueado"
+            base["motivo"] = overlay.get("cause") or base.get("motivo") or "Nodo caído"
+            base["source"] = base.get("source") or "reconfiguracion"
+            base["severity"] = "highest"
+            base["peso_pagerank"] = max(float(base.get("peso_pagerank", 1.0) or 1.0), 3.0)
+
+    for edge_id, overlay in (reconfig.get("estado_rutas") or {}).items():
+        src, dst = edge_id.split("|", 1)
+        key = edge_id if edge_id in aristas_out else (f"{dst}|{src}" if f"{dst}|{src}" in aristas_out else edge_id)
+        base = aristas_out.setdefault(
+            key,
+            {
+                "estado": "OK",
+                "motivo": "",
+                "distancia_km": overlay.get("distancia_km", 0.0),
+            },
+        )
+        base["graph_status"] = overlay.get("status", STATUS_ACTIVE)
+        base["graph_cause"] = overlay.get("cause", "")
+        if overlay.get("status") == STATUS_DOWN:
+            base["estado"] = "Bloqueado"
+            base["motivo"] = overlay.get("cause") or base.get("motivo") or "Ruta desactivada"
+    return nodos_out, aristas_out
+
+
+def _aplicar_rutas_reconfiguradas(camiones, rutas_reconfiguradas):
+    for camion in camiones:
+        cid = camion.get("id_camion") or camion.get("id")
+        if not cid or cid not in (rutas_reconfiguradas or {}):
+            continue
+        ruta_info = rutas_reconfiguradas[cid]
+        ruta_alt = ruta_info.get("ruta") or []
+        if not ruta_alt:
+            continue
+        camion["ruta_sugerida"] = ruta_alt
+        camion["estado_ruta"] = "Reconfigurada"
+        camion["motivo_retraso"] = ruta_info.get("motivo") or "Reconfiguración automática por evento"
+        camion["distancia_alternativa_km"] = _distancia_ruta_km(ruta_alt)
+    return camiones
+
+
+def _persistir_reconfiguracion_cassandra(spark, reconfig):
+    from pyspark.sql.types import BooleanType, StructField, StructType, StringType, TimestampType
+
+    now = datetime.now(timezone.utc)
+    nodos_rows = []
+    for nid, info in (reconfig.get("estado_nodos") or {}).items():
+        nodos_rows.append(
+            (
+                nid,
+                info.get("status", STATUS_ACTIVE),
+                info.get("cause", ""),
+                _parse_ts_local(info.get("updated_at")) if info.get("updated_at") else now,
+                info.get("last_event", ""),
+            )
+        )
+    if nodos_rows:
+        schema = StructType(
+            [
+                StructField("id_nodo", StringType()),
+                StructField("status", StringType()),
+                StructField("cause", StringType()),
+                StructField("updated_at", TimestampType()),
+                StructField("last_event", StringType()),
+            ]
+        )
+        spark.createDataFrame(nodos_rows, schema).write.format("org.apache.spark.sql.cassandra").options(
+            table="estado_nodos", keyspace=KEYSPACE
+        ).mode("append").save()
+
+    rutas_rows = []
+    for route_id, info in (reconfig.get("estado_rutas") or {}).items():
+        src, dst = route_id.split("|", 1)
+        rutas_rows.append(
+            (
+                src,
+                dst,
+                info.get("status", STATUS_ACTIVE),
+                info.get("cause", ""),
+                _parse_ts_local(info.get("updated_at")) if info.get("updated_at") else now,
+                info.get("last_event", ""),
+                bool(info.get("manual_down", False)),
+            )
+        )
+    if rutas_rows:
+        schema = StructType(
+            [
+                StructField("src", StringType()),
+                StructField("dst", StringType()),
+                StructField("status", StringType()),
+                StructField("cause", StringType()),
+                StructField("updated_at", TimestampType()),
+                StructField("last_event", StringType()),
+                StructField("manual_down", BooleanType()),
+            ]
+        )
+        spark.createDataFrame(rutas_rows, schema).write.format("org.apache.spark.sql.cassandra").options(
+            table="estado_rutas", keyspace=KEYSPACE
+        ).mode("append").save()
+
+    alertas_rows = []
+    for alerta in (reconfig.get("alertas_activas") or {}).values():
+        alertas_rows.append(
+            (
+                alerta.get("alerta_id"),
+                alerta.get("tipo_alerta"),
+                alerta.get("entidad_id"),
+                alerta.get("severidad"),
+                alerta.get("mensaje"),
+                alerta.get("causa"),
+                _parse_ts_local(alerta.get("timestamp_inicio")) if alerta.get("timestamp_inicio") else now,
+                _parse_ts_local(alerta.get("timestamp_ultima_actualizacion")) if alerta.get("timestamp_ultima_actualizacion") else now,
+                alerta.get("estado", "ACTIVA"),
+                alerta.get("ruta_original", ""),
+                alerta.get("ruta_alternativa", ""),
+            )
+        )
+    if alertas_rows:
+        schema = StructType(
+            [
+                StructField("alerta_id", StringType()),
+                StructField("tipo_alerta", StringType()),
+                StructField("entidad_id", StringType()),
+                StructField("severidad", StringType()),
+                StructField("mensaje", StringType()),
+                StructField("causa", StringType()),
+                StructField("timestamp_inicio", TimestampType()),
+                StructField("timestamp_ultima_actualizacion", TimestampType()),
+                StructField("estado", StringType()),
+                StructField("ruta_original", StringType()),
+                StructField("ruta_alternativa", StringType()),
+            ]
+        )
+        spark.createDataFrame(alertas_rows, schema).write.format("org.apache.spark.sql.cassandra").options(
+            table="alertas_activas", keyspace=KEYSPACE
+        ).mode("append").save()
+
+    resueltas = reconfig.get("alertas_historicas") or []
+    if not resueltas:
+        return
+    try:
+        from cassandra.cluster import Cluster
+
+        cluster = Cluster([CASSANDRA_HOST])
+        session = cluster.connect(KEYSPACE)
+        stmt = session.prepare("DELETE FROM alertas_activas WHERE alerta_id = ?")
+        for alerta in resueltas:
+            if alerta.get("alerta_id"):
+                session.execute(stmt, (alerta["alerta_id"],))
+        cluster.shutdown()
+    except Exception as e:
+        print(f"[CASSANDRA] No se pudieron eliminar alertas resueltas: {e}")
+
+
+def _parse_ts_local(value):
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 def _persistir_eventos_historico_cassandra(estados_nodos, estados_aristas):
     try:
         import uuid
@@ -503,10 +747,25 @@ def _evaluar_alerta_bloqueos(estados_nodos):
     return {"nivel": "normal", "bloqueados": len(bloqueados), "ratio": round(ratio, 3), "nodos": bloqueados}
 
 
-def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
+def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones, *, eventos_grafo=None, timestamp=None):
     """Ejecutar minería de grafos y persistir en Hive + Cassandra."""
     nodos = get_nodos()
     aristas = get_aristas()
+
+    estado_nodos_prev, estado_rutas_prev, alertas_previas = _cargar_estado_reconfiguracion_actual()
+    reconfig = aplicar_reconfiguracion_logistica(
+        spark,
+        nodos,
+        aristas,
+        camiones,
+        eventos=eventos_grafo,
+        estado_nodos_previo=estado_nodos_prev,
+        estado_rutas_previo=estado_rutas_prev,
+        alertas_previas=alertas_previas,
+        timestamp=timestamp,
+    )
+    estados_nodos, estados_aristas = _aplicar_reconfiguracion_a_estados(estados_nodos, estados_aristas, reconfig)
+    camiones = _aplicar_rutas_reconfiguradas(camiones, reconfig.get("rutas_alternativas"))
 
     g0 = construir_grafo_base(spark, nodos, aristas, estados_nodos=estados_nodos)
     g = aplicar_autosanacion(g0, estados_aristas, estados_nodos)
@@ -671,6 +930,7 @@ def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
         .save()
 
     _persistir_eventos_historico_cassandra(estados_nodos, estados_aristas)
+    _persistir_reconfiguracion_cassandra(spark, reconfig)
 
     pagerank_dict = {r["id"]: {"pagerank": float(r["pagerank_val"])} for r in pr_rows}
     rutas_alternativas = _construir_rutas_alternativas(camiones, estados_aristas)
@@ -698,30 +958,36 @@ def procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones):
             }
         )
     datos_hive = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "estados_nodos": estados_nodos,
         "estados_aristas": estados_aristas,
         "camiones": camiones,
         "clima_hubs": clima_hubs,
         "clima": clima,
         "alerta_bloqueos": _evaluar_alerta_bloqueos(estados_nodos),
+        "eventos_grafo": reconfig.get("eventos_grafo", []),
+        "alertas_historicas_resueltas": reconfig.get("alertas_historicas", []),
     }
 
     # Hive: histórico de eventos (si Hive está disponible)
     try:
         from persistencia_hive import ejecutar_persistencia_hive
 
-        _persistir_historico_nodos_hive_compatible(
-            spark,
-            df_nodos.withColumn("fecha_proceso", current_timestamp()),
-        )
         ejecutar_persistencia_hive(spark, datos_hive, pagerank_dict, rutas_alternativas, nodos)
-        print(
-            "[HIVE] Modo compatibilidad activo: Spark mantiene histórico Hive "
-            "mediante rutas externas compatibles con Hive 4."
-        )
     except Exception as e:
-        print(f"[HIVE] Opcional - No disponible: {e}")
+        print(f"[HIVE] Persistencia principal no disponible: {e}")
+    else:
+        try:
+            _persistir_historico_nodos_hive_compatible(
+                spark,
+                df_nodos.withColumn("fecha_proceso", current_timestamp()),
+            )
+            print(
+                "[HIVE] Modo compatibilidad activo: Spark mantiene histórico Hive "
+                "mediante rutas externas compatibles con Hive 4."
+            )
+        except Exception as e:
+            print(f"[HIVE] Histórico de nodos no disponible: {e}")
 
     alerta = _evaluar_alerta_bloqueos(estados_nodos)
     if alerta["nivel"] != "normal":
@@ -847,11 +1113,15 @@ def main():
                     estados_nodos[hub]["temp"] = c.get("temp")
                     estados_nodos[hub]["humedad"] = c.get("humedad")
                     estados_nodos[hub]["viento"] = c.get("viento")
+            eventos_grafo = []
+            ts_payload = datetime.now(timezone.utc).isoformat()
         else:
             # El JSON de ingesta usa "estados_nodos" y "estados_aristas"
             estados_nodos = payload.get("estados_nodos", payload.get("nodos_estado", {}))
             estados_aristas = payload.get("estados_aristas", payload.get("aristas_estado", {}))
             camiones = payload.get("camiones", [])
+            eventos_grafo = payload.get("eventos_grafo", [])
+            ts_payload = payload.get("timestamp") or datetime.now(timezone.utc).isoformat()
             # Normalizar formato camiones (ingesta usa "id", "posicion_actual", "ruta")
             camiones = [
                 {
@@ -889,7 +1159,14 @@ def main():
         estados_nodos, estados_aristas, camiones = limpiar_datos_antes_cassandra(
             estados_nodos, estados_aristas, camiones
         )
-        procesar_y_persistir(spark, estados_nodos, estados_aristas, camiones)
+        procesar_y_persistir(
+            spark,
+            estados_nodos,
+            estados_aristas,
+            camiones,
+            eventos_grafo=eventos_grafo,
+            timestamp=ts_payload,
+        )
         print("[PROCESAMIENTO] OK - Cassandra y Hive actualizados")
     finally:
         spark.stop()

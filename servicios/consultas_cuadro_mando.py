@@ -456,6 +456,33 @@ _T_TRACKING = "tracking_camiones_historico"
 _T_TRANSPORTE = "transporte_ingesta_completa"
 _T_RUTAS = "rutas_alternativas_historico"
 _T_AGG = "agg_estadisticas_diarias"
+# Hive 3+: la columna se llama "timestamp" en persistencia_hive.py; el identificador es palabra reservada.
+# Usar `timestamp` en HiveQL (no afecta a current_timestamp()).
+_HIVE_TS = "`timestamp`"
+
+
+def _hive_prune_mes() -> str:
+    """Poda por partición mes actual (tablas con anio_part/mes_part). Desactivar: SIMLOG_HIVE_PARTITION_PRUNING=0."""
+    if os.environ.get("SIMLOG_HIVE_PARTITION_PRUNING", "1").strip() == "0":
+        return ""
+    return " AND anio_part = year(current_date()) AND mes_part = month(current_date())"
+
+
+def _hive_prune_7d() -> str:
+    """Poda por hasta 2 particiones (mes actual y mes de hace ~6 días). Útil para ventanas 24h/7d."""
+    if os.environ.get("SIMLOG_HIVE_PARTITION_PRUNING", "1").strip() == "0":
+        return ""
+    return (
+        " AND ((anio_part = year(current_date()) AND mes_part = month(current_date())) OR "
+        "(anio_part = year(date_sub(current_date(), 6)) AND mes_part = month(date_sub(current_date(), 6))))"
+    )
+
+
+# Fragmentos evaluados al import (cambiar SIMLOG_HIVE_PARTITION_PRUNING requiere reiniciar el proceso).
+_PM = _hive_prune_mes()
+_P7 = _hive_prune_7d()
+# Ejecución previa opcional: SIMLOG_HIVE_SET="SET hive.fetch.task.conversion=more;SET hive.execution.engine=tez"
+# (separar con ';'; Tez si existe; en MapReduce el coste fijo del job sigue siendo alto en standalone).
 
 HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     # --- Diagnóstico ---
@@ -471,31 +498,32 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     "eventos_historico_muestra": {
         "titulo": "Eventos histórico — todos (muestra)",
         "sql": f"""
-SELECT timestamp, tipo_evento, id_elemento, tipo_elemento, estado, motivo, hub_asociado, pagerank
+SELECT {_HIVE_TS}, tipo_evento, id_elemento, tipo_elemento, estado, motivo, hub_asociado, pagerank
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-ORDER BY timestamp DESC
+WHERE 1=1{_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
     "eventos_nodos_24h": {
         "titulo": "Eventos — nodos últimas 24h",
         "sql": f"""
-SELECT timestamp, id_elemento, estado, motivo, hub_asociado, pagerank
+SELECT {_HIVE_TS}, id_elemento, estado, motivo, hub_asociado, pagerank
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
 WHERE tipo_evento = 'nodo'
-  AND timestamp >= date_sub(current_timestamp(), 1)
-ORDER BY timestamp DESC
+  AND {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
     },
     "eventos_bloqueos_24h": {
         "titulo": "Eventos — bloqueos últimas 24h",
         "sql": f"""
-SELECT timestamp, id_elemento, estado, motivo, hub_asociado
+SELECT {_HIVE_TS}, id_elemento, estado, motivo, hub_asociado
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
 WHERE estado IN ('bloqueado', 'Bloqueado')
-  AND timestamp >= date_sub(current_timestamp(), 1)
-ORDER BY timestamp DESC
+  AND {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
@@ -504,7 +532,7 @@ LIMIT 100
         "sql": f"""
 SELECT dia, tipo_evento, estado, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE timestamp >= date_sub(current_timestamp(), 7)
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
 GROUP BY dia, tipo_evento, estado
 ORDER BY dia DESC, total DESC
 LIMIT 200
@@ -514,19 +542,20 @@ LIMIT 200
     "clima_historico_muestra": {
         "titulo": "Clima histórico — todos (muestra)",
         "sql": f"""
-SELECT timestamp, ciudad, temperatura, humedad, descripcion, visibilidad, estado_carretera
+SELECT {_HIVE_TS}, ciudad, temperatura, humedad, descripcion, visibilidad, estado_carretera
 FROM {HIVE_DB_NAME}.{_T_CLIMA}
-ORDER BY timestamp DESC
+WHERE 1=1{_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
     "clima_historico_hoy": {
         "titulo": "Clima histórico — hoy",
         "sql": f"""
-SELECT timestamp, ciudad, temperatura, humedad, descripcion, estado_carretera
+SELECT {_HIVE_TS}, ciudad, temperatura, humedad, descripcion, estado_carretera
 FROM {HIVE_DB_NAME}.{_T_CLIMA}
-WHERE dia = current_date()
-ORDER BY timestamp DESC
+WHERE dia = current_date(){_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 50
         """.strip(),
     },
@@ -535,7 +564,7 @@ LIMIT 50
         "sql": f"""
 SELECT estado_carretera, descripcion, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_CLIMA}
-WHERE timestamp >= date_sub(current_timestamp(), 1)
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
 GROUP BY estado_carretera, descripcion
 ORDER BY total DESC
 LIMIT 50
@@ -545,28 +574,29 @@ LIMIT 50
     "tracking_historico_muestra": {
         "titulo": "Tracking histórico — muestra",
         "sql": f"""
-SELECT timestamp, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km
+SELECT {_HIVE_TS}, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km
 FROM {HIVE_DB_NAME}.{_T_TRACKING}
-ORDER BY timestamp DESC
+WHERE 1=1{_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
     "tracking_camion_especifico": {
         "titulo": "Tracking — por camión (filtrar en cliente)",
         "sql": f"""
-SELECT timestamp, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km, tiene_ruta_alternativa
+SELECT {_HIVE_TS}, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km, tiene_ruta_alternativa
 FROM {HIVE_DB_NAME}.{_T_TRACKING}
-WHERE timestamp >= date_sub(current_timestamp(), 7)
-ORDER BY timestamp DESC
-LIMIT 500
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+ORDER BY {_HIVE_TS} DESC
+LIMIT 200
         """.strip(),
     },
     "tracking_ultima_posicion": {
         "titulo": "Tracking — última posición por camión",
         "sql": f"""
-SELECT id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, timestamp
+SELECT id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, {_HIVE_TS}
 FROM {HIVE_DB_NAME}.{_T_TRACKING}
-WHERE timestamp >= date_sub(current_timestamp(), 1)
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
 LIMIT 200
         """.strip(),
     },
@@ -574,62 +604,64 @@ LIMIT 200
     "transporte_ingesta_real_muestra": {
         "titulo": "Transporte ingestado — muestra",
         "sql": f"""
-SELECT timestamp, id_camion, origen, destino, nodo_actual, lat, lon, progreso_pct, estado_ruta, motivo_retraso, ruta
+SELECT {_HIVE_TS}, id_camion, origen, destino, nodo_actual, lat, lon, progreso_pct, estado_ruta, motivo_retraso, ruta
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-ORDER BY timestamp DESC
+WHERE 1=1{_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
     "transporte_ingesta_hoy": {
         "titulo": "Transporte ingestado — hoy",
         "sql": f"""
-SELECT timestamp, id_camion, origen, destino, estado_ruta, motivo_retraso, progreso_pct
+SELECT {_HIVE_TS}, id_camion, origen, destino, estado_ruta, motivo_retraso, progreso_pct
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-WHERE dia = current_date()
-ORDER BY timestamp DESC
+WHERE dia = current_date(){_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
     },
     "transporte_retrasos_hoy": {
         "titulo": "Transporte — camiones con retrasos hoy",
         "sql": f"""
-SELECT timestamp, id_camion, origen, destino, estado_ruta, motivo_retraso
+SELECT {_HIVE_TS}, id_camion, origen, destino, estado_ruta, motivo_retraso
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
 WHERE estado_ruta != 'En ruta'
-  AND dia = current_date()
-ORDER BY timestamp DESC
+  AND dia = current_date(){_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
     "gestor_historial_rutas_camion": {
         "titulo": "Gestor — histórico transporte por camión",
         "sql": f"""
-SELECT timestamp, id_camion, origen, destino, nodo_actual, progreso_pct, estado_ruta, motivo_retraso
+SELECT {_HIVE_TS}, id_camion, origen, destino, nodo_actual, progreso_pct, estado_ruta, motivo_retraso
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-WHERE timestamp >= date_sub(current_timestamp(), 7)
-ORDER BY id_camion, timestamp DESC
-LIMIT 500
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+ORDER BY id_camion, {_HIVE_TS} DESC
+LIMIT 300
         """.strip(),
     },
     # --- Rutas alternativas (rutas_alternativas_historico) ---
     "rutas_alternativas_muestra": {
         "titulo": "Rutas alternativas — muestra",
         "sql": f"""
-SELECT timestamp, origen, destino, ruta_original, ruta_alternativa, distancia_original_km, distancia_alternativa_km, motivo_bloqueo, ahorro_km
+SELECT {_HIVE_TS}, origen, destino, ruta_original, ruta_alternativa, distancia_original_km, distancia_alternativa_km, motivo_bloqueo, ahorro_km
 FROM {HIVE_DB_NAME}.{_T_RUTAS}
-ORDER BY timestamp DESC
+WHERE 1=1{_PM}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
     "rutas_alternativas_bloqueos": {
         "titulo": "Rutas alternativas — bloqueos detectados",
         "sql": f"""
-SELECT timestamp, origen, destino, ruta_original, motivo_bloqueo, ahorro_km
+SELECT {_HIVE_TS}, origen, destino, ruta_original, motivo_bloqueo, ahorro_km
 FROM {HIVE_DB_NAME}.{_T_RUTAS}
 WHERE motivo_bloqueo IS NOT NULL
   AND motivo_bloqueo != ''
-  AND timestamp >= date_sub(current_timestamp(), 7)
-ORDER BY timestamp DESC
+  AND {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
@@ -639,6 +671,7 @@ LIMIT 100
         "sql": f"""
 SELECT anio, mes, dia, tipo_evento, estado, motivo, contador, pct_total
 FROM {HIVE_DB_NAME}.{_T_AGG}
+WHERE 1=1{_PM}
 ORDER BY anio DESC, mes DESC, dia DESC, contador DESC
 LIMIT 200
         """.strip(),
@@ -648,9 +681,8 @@ LIMIT 200
         "sql": f"""
 SELECT anio, mes, dia, tipo_evento, estado, motivo, contador, pct_total
 FROM {HIVE_DB_NAME}.{_T_AGG}
-WHERE anio = year(current_date())
-  AND mes = month(current_date())
-  AND dia >= day(current_date()) - 7
+WHERE make_date(anio, mes, dia) >= date_sub(current_date(), 7)
+  AND make_date(anio, mes, dia) <= current_date(){_P7}
 ORDER BY dia DESC, contador DESC
 LIMIT 200
         """.strip(),
@@ -661,7 +693,7 @@ LIMIT 200
         "sql": f"""
 SELECT hub_asociado, estado, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE timestamp >= date_sub(current_timestamp(), 1)
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
 GROUP BY hub_asociado, estado
 ORDER BY total DESC
 LIMIT 100
@@ -670,12 +702,20 @@ LIMIT 100
     "gestor_clima_afecta_transporte": {
         "titulo": "Gestor — clima adverso que afecta transporte",
         "sql": f"""
-SELECT c.timestamp, c.ciudad, c.estado_carretera, c.descripcion, t.estado_ruta, t.motivo_retraso
+SELECT c.{_HIVE_TS}, c.ciudad, c.estado_carretera, c.descripcion, tx.estado_ruta, tx.motivo_retraso
 FROM {HIVE_DB_NAME}.{_T_CLIMA} c
-LEFT JOIN {HIVE_DB_NAME}.{_T_TRANSPORTE} t ON c.timestamp = t.timestamp AND c.ciudad = t.hub_actual
-WHERE c.timestamp >= date_sub(current_timestamp(), 1)
-  AND c.estado_carretera != 'Optimo'
-ORDER BY c.timestamp DESC
+LEFT JOIN (
+  SELECT {_HIVE_TS}, hub_actual,
+         max(estado_ruta) AS estado_ruta,
+         max(motivo_retraso) AS motivo_retraso
+  FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
+  WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+  GROUP BY {_HIVE_TS}, hub_actual
+) tx
+ON c.{_HIVE_TS} = tx.{_HIVE_TS} AND c.ciudad = tx.hub_actual
+WHERE c.{_HIVE_TS} >= date_sub(current_timestamp(), 1)
+  AND c.estado_carretera != 'Optimo'{_P7}
+ORDER BY c.{_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
     },
@@ -684,7 +724,7 @@ LIMIT 100
         "sql": f"""
 SELECT estado, COUNT(*) as total, AVG(pagerank) as pagerank_promedio
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE timestamp >= date_sub(current_timestamp(), 1)
+WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
 GROUP BY estado
 ORDER BY total DESC
 LIMIT 20
@@ -697,7 +737,7 @@ SELECT id_elemento as nodo, estado, motivo, pagerank, hub_asociado
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
 WHERE tipo_evento = 'nodo'
   AND pagerank > 0
-  AND timestamp >= date_sub(current_timestamp(), 7)
+  AND {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
 ORDER BY pagerank DESC
 LIMIT 100
         """.strip(),
@@ -761,6 +801,12 @@ def _ejecutar_hive_pyhive(sql: str) -> Tuple[bool, str, str]:
                 "",
             )
         cur = conn.cursor()
+        extra_sets = os.environ.get("SIMLOG_HIVE_SET", "").strip()
+        if extra_sets:
+            for stmt in extra_sets.split(";"):
+                s = stmt.strip()
+                if s:
+                    cur.execute(s)
         cur.execute(sql)
         if not cur.description:
             return True, "", ""

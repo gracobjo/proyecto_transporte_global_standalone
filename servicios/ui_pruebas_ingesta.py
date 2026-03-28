@@ -132,7 +132,7 @@ def render_pruebas_ingesta_tab() -> None:
     filas = resumen_tabular_pruebas()
     st.markdown("**Histórico de pruebas registradas**")
     if filas:
-        st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(filas), width="stretch", hide_index=True)
     else:
         st.info("Todavía no hay pruebas registradas.")
 

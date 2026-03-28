@@ -497,6 +497,7 @@ def main(paso_15min=0):
             "nodos_afectados": len(info_dgt.get("mapeo_nodos", {})),
             "hubs_clima_respaldo": len(info_dgt.get("clima_hubs", {})),
         },
+        "eventos_grafo": [],
         "alertas_operativas": [alerta_bloqueos],
         "nodos_estado": {
             n: {

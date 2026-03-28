@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 
 import folium
 import streamlit as st
+from folium.plugins import AntPath
 from streamlit_folium import st_folium
 
 BASE = Path(__file__).resolve().parent
@@ -39,6 +40,9 @@ from servicios.estado_y_datos import (
     cargar_aristas_cassandra,
     cargar_tracking_cassandra,
     cargar_pagerank_cassandra,
+    cargar_estado_nodos_reconfiguracion,
+    cargar_estado_rutas_reconfiguracion,
+    cargar_alertas_activas_cassandra,
 )
 from servicios.kdd_fases import FaseKDD, FASES_KDD
 from servicios.ejecucion_pipeline import (
@@ -68,11 +72,15 @@ from servicios.pipeline_verificacion import leer_ultima_ingesta
 COLORES_ESTADO = {
     "ok": "green",
     "OK": "green",
+    "active": "green",
+    "ACTIVE": "green",
     "congestionado": "orange",
     "Congestionado": "orange",
     "bloqueado": "red",
     "Bloqueado": "red",
     "BLOQUEADO": "red",
+    "down": "red",
+    "DOWN": "red",
 }
 
 
@@ -116,6 +124,22 @@ def _render_resumen_dgt_ui() -> None:
             st.info(msg)
 
 
+def _render_resumen_reconfiguracion_ui(alertas_activas: List[Dict[str, Any]], nodos_rt: List[Dict[str, Any]], rutas_rt: List[Dict[str, Any]]) -> None:
+    down_nodes = [n for n in (nodos_rt or []) if str(n.get("status") or "").upper() == "DOWN"]
+    down_routes = [r for r in (rutas_rt or []) if str(r.get("status") or "").upper() == "DOWN"]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Nodos caídos", str(len(down_nodes)))
+    c2.metric("Rutas desactivadas", str(len(down_routes)))
+    c3.metric("Alertas activas", str(len(alertas_activas or [])))
+    if alertas_activas:
+        with st.expander("Alertas activas de reconfiguración", expanded=False):
+            for alerta in alertas_activas[:12]:
+                st.markdown(
+                    f"- `{alerta.get('tipo_alerta')}` · `{alerta.get('entidad_id')}` · "
+                    f"{alerta.get('mensaje') or alerta.get('causa') or 'sin detalle'}"
+                )
+
+
 def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
     q = (query or "").strip().lower()
     if not q:
@@ -127,7 +151,7 @@ def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
         {"tab": "Asistente flota", "titulo": "Preguntas en lenguaje natural", "keywords": "asistente flota lenguaje natural camion rutas"},
         {"tab": "Servicios", "titulo": "FAQ IA para dudas rápidas", "keywords": "faq ia preguntas frecuentes ayuda soporte"},
         {"tab": "Rutas híbridas", "titulo": "Planificación origen-destino y alternativas", "keywords": "ruta hibrida alternativa origen destino bfs"},
-        {"tab": "Mapa y métricas", "titulo": "Mapa operativo y PageRank", "keywords": "mapa metrica pagerank nodos aristas tracking"},
+        {"tab": "Mapa y métricas", "titulo": "Mapa operativo y PageRank", "keywords": "mapa metrica pagerank nodos aristas tracking reconfiguracion nodo down ruta alternativa alertas activas"},
         {"tab": "Resultados pipeline", "titulo": "Resultado de fases y persistencia", "keywords": "pipeline resultado fases ingesta spark"},
         {"tab": "Resultados pipeline", "titulo": "Estado DGT y alertas de bloqueos", "keywords": "dgt datex2 live cache disabled alertas bloqueos provenance"},
         {"tab": "Pruebas", "titulo": "Registro de pruebas y trazabilidad", "keywords": "pruebas test evidencias nifi airflow script ingesta historico"},
@@ -156,10 +180,26 @@ def crear_mapa(
     nodos_cassandra: List[Dict],
     aristas_cassandra: List[Dict],
     tracking: List[Dict],
+    nodos_reconfig: List[Dict] | None = None,
+    rutas_reconfig: List[Dict] | None = None,
+    *,
+    animar_rutas_sugeridas: bool = False,
 ) -> folium.Map:
-    """Mapa Folium: nodos y aristas desde Cassandra; fallback a topología estática si no hay datos."""
+    """Mapa Folium: nodos y aristas desde Cassandra; fallback a topología estática si no hay datos.
+
+    Capas (LayerControl): aristas y rutas sugeridas empiezan ocultas para un mapa más legible.
+    ``animar_rutas_sugeridas`` usa AntPath (efecto de flujo) en las polilíneas de ruta por camión.
+    """
     nodos_static = get_nodos()
-    m = folium.Map(location=[40.4, -3.7], zoom_start=6, tiles="OpenStreetMap")
+    m = folium.Map(
+        location=[40.4, -3.7],
+        zoom_start=6,
+        tiles="CartoDB positron",
+    )
+    fg_aristas = folium.FeatureGroup(name="Red: todas las aristas", show=False)
+    fg_nodos = folium.FeatureGroup(name="Nodos", show=True)
+    fg_camiones = folium.FeatureGroup(name="Camiones (posición actual)", show=True)
+    fg_rutas = folium.FeatureGroup(name="Rutas sugeridas (por camión)", show=False)
 
     # Mapa id -> posición y estado
     pos: Dict[str, Dict[str, Any]] = {}
@@ -181,26 +221,47 @@ def crear_mapa(
                 "estado": "OK",
             }
 
+    nodos_rt = {row.get("id_nodo"): row for row in (nodos_reconfig or []) if row.get("id_nodo")}
+    rutas_rt = {}
+    for row in rutas_reconfig or []:
+        src, dst = row.get("src"), row.get("dst")
+        if src and dst:
+            rutas_rt[f"{src}|{dst}"] = row
+            rutas_rt[f"{dst}|{src}"] = row
+
     # Aristas
     if aristas_cassandra:
         for r in aristas_cassandra:
             src, dst = r.get("src"), r.get("dst")
             if not src or not dst or src not in pos or dst not in pos:
                 continue
+            rt = rutas_rt.get(f"{src}|{dst}", {})
+            rt_status = str(rt.get("status") or "").upper()
             est = (r.get("estado") or "OK").lower()
-            if "bloque" in est:
+            if rt_status == "DOWN":
+                color = "gray"
+                dash_array = "8, 8"
+                tooltip = f"{src} → {dst} · desactivada"
+            elif "bloque" in est:
                 color = "red"
+                dash_array = None
+                tooltip = f"{src} → {dst}"
             elif "congest" in est or "congestion" in est:
                 color = "orange"
+                dash_array = None
+                tooltip = f"{src} → {dst}"
             else:
                 color = "green"
+                dash_array = None
+                tooltip = f"{src} → {dst}"
             folium.PolyLine(
                 [[pos[src]["lat"], pos[src]["lon"]], [pos[dst]["lat"], pos[dst]["lon"]]],
                 color=color,
-                weight=2,
+                weight=3 if rt_status == "DOWN" else 2,
                 opacity=0.65,
-                tooltip=f"{src} → {dst}",
-            ).add_to(m)
+                dash_array=dash_array,
+                tooltip=tooltip,
+            ).add_to(fg_aristas)
     else:
         for src, dst, _ in get_aristas():
             if src in pos and dst in pos:
@@ -209,20 +270,36 @@ def crear_mapa(
                     color="gray",
                     weight=1,
                     opacity=0.35,
-                ).add_to(m)
+                ).add_to(fg_aristas)
 
     # Nodos
     for nid, p in pos.items():
+        rt = nodos_rt.get(nid, {})
+        rt_status = str(rt.get("status") or "").upper()
         est = p.get("estado", "OK")
         color = COLORES_ESTADO.get(est, COLORES_ESTADO.get(str(est).lower(), "blue"))
-        folium.CircleMarker(
-            location=[p["lat"], p["lon"]],
-            radius=10 if p.get("tipo") == "hub" else 6,
-            color=color,
-            fill=True,
-            fill_opacity=0.85,
-            popup=f"<b>{nid}</b><br>{p.get('tipo')}<br>Estado: {est}",
-        ).add_to(m)
+        popup = f"<b>{nid}</b><br>{p.get('tipo')}<br>Estado: {est}"
+        if rt_status == "DOWN":
+            folium.Marker(
+                location=[p["lat"], p["lon"]],
+                icon=folium.DivIcon(
+                    html=(
+                        "<div style='font-size: 18px; color: white; background: #c62828; "
+                        "border-radius: 50%; width: 22px; height: 22px; text-align: center; "
+                        "line-height: 22px; border: 2px solid white;'>X</div>"
+                    )
+                ),
+                popup=f"{popup}<br>Reconfiguración: DOWN<br>{rt.get('cause') or ''}",
+            ).add_to(fg_nodos)
+        else:
+            folium.CircleMarker(
+                location=[p["lat"], p["lon"]],
+                radius=10 if p.get("tipo") == "hub" else 6,
+                color=color,
+                fill=True,
+                fill_opacity=0.85,
+                popup=popup,
+            ).add_to(fg_nodos)
 
     # Camiones
     for t in tracking:
@@ -234,7 +311,54 @@ def crear_mapa(
             [lat, lon],
             icon=folium.Icon(color="blue", icon="info-sign"),
             popup=f"Camión {cid}<br>{t.get('estado_ruta', '')}",
-        ).add_to(m)
+        ).add_to(fg_camiones)
+        ruta_sugerida = t.get("ruta_sugerida") or []
+        if isinstance(ruta_sugerida, list) and len(ruta_sugerida) >= 2:
+            coords = []
+            for nodo in ruta_sugerida:
+                if nodo in pos:
+                    coords.append([pos[nodo]["lat"], pos[nodo]["lon"]])
+            if len(coords) >= 2:
+                tip = f"Ruta sugerida {cid}"
+                if animar_rutas_sugeridas:
+                    AntPath(
+                        coords,
+                        color="#2563eb",
+                        weight=4,
+                        opacity=0.65,
+                        delay=600,
+                        dash_array=[12, 18],
+                        tooltip=tip,
+                    ).add_to(fg_rutas)
+                else:
+                    folium.PolyLine(
+                        coords,
+                        color="blue",
+                        weight=4,
+                        opacity=0.55,
+                        tooltip=tip,
+                    ).add_to(fg_rutas)
+
+    fg_aristas.add_to(m)
+    fg_rutas.add_to(m)
+    fg_nodos.add_to(m)
+    fg_camiones.add_to(m)
+    folium.LayerControl(collapsed=False).add_to(m)
+
+    # Encuadre sobre la flota visible (evita península entera si hay posiciones GPS).
+    pts_fit: List[List[float]] = []
+    for t in tracking:
+        la, lo = t.get("lat"), t.get("lon")
+        if la is not None and lo is not None:
+            pts_fit.append([float(la), float(lo)])
+    if len(pts_fit) >= 1:
+        lats = [p[0] for p in pts_fit]
+        lons = [p[1] for p in pts_fit]
+        pad = 0.75
+        m.fit_bounds(
+            [[min(lats) - pad, min(lons) - pad], [max(lats) + pad, max(lons) + pad]],
+            padding=(28, 28),
+        )
 
     return m
 
@@ -731,12 +855,31 @@ def main() -> None:
                 nodos_c = cargar_nodos_cassandra()
                 aristas_c = cargar_aristas_cassandra()
                 track_c = cargar_tracking_cassandra()
+                nodos_rt = cargar_estado_nodos_reconfiguracion()
+                rutas_rt = cargar_estado_rutas_reconfiguracion()
                 if not nodos_c:
                     st.warning(
                         "No hay datos en `nodos_estado` (o Cassandra no responde). "
                         "Ejecuta el procesamiento tras la ingesta."
                     )
-                mapa = crear_mapa(nodos_c, aristas_c, track_c)
+                st.caption(
+                    "**Mapa legible:** la red de **aristas** y las **rutas sugeridas** vienen "
+                    "**desactivadas** por defecto. Usa el control de **capas** en el mapa (icono de capas) "
+                    "para mostrarlas. Opcional: animación tipo «flujo» en las rutas."
+                )
+                anim_rutas = st.checkbox(
+                    "Animar rutas sugeridas (efecto movimiento, AntPath)",
+                    value=False,
+                    key="mapa_operativo_anim_rutas",
+                )
+                mapa = crear_mapa(
+                    nodos_c,
+                    aristas_c,
+                    track_c,
+                    nodos_rt,
+                    rutas_rt,
+                    animar_rutas_sugeridas=anim_rutas,
+                )
                 st_folium(mapa, width=None, height=480, returned_objects=[], key="folium_operativo")
             else:
                 st.subheader("Mapa de planificación (red + ruta principal + alternativas)")
@@ -746,9 +889,9 @@ def main() -> None:
                     alts = rh.get("alternativas") or []
                     mostrar_red = st.checkbox(
                         "Mostrar toda la red de fondo (conexiones grises)",
-                        value=bool(st.session_state.get("rh_mapa_red", True)),
+                        value=bool(st.session_state.get("rh_mapa_red", False)),
                         key="tab_mapa_mostrar_red_completa",
-                        help="Misma opción que en Rutas híbridas; aquí puedes cambiarla sin cambiar de pestaña.",
+                        help="Por defecto desactivado: la malla completa satura el mapa. Misma opción que en Rutas híbridas.",
                     )
                     st.caption(
                         f"**Ruta actual:** `{' → '.join(ruta)}` · **{rh.get('num_saltos', 0)}** salto(s) · "
@@ -773,6 +916,9 @@ def main() -> None:
             if modo_mapa == "operativo":
                 st.subheader("PageRank (muestra)")
                 pr = cargar_pagerank_cassandra()
+                alertas_rt = cargar_alertas_activas_cassandra()
+                nodos_rt = cargar_estado_nodos_reconfiguracion()
+                rutas_rt = cargar_estado_rutas_reconfiguracion()
                 if pr:
                     pr_sorted = sorted(pr, key=lambda x: float(x.get("pagerank") or 0), reverse=True)[:12]
                     for row in pr_sorted:
@@ -784,10 +930,13 @@ def main() -> None:
                     st.caption("Sin datos de PageRank. Ejecuta procesamiento Spark.")
 
                 st.divider()
+                st.markdown("**Reconfiguración logística**")
+                _render_resumen_reconfiguracion_ui(alertas_rt, nodos_rt, rutas_rt)
+                st.divider()
                 st.markdown("**Estado DGT y alertas**")
                 _render_resumen_dgt_ui()
                 st.divider()
-                st.caption("Leyenda aristas: verde OK · naranja congestión · rojo bloqueo")
+                st.caption("Leyenda nodos: verde activo · rojo con X nodo caído · aristas grises desactivadas · rutas alternativas azules")
             else:
                 st.subheader("Resumen de la última ruta")
                 rh = st.session_state.get("rh_resultado")

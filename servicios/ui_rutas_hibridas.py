@@ -95,7 +95,11 @@ def render_rutas_hibridas_tab() -> None:
     with cc3:
         modo_obras = st.checkbox("Bloquear nodos con ‘obras’ en Cassandra", value=False, key="rh_obras")
     with cc4:
-        mostrar_red = st.checkbox("En el mapa: mostrar toda la red de fondo", value=True, key="rh_mapa_red")
+        mostrar_red = st.checkbox(
+            "En el mapa: mostrar toda la red de fondo (malla; puede verse «telaraña»)",
+            value=False,
+            key="rh_mapa_red",
+        )
 
     colb1, colb2 = st.columns([1, 2])
     with colb1:
@@ -138,10 +142,12 @@ def render_rutas_hibridas_tab() -> None:
             # Pasos numerados (lo que pedía la fase de presentación)
             st.markdown("##### Pasos hasta el destino")
             pasos = res.get("pasos") or []
+            hay_bloqueo_inf = any((p.get("minutos") or 0) >= 1000 for p in pasos)
+            hay_incidencia_grave = any(p.get("incidencia_grave") for p in pasos)
             if pasos:
                 for p in pasos:
                     mins = p["minutos"]
-                    mins_txt = "∞ (bloqueo)" if mins >= 1000 else f"{mins} min"
+                    mins_txt = "∞ (bloqueo)" if mins >= 1000 else f"{mins:.0f} min"
                     st.markdown(
                         f"{p['paso']}. **{p['desde']}** → **{p['hasta']}** · "
                         f"Retraso est.: {mins_txt} · "
@@ -163,26 +169,48 @@ def render_rutas_hibridas_tab() -> None:
                             "Tramo": f"{p['desde']} → {p['hasta']}",
                             "Saltos acum.": p["saltos_acum"],
                             "Min. retraso est.": p["minutos"] if p["minutos"] < 1000 else "∞ (bloqueo)",
-                            "Coste € (tramo)": p.get("coste_eur") if p["minutos"] < 1000 else "—",
+                            "Coste € (tramo)": (
+                                f"{p['coste_eur']:.2f}" if p.get("coste_eur") is not None else "—"
+                            ),
                             "Motivos": "; ".join(p.get("motivos") or []),
                         }
                         for p in pasos
                     ]
                 )
                 st.dataframe(df, width="stretch", hide_index=True)
-                if any((p.get("minutos") or 0) >= 1000 for p in pasos):
+                if hay_bloqueo_inf:
                     st.error(
                         "Hay al menos un **tramo bloqueado** (retraso infinito). "
                         "Revisa alternativas o el estado en Cassandra."
+                    )
+                elif hay_incidencia_grave:
+                    st.warning(
+                        "Hay **incidencia grave** (p. ej. bloqueo/incendio en Cassandra). "
+                        "Los minutos y € por tramo son una **penalización acotada** para planificación; "
+                        "el BFS ya encontró la ruta (no es cierre de malla)."
                     )
 
             ctot = res.get("minutos_totales_estimados")
             eur = res.get("coste_total_eur")
             m1, m2 = st.columns(2)
             with m1:
-                st.metric("Minutos totales estimados (suma tramos)", f"{ctot}")
+                if hay_bloqueo_inf:
+                    st.metric(
+                        "Minutos totales estimados (suma tramos)",
+                        "—",
+                        help="Si hay tramo bloqueado, el backend no suma minutos (no es acumulable).",
+                    )
+                else:
+                    st.metric("Minutos totales estimados (suma tramos)", f"{ctot}")
             with m2:
-                st.metric("Coste total estimado (€)", f"{eur}" if eur is not None else "—")
+                if hay_bloqueo_inf:
+                    st.metric(
+                        "Coste total estimado (€)",
+                        "—",
+                        help="Sin minutos finitos por tramo no se calcula € total.",
+                    )
+                else:
+                    st.metric("Coste total estimado (€)", f"{eur}" if eur is not None else "—")
 
             ve = res.get("vehiculos_afectados") or []
             st.markdown("##### Vehículos afectados (origen→destino seleccionado)")
@@ -207,6 +235,11 @@ def render_rutas_hibridas_tab() -> None:
 
             # Mapa
             st.markdown("##### Mapa: red, ruta principal (azul) y alternativas (naranja)")
+            st.caption(
+                "Vista **sin telaraña** por defecto: fondo claro y **malla completa desactivada** "
+                "(actívala en el control de capas del mapa o con la casilla superior). "
+                "El zoom se centra en la ruta calculada."
+            )
             mapa = crear_mapa_planificacion_rutas(
                 ruta,
                 alts,

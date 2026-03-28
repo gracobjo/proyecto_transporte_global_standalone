@@ -16,6 +16,8 @@ from urllib.request import Request, urlopen
 from dataclasses import dataclass
 from typing import Optional
 
+from servicios.gestion_servicios import PORT_SPARK_MASTER, PORT_SPARK_MASTER_UI
+
 # Host base para URLs por defecto (cambiar si accedes desde otra máquina)
 _UI_HOST = os.environ.get("SIMLOG_UI_HOST", "127.0.0.1")
 
@@ -92,11 +94,20 @@ def _defaults() -> dict[str, InterfazWebServicio]:
         "spark": InterfazWebServicio(
             servicio_id="spark",
             nombre="Spark Master / History",
-            url=f"http://{h}:8080",
-            puerto="8080",
+            url=f"http://{h}:{PORT_SPARK_MASTER_UI}",
+            puerto=str(PORT_SPARK_MASTER_UI),
             usuario="",
             password_env="SIMLOG_UI_SPARK_PASSWORD",
-            nota="Master UI (standalone). Si usas History Server, define SIMLOG_UI_SPARK_URL (ej. http://host:18080).",
+            nota=(
+                f"Standalone: puerto {PORT_SPARK_MASTER_UI} = UI web del master; "
+                f"{PORT_SPARK_MASTER} = RPC (no abre HTML). "
+                "Este proyecto ejecuta Spark con `SPARK_MASTER=local` por defecto (`crear_spark` en "
+                "`procesamiento_grafos.py`): no se registran aplicaciones en el master y no hay workers. "
+                f"Para ver jobs y workers aquí: arranca master + `$SPARK_HOME/sbin/start-worker.sh spark://<host>:{PORT_SPARK_MASTER}` "
+                f"y lanza el pipeline con `SPARK_MASTER=spark://<host>:{PORT_SPARK_MASTER}`. "
+                "Si :8080 muestra otra app (p. ej. NiFi), cambia `spark.master.ui.port` o `SIMLOG_PORT_SPARK_MASTER_UI` / `SIMLOG_UI_SPARK_URL`. "
+                "History Server opcional: `SIMLOG_UI_SPARK_URL` (ej. http://host:18080)."
+            ),
         ),
         "hive": InterfazWebServicio(
             servicio_id="hive",

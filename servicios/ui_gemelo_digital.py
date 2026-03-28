@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import folium
 import pandas as pd
 import streamlit as st
+from folium.plugins import AntPath
 from streamlit_folium import st_folium
 
 from servicios.gemelo_digital_datos import (
@@ -25,6 +26,26 @@ from servicios.gemelo_digital_rutas import (
 )
 from servicios.red_hibrida_rutas import estimar_retraso_tramo, COSTE_EURO_MINUTO_RETASO
 from servicios.ingesta_csv_gemelo import ingerir_csv_gemelo
+
+
+def _safe_float_coord(v: Any) -> float:
+    if v is None or v == "":
+        return float("nan")
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _dataframe_arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Evita ArrowTypeError por columnas object con int/float/str mezclados (p. ej. lat)."""
+    out = df.copy()
+    for c in out.columns:
+        if out[c].dtype == object:
+            num = pd.to_numeric(out[c], errors="coerce")
+            if num.notna().any():
+                out[c] = num
+    return out
 
 
 def _cargar_retrasos_cassandra(
@@ -111,8 +132,15 @@ def _crear_mapa_gemelo(
     retrasos_tramos: Optional[Dict[str, Dict[str, Any]]] = None,
     trayectorias: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     camion_seleccionado: Optional[str] = None,
+    *,
+    animar_trayectorias: bool = False,
 ) -> folium.Map:
-    m = folium.Map(location=[40.2, -3.8], zoom_start=6, tiles="OpenStreetMap")
+    m = folium.Map(location=[40.2, -3.8], zoom_start=6, tiles="CartoDB positron")
+    fg_nodos = folium.FeatureGroup(name="Nodos", show=True)
+    fg_aristas = folium.FeatureGroup(name="Aristas (carga de red)", show=False)
+    fg_rutas_plan = folium.FeatureGroup(name="Rutas planificadas (Dijkstra)", show=True)
+    fg_tray = folium.FeatureGroup(name="Trayectorias históricas", show=True)
+    fg_cam = folium.FeatureGroup(name="Camiones (posición)", show=True)
     pos: Dict[str, Tuple[float, float]] = {}
     for n in nodos:
         nid = str(n.get("id_nodo", ""))
@@ -132,7 +160,7 @@ def _crear_mapa_gemelo(
             fill_opacity=0.85,
             popup=folium.Popup(popup_texto, max_width=300),
             tooltip=nid,
-        ).add_to(m)
+        ).add_to(fg_nodos)
 
     retrasos = retrasos_tramos or {}
     for e in aristas:
@@ -170,7 +198,7 @@ def _crear_mapa_gemelo(
             weight=peso,
             opacity=0.7,
             tooltip=tooltip_texto,
-        ).add_to(m)
+        ).add_to(fg_aristas)
 
     def dibujar_ruta(ruta: List[str], color: str, label: str, mostrar_coste: bool = False) -> None:
         if len(ruta) < 2:
@@ -193,7 +221,7 @@ def _crear_mapa_gemelo(
                 tooltip_label = f"{label}\nRetraso total: ~{total_min:.0f} min"
                 if total_eur > 0:
                     tooltip_label += f" | Coste: {total_eur:.2f} €"
-        folium.PolyLine(pts, color=color, weight=4, opacity=0.85, tooltip=tooltip_label).add_to(m)
+        folium.PolyLine(pts, color=color, weight=4, opacity=0.85, tooltip=tooltip_label).add_to(fg_rutas_plan)
 
     if ruta1:
         dibujar_ruta(ruta1, "green", "Ruta referencia", mostrar_coste=True)
@@ -219,29 +247,40 @@ def _crear_mapa_gemelo(
                 tooltip_track += f"\n{puntos[0]['origen']} → {puntos[-1]['destino']}"
             tooltip_track += f"\n{puntos[0]['timestamp'][:19] if puntos[0].get('timestamp') else '?'} (inicio)"
             
-            folium.PolyLine(
-                pts_track,
-                color=color_track,
-                weight=3,
-                opacity=0.8,
-                tooltip=tooltip_track,
-                dash_array="5, 10" if cid == camion_seleccionado else None,
-            ).add_to(m)
-            
+            if animar_trayectorias and len(pts_track) >= 2:
+                AntPath(
+                    pts_track,
+                    color=color_track,
+                    weight=4,
+                    opacity=0.75,
+                    delay=500,
+                    dash_array=[8, 14],
+                    tooltip=tooltip_track,
+                ).add_to(fg_tray)
+            else:
+                folium.PolyLine(
+                    pts_track,
+                    color=color_track,
+                    weight=3,
+                    opacity=0.8,
+                    tooltip=tooltip_track,
+                    dash_array="5, 10" if cid == camion_seleccionado else None,
+                ).add_to(fg_tray)
+
             inicio = pts_track[0]
             fin = pts_track[-1]
-            
+
             folium.Marker(
                 inicio,
                 icon=folium.DivIcon(html=f'<div style="font-size:12px;color:{color_track}">▶ {cid}</div>'),
                 tooltip=f"{cid} - Inicio",
-            ).add_to(m)
-            
+            ).add_to(fg_tray)
+
             folium.Marker(
                 fin,
                 icon=folium.DivIcon(html=f'<div style="font-size:12px;color:{color_track}">■ {cid}</div>'),
                 tooltip=f"{cid} - Fin (actual)",
-            ).add_to(m)
+            ).add_to(fg_tray)
 
     for t in tracking:
         lat, lon = t.get("lat"), t.get("lon")
@@ -262,8 +301,14 @@ def _crear_mapa_gemelo(
             [float(lat), float(lon)],
             icon=folium.DivIcon(html=f'<div style="font-size:24px;color:{color_icono}" title="{tooltip_camion}">🚛</div>'),
             tooltip=tooltip_camion,
-        ).add_to(m)
+        ).add_to(fg_cam)
 
+    fg_aristas.add_to(m)
+    fg_rutas_plan.add_to(m)
+    fg_tray.add_to(m)
+    fg_nodos.add_to(m)
+    fg_cam.add_to(m)
+    folium.LayerControl(collapsed=False).add_to(m)
     return m
 
 
@@ -296,6 +341,15 @@ def render_gemelo_digital_tab() -> None:
 
     col_a, col_b = st.columns([2, 1])
     with col_a:
+        st.caption(
+            "**Mapa:** la capa **Aristas (carga de red)** está **desactivada** por defecto para evitar "
+            "saturar España de líneas; actívala en el **control de capas** del mapa si la necesitas."
+        )
+        anim_tray = st.checkbox(
+            "Animar trayectorias históricas (efecto movimiento, AntPath)",
+            value=False,
+            key="gemelo_anim_trayectorias",
+        )
         st.markdown("**Planificación de ruta (Dijkstra / NetworkX)**")
         id_camiones = [str(t.get("id_camion")) for t in tracking if t.get("id_camion")]
         
@@ -392,13 +446,30 @@ def render_gemelo_digital_tab() -> None:
                     retrasos_tramos=retrasos_tramos,
                     trayectorias=trayectorias,
                     camion_seleccionado=camion_seleccionado,
+                    animar_trayectorias=anim_tray,
                 )
             else:
                 st.warning("No hay ruta entre origen y destino con los pesos actuales.")
-                mapa = _crear_mapa_gemelo(nodos, aristas, tracking, retrasos_tramos=retrasos_tramos, trayectorias=trayectorias, camion_seleccionado=camion_seleccionado)
+                mapa = _crear_mapa_gemelo(
+                    nodos,
+                    aristas,
+                    tracking,
+                    retrasos_tramos=retrasos_tramos,
+                    trayectorias=trayectorias,
+                    camion_seleccionado=camion_seleccionado,
+                    animar_trayectorias=anim_tray,
+                )
         else:
             st.info("Selecciona origen y destino válidos en la red.")
-            mapa = _crear_mapa_gemelo(nodos, aristas, tracking, retrasos_tramos=retrasos_tramos, trayectorias=trayectorias, camion_seleccionado=camion_seleccionado)
+            mapa = _crear_mapa_gemelo(
+                nodos,
+                aristas,
+                tracking,
+                retrasos_tramos=retrasos_tramos,
+                trayectorias=trayectorias,
+                camion_seleccionado=camion_seleccionado,
+                animar_trayectorias=anim_tray,
+            )
 
         st_folium(mapa, width=None, height=520, returned_objects=[], key="folium_gemelo")
 
@@ -410,21 +481,29 @@ def render_gemelo_digital_tab() -> None:
                         df_hist = pd.DataFrame([
                             {
                                 "timestamp": p.get("timestamp", "")[:19] if p.get("timestamp") else "",
-                                "lat": p.get("lat"),
-                                "lon": p.get("lon"),
+                                "lat": _safe_float_coord(p.get("lat")),
+                                "lon": _safe_float_coord(p.get("lon")),
                                 "nodo": p.get("nodo_actual", ""),
                                 "progreso": f"{p.get('progreso_pct', 0):.1f}%",
                             }
                             for p in pts[:20]
                         ])
                         st.markdown(f"**{cid}** ({len(pts)} posiciones)")
-                        st.dataframe(df_hist, hide_index=True, use_container_width=True)
+                        st.dataframe(
+                            _dataframe_arrow_safe(df_hist),
+                            hide_index=True,
+                            width="stretch",
+                        )
 
     with col_b:
         st.markdown("**Hive — transporte_ingesta_real**")
         hive_rows = cargar_transporte_ingesta_real_hive()
         if hive_rows:
-            st.dataframe(hive_rows[:30], use_container_width=True)
+            st.dataframe(
+                _dataframe_arrow_safe(pd.DataFrame(hive_rows[:30])),
+                hide_index=True,
+                width="stretch",
+            )
         else:
             st.caption("Sin filas o tabla no creada (`sql/hive_gemelo_digital.hql`).")
 

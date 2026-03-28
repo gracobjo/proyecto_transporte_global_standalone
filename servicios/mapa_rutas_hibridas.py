@@ -24,20 +24,27 @@ def crear_mapa_planificacion_rutas(
     ruta_principal: Optional[Sequence[str]],
     alternativas: List[Tuple[List[str], str]],
     *,
-    mostrar_red_completa: bool = True,
+    mostrar_red_completa: bool = False,
     max_alternativas: int = 5,
-    zoom_start: int = 6,
+    zoom_start: int = 7,
 ) -> folium.Map:
     """
-    Capas (Leyenda en control de capas):
-    - Red completa: aristas grises (todas las conexiones definidas).
+    Capas (control de capas en el mapa):
+    - Red completa: aristas grises — **oculta por defecto** (telaraña sobre toda España).
     - Ruta principal: azul sólido.
     - Alternativas: tonos naranja/ámbar, trazo discontinuo.
+
+    Fondo claro (CartoDB Positron) para menos ruido visual que OSM estándar.
     """
     nodos = get_nodos()
-    m = folium.Map(location=[40.35, -3.7], zoom_start=zoom_start, tiles="OpenStreetMap")
+    m = folium.Map(
+        location=[40.35, -3.7],
+        zoom_start=zoom_start,
+        tiles="CartoDB positron",
+    )
 
-    fg_red = folium.FeatureGroup(name="Red: todas las conexiones", show=True)
+    # Capa desactivada por defecto: activar solo si el usuario quiere ver la malla completa.
+    fg_red = folium.FeatureGroup(name="Red: todas las conexiones (malla)", show=False)
     if mostrar_red_completa:
         vistos = set()
         for src, dst, _ in get_aristas():
@@ -51,9 +58,9 @@ def crear_mapa_planificacion_rutas(
             p2 = [nodos[dst]["lat"], nodos[dst]["lon"]]
             folium.PolyLine(
                 [p1, p2],
-                color="#94a3b8",
-                weight=2,
-                opacity=0.5,
+                color="#cbd5e1",
+                weight=1,
+                opacity=0.45,
                 tooltip=f"{src} ↔ {dst}",
             ).add_to(fg_red)
     fg_red.add_to(m)
@@ -120,4 +127,20 @@ def crear_mapa_planificacion_rutas(
     fg_alt.add_to(m)
 
     folium.LayerControl(collapsed=False).add_to(m)
+
+    # Acercar a la ruta (mejor UX que ver toda la península como telaraña).
+    if ruta_principal and len(ruta_principal) >= 2:
+        pts = _lineas_desde_ruta(nodos, ruta_principal)
+        if len(pts) >= 2:
+            lats = [p[0] for p in pts]
+            lons = [p[1] for p in pts]
+            pad = 0.35
+            m.fit_bounds(
+                [
+                    [min(lats) - pad, min(lons) - pad],
+                    [max(lats) + pad, max(lons) + pad],
+                ],
+                padding=(20, 20),
+            )
+
     return m

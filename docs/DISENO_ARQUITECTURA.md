@@ -49,6 +49,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 - **Señal real prioritaria**: la DGT pisa la simulación solo en nodos afectados, manteniendo continuidad operativa si el feed falla.
 - **Clima degradado controlado**: OpenWeather es opcional; cuando no hay clave válida o la respuesta no es usable, el sistema deriva clima operativo desde DATEX2 y conserva el mismo contrato JSON.
 - **Modo degradado controlado**: el DAG y el script standalone pueden continuar con caché local o solo simulación.
+- **Reconfiguración logística desacoplada**: los eventos de caída/recuperación se resuelven en un módulo específico (`procesamiento/reconfiguracion_grafo.py`) y persisten en Cassandra/Hive sin romper el pipeline KDD principal.
 - **Standalone-first**: menos fricción en desarrollo; compatible con salto a YARN.
 - **FAQ IA local**: soporte contextual sin dependencia de proveedores externos; base de conocimiento versionable.
 

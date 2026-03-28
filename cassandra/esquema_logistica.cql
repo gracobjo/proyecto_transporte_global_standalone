@@ -98,6 +98,44 @@ CREATE TABLE IF NOT EXISTS pagerank_nodos (
 );
 
 -- =============================================================================
+-- Tablas de reconfiguración logística en tiempo real
+-- estado_nodos / estado_rutas = fotografía actual del grafo operativo
+-- alertas_activas = alertas abiertas que aún no se han resuelto
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS estado_nodos (
+    id_nodo TEXT PRIMARY KEY,
+    status TEXT,
+    cause TEXT,
+    updated_at TIMESTAMP,
+    last_event TEXT
+);
+
+CREATE TABLE IF NOT EXISTS estado_rutas (
+    src TEXT,
+    dst TEXT,
+    status TEXT,
+    cause TEXT,
+    updated_at TIMESTAMP,
+    last_event TEXT,
+    manual_down BOOLEAN,
+    PRIMARY KEY (src, dst)
+);
+
+CREATE TABLE IF NOT EXISTS alertas_activas (
+    alerta_id TEXT PRIMARY KEY,
+    tipo_alerta TEXT,
+    entidad_id TEXT,
+    severidad TEXT,
+    mensaje TEXT,
+    causa TEXT,
+    timestamp_inicio TIMESTAMP,
+    timestamp_ultima_actualizacion TIMESTAMP,
+    estado TEXT,
+    ruta_original TEXT,
+    ruta_alternativa TEXT
+);
+
+-- =============================================================================
 -- Tabla: graph_anomalies - Anomalías detectadas por Graph AI (snapshots periódicos)
 -- Se particiona por bucket temporal (15 minutos) + metric_type para consultas por ventana.
 -- =============================================================================

@@ -306,7 +306,7 @@ def render_nifi_flujo_tab() -> None:
         st.info(runtime.get("error", "NiFi no está accesible ahora mismo."))
 
     st.markdown("**Diagrama del flujo operativo**")
-    st.graphviz_chart(_build_dot(runtime), use_container_width=True)
+    st.graphviz_chart(_build_dot(runtime), width="stretch")
 
     if runtime.get("ok"):
         with st.expander("Relaciones y colas actuales", expanded=False):

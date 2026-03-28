@@ -29,6 +29,8 @@ TABLA_CLIMA = "clima_historico"
 TABLA_RUTAS = "rutas_alternativas_historico"
 TABLA_AGG = "agg_estadisticas_diarias"
 TABLA_TRANSPORTE = HIVE_TABLE_TRANSPORTE_HIST
+TABLA_ALERTAS_HIST = "alertas_historicas"
+TABLA_EVENTOS_GRAFO = "eventos_grafo"
 HIVE_COMPAT_BASE = os.environ.get("SIMLOG_HIVE_COMPAT_BASE", "/user/hadoop/simlog_hive")
 CSV_SERDE = "org.apache.hadoop.hive.serde2.OpenCSVSerde"
 HDFS_DEFAULT_FS = os.environ.get(
@@ -46,6 +48,8 @@ TABLE_PATHS = {
     TABLA_RUTAS: f"{HIVE_COMPAT_BASE}/{TABLA_RUTAS}",
     TABLA_AGG: f"{HIVE_COMPAT_BASE}/{TABLA_AGG}",
     TABLA_TRANSPORTE: f"{HIVE_COMPAT_BASE}/{TABLA_TRANSPORTE}",
+    TABLA_ALERTAS_HIST: f"{HIVE_COMPAT_BASE}/{TABLA_ALERTAS_HIST}",
+    TABLA_EVENTOS_GRAFO: f"{HIVE_COMPAT_BASE}/{TABLA_EVENTOS_GRAFO}",
 }
 
 TABLE_SCHEMAS: Dict[str, List[Tuple[str, str]]] = {
@@ -151,6 +155,34 @@ TABLE_SCHEMAS: Dict[str, List[Tuple[str, str]]] = {
         ("anio_part", "INT"),
         ("mes_part", "INT"),
     ],
+    TABLA_ALERTAS_HIST: [
+        ("timestamp_inicio", "STRING"),
+        ("timestamp_fin", "STRING"),
+        ("alerta_id", "STRING"),
+        ("tipo_alerta", "STRING"),
+        ("entidad_id", "STRING"),
+        ("severidad", "STRING"),
+        ("causa", "STRING"),
+        ("mensaje", "STRING"),
+        ("estado_resolucion", "STRING"),
+        ("duracion_segundos", "INT"),
+        ("ruta_original", "STRING"),
+        ("ruta_alternativa", "STRING"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
+    TABLA_EVENTOS_GRAFO: [
+        ("timestamp", "STRING"),
+        ("tipo_evento", "STRING"),
+        ("entidad_tipo", "STRING"),
+        ("entidad_id", "STRING"),
+        ("estado_anterior", "STRING"),
+        ("estado_nuevo", "STRING"),
+        ("causa", "STRING"),
+        ("detalles", "STRING"),
+        ("anio_part", "INT"),
+        ("mes_part", "INT"),
+    ],
 }
 
 
@@ -159,6 +191,15 @@ def _safe_float(value, default: float = 0.0) -> float:
         if value is None or value == "":
             return default
         return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
     except (TypeError, ValueError):
         return default
 
@@ -455,17 +496,31 @@ def persistir_clima_historico(spark: SparkSession, datos: Dict) -> None:
             "mes": componentes["mes"],
             "dia": componentes["dia"],
             "ciudad": clima.get("ciudad", "Unknown"),
-            "temperatura": clima.get("temperatura", clima.get("temp")),
-            "humedad": clima.get("humedad"),
+            "temperatura": _safe_float(clima.get("temperatura", clima.get("temp"))),
+            "humedad": _safe_int(clima.get("humedad")),
             "descripcion": clima.get("descripcion", ""),
-            "visibilidad": clima.get("visibilidad") or 10000,
+            "visibilidad": _safe_int(clima.get("visibilidad"), 10000),
             "estado_carretera": estado_carretera,
             "anio_part": anio,
             "mes_part": mes
         })
     
     if registros:
-        df = spark.createDataFrame(registros)
+        schema = StructType([
+            StructField("timestamp", StringType()),
+            StructField("anio", IntegerType()),
+            StructField("mes", IntegerType()),
+            StructField("dia", IntegerType()),
+            StructField("ciudad", StringType()),
+            StructField("temperatura", DoubleType()),
+            StructField("humedad", IntegerType()),
+            StructField("descripcion", StringType()),
+            StructField("visibilidad", IntegerType()),
+            StructField("estado_carretera", StringType()),
+            StructField("anio_part", IntegerType()),
+            StructField("mes_part", IntegerType()),
+        ])
+        df = spark.createDataFrame(registros, schema=schema)
         _append_external_csv(df, TABLA_CLIMA)
         print(f"Insertados {len(registros)} registros climáticos en {TABLA_CLIMA}")
 
@@ -605,6 +660,65 @@ def persistir_rutas_alternativas(
         print(f"Insertadas {len(registros)} rutas alternativas en {TABLA_RUTAS}")
 
 
+def persistir_alertas_historicas(spark: SparkSession, datos: Dict) -> None:
+    """Persiste alertas resueltas de reconfiguración en Hive."""
+    alertas = datos.get("alertas_historicas_resueltas") or []
+    if not alertas:
+        return
+    registros = []
+    for alerta in alertas:
+        componentes = parsear_timestamp(alerta.get("timestamp_fin") or alerta.get("timestamp_inicio") or datetime.now().isoformat())
+        registros.append(
+            {
+                "timestamp_inicio": alerta.get("timestamp_inicio", ""),
+                "timestamp_fin": alerta.get("timestamp_fin", ""),
+                "alerta_id": alerta.get("alerta_id", ""),
+                "tipo_alerta": alerta.get("tipo_alerta", ""),
+                "entidad_id": alerta.get("entidad_id", ""),
+                "severidad": alerta.get("severidad", ""),
+                "causa": alerta.get("causa", ""),
+                "mensaje": alerta.get("mensaje", ""),
+                "estado_resolucion": alerta.get("estado_resolucion", "RESUELTA"),
+                "duracion_segundos": int(alerta.get("duracion_segundos", 0) or 0),
+                "ruta_original": alerta.get("ruta_original", ""),
+                "ruta_alternativa": alerta.get("ruta_alternativa", ""),
+                "anio_part": componentes["anio"],
+                "mes_part": componentes["mes"],
+            }
+        )
+    df = spark.createDataFrame(registros)
+    _append_external_csv(df, TABLA_ALERTAS_HIST)
+    print(f"Insertadas {len(registros)} alertas históricas en {TABLA_ALERTAS_HIST}")
+
+
+def persistir_eventos_grafo_historico(spark: SparkSession, datos: Dict) -> None:
+    """Persiste cambios del grafo de reconfiguración en Hive."""
+    eventos = datos.get("eventos_grafo") or []
+    if not eventos:
+        return
+    registros = []
+    for evento in eventos:
+        componentes = parsear_timestamp(evento.get("timestamp") or datetime.now().isoformat())
+        detalles = evento.get("detalles", {})
+        registros.append(
+            {
+                "timestamp": evento.get("timestamp", ""),
+                "tipo_evento": evento.get("tipo_evento", ""),
+                "entidad_tipo": evento.get("entidad_tipo", ""),
+                "entidad_id": evento.get("entidad_id", ""),
+                "estado_anterior": evento.get("estado_anterior", ""),
+                "estado_nuevo": evento.get("estado_nuevo", ""),
+                "causa": evento.get("causa", ""),
+                "detalles": str(detalles),
+                "anio_part": componentes["anio"],
+                "mes_part": componentes["mes"],
+            }
+        )
+    df = spark.createDataFrame(registros)
+    _append_external_csv(df, TABLA_EVENTOS_GRAFO)
+    print(f"Insertados {len(registros)} eventos de grafo en {TABLA_EVENTOS_GRAFO}")
+
+
 def calcular_estadisticas_diarias(spark: SparkSession) -> None:
     """Calcula agregaciones diarias leyendo el histórico externo ya escrito en HDFS."""
     path = _hdfs_uri(TABLE_PATHS[TABLA_EVENTOS])
@@ -667,6 +781,12 @@ def ejecutar_persistencia_hive(
     
     print("Persistiendo rutas alternativas...")
     persistir_rutas_alternativas(spark, datos, rutas_alternativas)
+
+    print("Persistiendo alertas históricas...")
+    persistir_alertas_historicas(spark, datos)
+
+    print("Persistiendo eventos de grafo...")
+    persistir_eventos_grafo_historico(spark, datos)
     
     print("Calculando estadísticas diarias...")
     calcular_estadisticas_diarias(spark)

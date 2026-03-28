@@ -29,6 +29,8 @@ PORT_CASSANDRA = int(os.environ.get("SIMLOG_PORT_CASSANDRA", "9042"))
 PORT_HIVE = int(os.environ.get("SIMLOG_PORT_HIVE", "10000"))
 PORT_HIVE_METASTORE = int(os.environ.get("SIMLOG_PORT_HIVE_METASTORE", "9083"))
 PORT_SPARK_MASTER = int(os.environ.get("SIMLOG_PORT_SPARK_MASTER", "7077"))
+# UI HTTP del Spark Standalone Master (no confundir con 7077, que es el RPC del master).
+PORT_SPARK_MASTER_UI = int(os.environ.get("SIMLOG_PORT_SPARK_MASTER_UI", "8080"))
 PORT_AIRFLOW = int(os.environ.get("SIMLOG_PORT_AIRFLOW", "8088"))
 PORT_API = int(os.environ.get("SIMLOG_PORT_API", "8090"))
 PORT_FAQ_IA = int(os.environ.get("SIMLOG_PORT_FAQ_IA", "8091"))
@@ -364,8 +366,9 @@ def comprobar_spark() -> Dict[str, Any]:
         "nombre": "Spark (master standalone)",
         "activo": ok_master,
         "detalle": (
-            f"Puerto master {PORT_SPARK_MASTER}: {'activo' if ok_master else 'inactivo'}. "
-            f"Jobs `local[*]` no requieren daemon. Scripts en {sh}: {'sí' if has_scripts else 'no'}"
+            f"RPC {PORT_SPARK_MASTER}: {'activo' if ok_master else 'inactivo'} · UI HTTP :{PORT_SPARK_MASTER_UI}. "
+            f"Master «local» por defecto en código → 0 apps/workers en el master. "
+            f"SPARK_HOME scripts: {'sí' if has_scripts else 'no'}"
         ),
         "puerto": PORT_SPARK_MASTER,
     }
@@ -581,7 +584,11 @@ def iniciar_spark() -> str:
     code, _, err = _run(["bash", str(sm)], cwd=sh, timeout=60)
     if code != 0 and "already running" not in (err or "").lower():
         return f"Spark master: {err[-400:] if err else 'error'}"
-    return "Spark Master: arranque lanzado (comprueba puerto 7077)."
+    return (
+        f"Spark Master: arranque lanzado (RPC {PORT_SPARK_MASTER}, UI ~{PORT_SPARK_MASTER_UI}). "
+        "Sin `start-worker.sh` la UI muestra 0 workers. "
+        "Los jobs con SPARK_MASTER=local no se listan en el master."
+    )
 
 
 def iniciar_hive() -> str:
