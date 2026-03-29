@@ -45,19 +45,21 @@ SQL_CARRETERAS_CORTADAS = (
 
 
 def _sql_historial_hive(id_camion: str) -> str:
-    """Hive: histórico de transporte (robusto ante `camiones` string/no estructurado)."""
+    """
+    Hive: histórico en `transporte_ingesta_completa` (columnas reales: id_camion, ruta, …).
+    La tabla **no** tiene columna `camiones` (eso es JSON de ingesta, no Hive).
+    """
     custom = os.environ.get("SIMLOG_HIVE_SQL_HISTORIAL_CAMION", "").strip()
     if custom:
         return custom.replace("{id_camion}", id_camion).replace("{db}", HIVE_DB or "logistica_espana")
     db = HIVE_DB or "logistica_espana"
     table = HIVE_TABLE_TRANSPORTE_HIST
-    # En varios despliegues `camiones` llega como STRING (no array<struct>), por lo que
-    # el filtro por `id_camion` no siempre es fiable. Priorizamos devolver histórico util.
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "", (id_camion or "camion_1").strip()) or "camion_1"
     return (
-        "SELECT t.`timestamp`, t.camiones "
+        "SELECT t.`timestamp`, t.id_camion, t.origen, t.destino, t.nodo_actual, "
+        "t.estado_ruta, t.motivo_retraso, t.ruta, t.progreso_pct, t.lat, t.lon, t.hub_actual "
         f"FROM {db}.{table} t "
-        "WHERE t.camiones IS NOT NULL "
-        f"AND (lower(CAST(t.camiones AS STRING)) LIKE '%{id_camion.lower()}%' OR 1=1) "
+        f"WHERE t.id_camion = '{safe}' "
         "LIMIT 200"
     )
 
@@ -126,7 +128,7 @@ def resolver_intencion_gestor(texto: str) -> Optional[Tuple[str, str, str]]:
             (
                 "SELECT id_nodo, tipo, estado, motivo_retraso, clima_actual, fecha_proceso "
                 f"FROM {db}.{th} "
-                "WHERE fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS) "
+                "WHERE unix_timestamp(fecha_proceso) >= unix_timestamp() - 86400 "
                 "LIMIT 300"
             ),
             "historico_incidencias_24h",
@@ -140,7 +142,7 @@ def resolver_intencion_gestor(texto: str) -> Optional[Tuple[str, str, str]]:
             (
                 "SELECT id_nodo, estado, fecha_proceso "
                 f"FROM {db}.{th} "
-                "WHERE fecha_proceso >= (current_timestamp() - INTERVAL 24 HOURS) "
+                "WHERE unix_timestamp(fecha_proceso) >= unix_timestamp() - 86400 "
                 "LIMIT 400"
             ),
             "historico_evolucion_nodos",

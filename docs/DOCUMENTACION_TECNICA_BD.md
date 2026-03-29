@@ -10,6 +10,8 @@
 6. [Archivos de Configuración](#6-archivos-de-configuración)
 7. [Checklist de Implementación](#7-checklist-de-implementación)
 
+**Anexo:** [Hive — correcciones del cuadro de mando](HIVE_CUADRO_MANDO_CORRECCIONES.md) (configuración unificada, JOIN clima/transporte, normalización de texto, caché).
+
 ---
 
 ## 1. Arquitectura de Datos
@@ -150,6 +152,11 @@ Anomalías detectadas por Graph AI.
 
 ### Base de datos
 - **Nombre**: `logistica_espana` (configurable via `HIVE_DB`)
+
+### Almacenamiento y particiones
+- Tablas externas en **Parquet** con compresión **Snappy**, particionadas por `anio_part` y `mes_part` (escritura vía Spark en `persistencia_hive.py`). Tras cada escritura se ejecuta `MSCK REPAIR TABLE` para registrar particiones nuevas en el metastore.
+- Las consultas del cuadro de mando filtran por partición cuando aplica (`SIMLOG_HIVE_PARTITION_PRUNING`, fragmentos `_PM` / `_P7` en `consultas_cuadro_mando.py`) para reducir escaneos.
+- **Migración desde CSV antiguo:** `export SIMLOG_HIVE_PARQUET_MIGRATION=1` antes de `inicializar_esquema_hive()` (o `DROP TABLE` manual) y eliminar ficheros huérfanos en HDFS si hace falta.
 
 ### Tablas Creadas por persistencia_hive.py
 
@@ -292,7 +299,7 @@ Agregaciones diarias de eventos.
 
 | Categoría | Icono | Consultas |
 |-----------|-------|----------|
-| **Diagnóstico** | 🔧 | diag_smoke_hive, tablas_bd |
+| **Diagnóstico** | 🔧 | diag_smoke_hive, tablas_bd, historico_nodos_muestra/conteo, nodos_maestro_muestra/conteo, gemelo_red_nodos, gemelo_red_aristas |
 | **Eventos Histórico** | 📋 | eventos_historico_muestra, eventos_nodos_24h, eventos_bloqueos_24h, eventos_evolucion_dia |
 | **Clima Histórico** | 🌤️ | clima_historico_muestra, clima_historico_hoy, clima_estado_carretera |
 | **Tracking Camiones** | 🚛 | tracking_historico_muestra, tracking_camion_especifico, tracking_ultima_posicion |
@@ -301,72 +308,29 @@ Agregaciones diarias de eventos.
 | **Agregaciones Diarias** | 📊 | agg_estadisticas_diarias, agg_ultima_semana |
 | **Gestor** | 👤 | gestor_eventos_por_hub, gestor_clima_afecta_transporte, gestor_incidencias_resumen, gestor_pagerank_historico |
 
-**Total: 26 consultas Hive**
+**Total: 32 consultas Hive** (aprox.; ver `HIVE_CONSULTAS` en `servicios/consultas_cuadro_mando.py`)
 
 ---
 
 ## 5. Problemas Corregidos en Hive
 
-### 5.1 Problemas Identificados
+La documentación detallada de las **correcciones recientes** (configuración unificada de tablas, whitelist gemelo, JOIN clima/transporte, normalización de texto `_hive_txt_norm`, caché PyHive, UI) está en **[HIVE_CUADRO_MANDO_CORRECCIONES.md](HIVE_CUADRO_MANDO_CORRECCIONES.md)**.
 
-| # | Problema | Causa |
-|---|---------|-------|
-| 1 | Consultas usaban base de datos `logistica_espana` pero el esquema SQL referencia `logistica_analytics` | Inconsistencia de nombres |
-| 2 | Tabla `historico_nodos` no existía | Código esperaba una tabla que Spark no creaba |
-| 3 | Tabla `nodos_maestro` no existía | Código esperaba una tabla que Spark no creaba |
-| 4 | Tabla `red_gemelo_nodos` no existía | Tabla inventada, no se creaba |
-| 5 | Tabla `red_gemelo_aristas` no existía | Tabla inventada, no se creaba |
-| 6 | Consultas Hive usaban el identificador `timestamp` sin citar | En Hive 3+ `timestamp` es palabra reservada → `ParseException` cerca de `timestamp`, `ciudad` |
-| 7 | `transporte_ingesta_completa` en código real usa `id_camion`, `lat`/`lon`, `hub_actual` (no `camion_id` ni solo `lat_actual`) | Alinear consultas con `persistencia_hive.py` → `TABLE_SCHEMAS` |
-| 8 | `tracking_camiones_historico` usa `id_camion`, columna temporal `timestamp`, posición `lat_actual`/`lon_actual` | No usar `camion_id` ni `timestamp_posicion` salvo que el DDL cambie |
-| 9 | Consultas de ventana temporal usaban `fecha_proceso` (inexistente en tablas históricas) | Sustituir por la columna `timestamp` (citada como `` `timestamp` `` en HiveQL) |
-| 10 | Documentación previa contradecía el esquema real (filas 6–8 antiguas) | Fuente de verdad: `persistencia_hive.py` (`TABLE_SCHEMAS`) |
+### 5.1 Incidencias típicas (histórico)
 
-### 5.2 Soluciones Aplicadas
+| # | Problema | Causa / remedio |
+|---|----------|-----------------|
+| 1 | Base de datos distinta en ejemplos | Usar `HIVE_DB` (por defecto `logistica_espana`). |
+| 2 | `` `timestamp` `` sin citar | En Hive 3+ es palabra reservada; usar `` `timestamp` `` en HiveQL. |
+| 3 | Columnas inventadas (`camiones`, `fecha_proceso` en tablas históricas, etc.) | Alinear con `persistencia_hive.py` → `TABLE_SCHEMAS`. |
+| 4 | Tabla de transporte distinta entre Spark y UI | Nombre unificado: `HIVE_TABLE_TRANSPORTE_HIST` / `SIMLOG_HIVE_TABLA_TRANSPORTE`. |
+| 5 | JOIN clima–transporte vacío | No igualar solo `timestamp` STRING entre tablas; alinear por fecha y `ciudad`/`hub_actual` (ver anexo). |
+| 6 | Comparaciones de texto rígidas (`Optimo`, `En ruta`) | Usar expresiones normalizadas en `consultas_cuadro_mando.py` (`_hive_txt_norm`). |
 
-1. **Corregida la base de datos**: Se usa `logistica_espana` (donde Spark escribe)
+### 5.2 Tablas opcionales y gemelo
 
-2. **Eliminadas tablas inexistentes**:
-   - `historico_nodos` → usar `eventos_historico`
-   - `nodos_maestro` → no existe equivalente, eliminada
-   - `red_gemelo_nodos` → eliminada
-   - `red_gemelo_aristas` → eliminada
-
-3. **Corregidos nombres de tablas**:
-   - `historico_nodos` → `eventos_historico`
-   - `transporte_ingesta_completa` → existente y correcta
-
-4. **Corregidos nombres de campos**:
-   - `id_camion` → `camion_id` en tracking
-   - `timestamp` → `timestamp_posicion` en tracking
-   - `lat`/`lon` → `lat_actual`/`lon_actual` en tracking
-   - `fecha_proceso` → `timestamp` en eventos histórico
-
-5. **Reescritas todas las consultas** para usar las tablas y campos reales:
-   - `eventos_historico`
-   - `clima_historico`
-   - `tracking_camiones_historico`
-   - `transporte_ingesta_completa`
-   - `rutas_alternativas_historico`
-   - `agg_estadisticas_diarias`
-
-6. **Añadidas 24 nuevas consultas** útiles para el gestor
-
-### 5.3 Consultas Eliminadas (7)
-
-- `historico_nodos_muestra`
-- `historico_nodos_conteo`
-- `nodos_maestro`
-- `nodos_maestro_conteo`
-- `gemelo_red_nodos`
-- `gemelo_red_aristas`
-- `gestor_historico_incidencias_24h`
-- `gestor_historico_evolucion_nodos_24h`
-- `historico_nodos_muestra_24h`
-- `severidad_resumen_24h`
-- `diag_fecha_proceso_24h`
-- `riesgo_hub_24h`
-- `top_causas_24h`
+- **`historico_nodos`**, **`nodos_maestro`**: nombres configurables (`SIMLOG_HIVE_TABLE_HISTORICO_NODOS`, `SIMLOG_HIVE_TABLE_NODOS_MAESTRO`); deben existir en el clúster si se usan las consultas de diagnóstico.
+- **`red_gemelo_nodos`**, **`red_gemelo_aristas`**: creadas con el flujo HDFS + DDL de `procesamiento/generar_red_gemelo_digital.py`; alimentan el gemelo digital y la API.
 
 ---
 
@@ -389,6 +353,7 @@ Agregaciones diarias de eventos.
 |---------|-------------|
 | `servicios/consultas_cuadro_mando.py` | Consultas Cassandra y Hive parametrizadas |
 | `servicios/cuadro_mando_ui.py` | UI de consultas en Streamlit |
+| `docs/HIVE_CUADRO_MANDO_CORRECCIONES.md` | Anexo: correcciones Hive del cuadro de mando y variables |
 
 ### 6.3 Variables de Entorno Relacionadas
 
@@ -400,8 +365,14 @@ Agregaciones diarias de eventos.
 | `HIVE_SERVER` | Host:puerto HiveServer2 | 127.0.0.1:10000 |
 | `HIVE_JDBC_URL` | URL JDBC de Hive | jdbc:hive2://127.0.0.1:10000 |
 | `SIMLOG_ENABLE_HIVE` | Habilitar persistencia Hive | 0 (deshabilitado) |
-| `HIVE_QUERY_TIMEOUT_SEC` | Timeout de consultas Hive | 300 |
+| `HIVE_QUERY_TIMEOUT_SEC` | Timeout de consultas Hive (PyHive) | 600 (por defecto en código) |
 | `SIMLOG_HIVE_COMPAT_BASE` | Path HDFS para tablas Hive | /user/hadoop/simlog_hive |
+| `SIMLOG_HIVE_PARQUET_MIGRATION` | Forzar `DROP`+recreate al pasar de CSV a Parquet particionado | 0 |
+| `SIMLOG_HIVE_PARTITION_PRUNING` | Añadir filtros `anio_part`/`mes_part` en consultas Hive de la UI | 1 |
+| `SIMLOG_HIVE_TABLA_TRANSPORTE` | Nombre de la tabla Hive de transporte plano | `transporte_ingesta_completa` |
+| `SIMLOG_HIVE_TABLE_TRACKING_HIST` | Tabla de tracking histórico en Hive | `tracking_camiones_historico` |
+| `SIMLOG_HIVE_TABLE_HISTORICO_NODOS` / `SIMLOG_HIVE_TABLE_NODOS_MAESTRO` | Diagnóstico cuadro de mando | `historico_nodos` / `nodos_maestro` |
+| `SIMLOG_HIVE_TABLE_RED_GEMELO_NODOS` / `..._ARISTAS` | Red gemelo en Hive | `red_gemelo_nodos` / `red_gemelo_aristas` |
 
 ---
 

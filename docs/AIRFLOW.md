@@ -64,13 +64,13 @@ La cadena se dispara desde `simlog_kdd_00_infra` mediante `TriggerDagRunOperator
 
 ### Pipeline periodico
 
-- `dag_maestro_smart_grid`: cada 15 minutos verifica servicios base y ejecuta `ingesta_kdd.py` -> `procesamiento/procesamiento_grafos.py`.
+- `simlog_maestro` (`orquestacion/dag_simlog_maestro.py`): cada 15 minutos verifica servicios base y ejecuta `ingesta_kdd.py` → `procesamiento/procesamiento_grafos.py`.
 
 ## Flujo recomendado sin Streamlit
 
 1. Trigger manual de `dag_arranque_servicios_smart_grid`.
 2. Trigger manual de `simlog_kdd_00_infra` para ejecutar todo el ciclo KDD por fases.
-3. Opcionalmente, despausar `dag_maestro_smart_grid` para ciclo continuo cada 15 minutos.
+3. Opcionalmente, despausar `simlog_maestro` para ciclo continuo cada 15 minutos.
 4. Al terminar una demo, trigger de `dag_parar_servicios_smart_grid`.
 
 ## Comandos utiles

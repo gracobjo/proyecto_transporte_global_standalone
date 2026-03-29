@@ -670,8 +670,21 @@ def main() -> None:
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if code == 0:
                 st.session_state.timeline.append(f"{ts} — Procesamiento OK")
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit — procesamiento Spark",
+                    resultado="OK",
+                    detalle="procesamiento_grafos ejecutado desde la barra lateral (fases 3–5 KDD).",
+                )
                 st.success("Procesamiento terminado.")
             else:
+                registrar_prueba_ingesta(
+                    canal="Frontend Streamlit",
+                    ejecutor="Sidebar Streamlit — procesamiento Spark",
+                    resultado="FAIL",
+                    detalle=f"Procesamiento Spark terminó con código {code}.",
+                    observaciones=(err[-1000:] or out[-1000:]),
+                )
                 st.error(f"Código {code}")
                 st.code(err[-2000:] or out[-2000:])
             st.session_state.last_proc_out = out

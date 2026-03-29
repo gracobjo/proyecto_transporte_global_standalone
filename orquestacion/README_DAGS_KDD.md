@@ -5,7 +5,8 @@
 | Fichero | Descripción |
 |---------|-------------|
 | **`dag_simlog_kdd_fases.py`** | **Siete DAGs** en un solo archivo: fases 0, 1–5 y 99. Cadena secuencial con `TriggerDagRunOperator`. |
-| `dag_maestro.py` | Pipeline clásico cada 15 min: ingesta + `procesamiento/procesamiento_grafos.py` (HDFS→Spark→Cassandra/Hive con `SIMLOG_ENABLE_HIVE`). |
+| `dag_maestro.py` | Pipeline clásico cada 15 min (`dag_id=simlog_pipeline_maestro`): `python -m ingesta.ingesta_kdd` + Spark. |
+| **`dag_simlog_maestro.py`** | Mismo espíritu que `dag_maestro.py`, con **`dag_id=simlog_maestro`** y prefijo `simlog_` en la UI; llama a `ingesta_kdd.py` en raíz + `procesamiento_grafos.py`. |
 | `dag_arranque_servicios.py` | Solo arranque de servicios (manual). La fase 0 del flujo KDD también arranca servicios. |
 
 ## Secuencia
@@ -33,6 +34,24 @@ pandoc informe_*.md -o informe.pdf --pdf-engine=xelatex
 ```
 
 > La carpeta `reports/kdd/` está en `.gitignore`.
+
+## DAG maestro `simlog_maestro` (ingesta + Spark)
+
+El fichero canónico está en el repo: **`orquestacion/dag_simlog_maestro.py`** (`dag_id=simlog_maestro`). No mantener una copia editada solo bajo `~/airflow/dags/`.
+
+Despliegue recomendado (un symlink):
+
+```bash
+mkdir -p "$AIRFLOW_HOME/dags/simlog"
+ln -sf /ruta/al/proyecto/orquestacion/dag_simlog_maestro.py \
+       "$AIRFLOW_HOME/dags/simlog/dag_simlog_maestro.py"
+```
+
+Python resuelve el symlink: la raíz del proyecto se obtiene desde `orquestacion/`. Si en tu instalación copias el `.py` a otra ruta sin symlink, define **`SIMLOG_PROJECT_ROOT`** apuntando a la raíz del repositorio.
+
+Hive en Spark: la tarea de procesamiento exporta **`SIMLOG_ENABLE_HIVE=1`**. Timeout configurable: **`SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC`** (por defecto 900).
+
+> Otro DAG “maestro” en el mismo repo: **`dag_maestro.py`** (`dag_id=simlog_pipeline_maestro`), con `python -m ingesta.ingesta_kdd` y mismas convenciones; elige uno u otro según despliegue.
 
 ## Despliegue en Airflow
 

@@ -41,7 +41,7 @@ Documento funcional para la plataforma en modo standalone.
 - **Precondiciones:** HDFS, Kafka, Cassandra (y opcionalmente Hive) activos.
 - **Flujo:** ingesta genera JSON → Kafka + HDFS → Spark procesa → Cassandra + Hive.
 - **Variante real:** si DATEX2 DGT está disponible, la ingesta añade incidencias reales; si OpenWeather falla, el clima por hub se reconstruye desde DGT; si la DGT también falla, usa caché o sigue solo con simulación.
-- **Disparadores:** Streamlit “Paso siguiente”, Airflow `dag_maestro_smart_grid`, DAGs `simlog_kdd_*`, NiFi.
+- **Disparadores:** Streamlit “Paso siguiente”, Airflow `simlog_maestro`, DAGs `simlog_kdd_*`, NiFi.
 
 ### CU-02 — Supervisar el stack
 
@@ -70,7 +70,7 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-07 — Airflow
 
 - **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
-- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `dag_maestro_smart_grid`.
+- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`.
 
 ### CU-08 — NiFi
 

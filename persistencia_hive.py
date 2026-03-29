@@ -20,11 +20,12 @@ from config import (
     HIVE_CONF_DIR,
     HIVE_DB,
     HIVE_METASTORE_URIS,
+    HIVE_TABLE_TRACKING_HIST,
     HIVE_TABLE_TRANSPORTE_HIST,
 )
 
 TABLA_EVENTOS = "eventos_historico"
-TABLA_CAMIONES = "tracking_camiones_historico"
+TABLA_CAMIONES = HIVE_TABLE_TRACKING_HIST
 TABLA_CLIMA = "clima_historico"
 TABLA_RUTAS = "rutas_alternativas_historico"
 TABLA_AGG = "agg_estadisticas_diarias"
@@ -32,7 +33,9 @@ TABLA_TRANSPORTE = HIVE_TABLE_TRANSPORTE_HIST
 TABLA_ALERTAS_HIST = "alertas_historicas"
 TABLA_EVENTOS_GRAFO = "eventos_grafo"
 HIVE_COMPAT_BASE = os.environ.get("SIMLOG_HIVE_COMPAT_BASE", "/user/hadoop/simlog_hive")
-CSV_SERDE = "org.apache.hadoop.hive.serde2.OpenCSVSerde"
+# Escritura: Parquet + Snappy, particionado por anio_part/mes_part (ver _append_external_parquet).
+# Migración desde CSV antiguo: SIMLOG_HIVE_PARQUET_MIGRATION=1 y limpiar rutas HDFS o DROP+recreate.
+PARTITION_KEYS = ("anio_part", "mes_part")
 HDFS_DEFAULT_FS = os.environ.get(
     "SIMLOG_HDFS_DEFAULT_FS",
     os.environ.get(
@@ -295,6 +298,21 @@ def _ejecutar_hive_ddl(sql: str, *, database: str | None = None) -> None:
         conn.close()
 
 
+def _cols_datos(tabla: str) -> List[Tuple[str, str]]:
+    """Columnas de datos (excluye claves de partición Hive)."""
+    return [(n, t) for n, t in TABLE_SCHEMAS[tabla] if n not in PARTITION_KEYS]
+
+
+def _hive_sql_type(t: str) -> str:
+    u = (t or "STRING").strip().upper()
+    return {
+        "STRING": "string",
+        "INT": "int",
+        "DOUBLE": "double",
+        "BOOLEAN": "boolean",
+    }.get(u, u.lower())
+
+
 def _columnas_actuales(tabla: str) -> List[str]:
     conn = _hive_connect(database=HIVE_DB)
     cur = conn.cursor()
@@ -314,7 +332,8 @@ def _columnas_actuales(tabla: str) -> List[str]:
         conn.close()
 
 
-def _asegurar_tabla_externa_csv(tabla: str, *, replace: bool = False) -> None:
+def _asegurar_tabla_externa_parquet(tabla: str, *, replace: bool = False) -> None:
+    """Tabla externa Hive: Parquet, particionada por anio_part, mes_part."""
     cols = TABLE_SCHEMAS[tabla]
     location = _hdfs_uri(TABLE_PATHS[tabla])
     expected_cols = [name for name, _ in cols]
@@ -322,33 +341,39 @@ def _asegurar_tabla_externa_csv(tabla: str, *, replace: bool = False) -> None:
     if replace or (current_cols and current_cols != expected_cols):
         _ejecutar_hive_ddl(f"DROP TABLE IF EXISTS {HIVE_DB}.{tabla}", database=HIVE_DB)
 
-    cols_sql = ",\n            ".join(f"`{name}` {dtype}" for name, dtype in cols)
+    cols_datos = _cols_datos(tabla)
+    cols_sql = ",\n            ".join(
+        f"`{name}` {_hive_sql_type(dtype)}" for name, dtype in cols_datos
+    )
     ddl = f"""
         CREATE EXTERNAL TABLE IF NOT EXISTS {HIVE_DB}.{tabla} (
             {cols_sql}
         )
-        ROW FORMAT SERDE '{CSV_SERDE}'
-        WITH SERDEPROPERTIES (
-            "separatorChar"=",",
-            "quoteChar"="\\"",
-            "escapeChar"="\\\\"
-        )
-        STORED AS TEXTFILE
+        PARTITIONED BY (`anio_part` int, `mes_part` int)
+        STORED AS PARQUET
         LOCATION '{location}'
-        TBLPROPERTIES ('skip.header.line.count'='1')
     """
     _ejecutar_hive_ddl(ddl, database=HIVE_DB)
 
 
-def _append_external_csv(df, tabla: str) -> None:
+def _reparar_particiones_hive(tabla: str) -> None:
+    try:
+        _ejecutar_hive_ddl(f"MSCK REPAIR TABLE {HIVE_DB}.{tabla}", database=HIVE_DB)
+    except Exception as exc:
+        print(f"[Hive] MSCK REPAIR TABLE {tabla}: {exc}")
+
+
+def _append_external_parquet(df, tabla: str) -> None:
     ordered_cols = [name for name, _ in TABLE_SCHEMAS[tabla]]
+    path = _hdfs_uri(TABLE_PATHS[tabla])
     (
         df.select(*ordered_cols)
-        .coalesce(1)
         .write.mode("append")
-        .option("header", "true")
-        .csv(_hdfs_uri(TABLE_PATHS[tabla]))
+        .partitionBy("anio_part", "mes_part")
+        .option("compression", "snappy")
+        .parquet(path)
     )
+    _reparar_particiones_hive(tabla)
 
 
 def crear_spark_hive(app_name: str = "HivePersistence") -> SparkSession:
@@ -363,14 +388,24 @@ def crear_spark_hive(app_name: str = "HivePersistence") -> SparkSession:
         .config("spark.sql.shuffle.partitions", "2") \
         .config("spark.sql.warehouse.dir", "/user/hive/warehouse") \
         .config("spark.cassandra.connection.host", "127.0.0.1") \
+        .enableHiveSupport() \
         .getOrCreate()
 
 
 def inicializar_esquema_hive(spark: SparkSession) -> None:
-    """Inicializa la base y tablas externas compatibles con Hive 4."""
+    """
+    Inicializa la base y tablas externas (Parquet particionado).
+
+    Migración desde tablas CSV antiguas: `export SIMLOG_HIVE_PARQUET_MIGRATION=1` antes de ejecutar
+    (o `DROP TABLE` manualmente) y eliminar ficheros huérfanos en HDFS si hace falta.
+    """
     _ejecutar_hive_ddl(f"CREATE DATABASE IF NOT EXISTS {HIVE_DB}")
+    migrar = os.environ.get("SIMLOG_HIVE_PARQUET_MIGRATION", "0").strip() == "1"
     for tabla in TABLE_SCHEMAS:
-        _asegurar_tabla_externa_csv(tabla, replace=(tabla == TABLA_TRANSPORTE))
+        _asegurar_tabla_externa_parquet(
+            tabla,
+            replace=migrar or (tabla == TABLA_TRANSPORTE),
+        )
 
 
 def parsear_timestamp(ts: str) -> Dict:
@@ -464,7 +499,7 @@ def persistir_eventos_historico(
     
     if eventos:
         df = spark.createDataFrame(eventos)
-        _append_external_csv(df, TABLA_EVENTOS)
+        _append_external_parquet(df, TABLA_EVENTOS)
         print(f"Insertados {len(eventos)} eventos en {TABLA_EVENTOS}")
 
 
@@ -521,7 +556,7 @@ def persistir_clima_historico(spark: SparkSession, datos: Dict) -> None:
             StructField("mes_part", IntegerType()),
         ])
         df = spark.createDataFrame(registros, schema=schema)
-        _append_external_csv(df, TABLA_CLIMA)
+        _append_external_parquet(df, TABLA_CLIMA)
         print(f"Insertados {len(registros)} registros climáticos en {TABLA_CLIMA}")
 
 
@@ -565,7 +600,7 @@ def persistir_camiones_historico(
     
     if registros:
         df = spark.createDataFrame(registros)
-        _append_external_csv(df, TABLA_CAMIONES)
+        _append_external_parquet(df, TABLA_CAMIONES)
         print(f"Insertados {len(registros)} registros de camiones en {TABLA_CAMIONES}")
 
 
@@ -609,7 +644,7 @@ def persistir_transporte_historico(spark: SparkSession, datos: Dict, nodos_info:
 
     if registros:
         df = spark.createDataFrame(registros)
-        _append_external_csv(df, TABLA_TRANSPORTE)
+        _append_external_parquet(df, TABLA_TRANSPORTE)
         print(f"Insertados {len(registros)} registros en {TABLA_TRANSPORTE}")
 
 
@@ -656,7 +691,7 @@ def persistir_rutas_alternativas(
     
     if registros:
         df = spark.createDataFrame(registros)
-        _append_external_csv(df, TABLA_RUTAS)
+        _append_external_parquet(df, TABLA_RUTAS)
         print(f"Insertadas {len(registros)} rutas alternativas en {TABLA_RUTAS}")
 
 
@@ -687,7 +722,7 @@ def persistir_alertas_historicas(spark: SparkSession, datos: Dict) -> None:
             }
         )
     df = spark.createDataFrame(registros)
-    _append_external_csv(df, TABLA_ALERTAS_HIST)
+    _append_external_parquet(df, TABLA_ALERTAS_HIST)
     print(f"Insertadas {len(registros)} alertas históricas en {TABLA_ALERTAS_HIST}")
 
 
@@ -715,16 +750,23 @@ def persistir_eventos_grafo_historico(spark: SparkSession, datos: Dict) -> None:
             }
         )
     df = spark.createDataFrame(registros)
-    _append_external_csv(df, TABLA_EVENTOS_GRAFO)
+    _append_external_parquet(df, TABLA_EVENTOS_GRAFO)
     print(f"Insertados {len(registros)} eventos de grafo en {TABLA_EVENTOS_GRAFO}")
 
 
 def calcular_estadisticas_diarias(spark: SparkSession) -> None:
     """Calcula agregaciones diarias leyendo el histórico externo ya escrito en HDFS."""
     path = _hdfs_uri(TABLE_PATHS[TABLA_EVENTOS])
+    df = None
     try:
-        df = spark.read.option("header", "true").csv(path, inferSchema=True)
+        df = spark.read.parquet(path)
     except Exception:
+        try:
+            df = spark.read.option("header", "true").csv(path, inferSchema=True)
+            print("[Hive] agg: leyendo CSV legado en eventos_historico; migra a Parquet.")
+        except Exception:
+            return
+    if df is None:
         return
     if df.rdd.isEmpty():
         return
@@ -752,7 +794,7 @@ def calcular_estadisticas_diarias(spark: SparkSession) -> None:
             "mes_part",
         )
     )
-    _append_external_csv(agg, TABLA_AGG)
+    _append_external_parquet(agg, TABLA_AGG)
 
 
 def ejecutar_persistencia_hive(
@@ -801,10 +843,11 @@ def consulta_ejemplo_tendencias(spark: SparkSession) -> None:
     print("EJEMPLO: Análisis de Tendencias")
     print("="*60)
     
+    db = HIVE_DB
     print("\n1. Incidentes por mes:")
     spark.sql(f"""
         SELECT mes, estado, COUNT(*) as total
-        FROM {TABLA_EVENTOS}
+        FROM {db}.{TABLA_EVENTOS}
         WHERE tipo_evento = 'nodo'
         GROUP BY mes, estado
         ORDER BY mes, total DESC
@@ -813,7 +856,7 @@ def consulta_ejemplo_tendencias(spark: SparkSession) -> None:
     print("\n2. Motivos de bloqueo más frecuentes:")
     spark.sql(f"""
         SELECT motivo, COUNT(*) as veces
-        FROM {TABLA_EVENTOS}
+        FROM {db}.{TABLA_EVENTOS}
         WHERE estado = 'bloqueado'
         GROUP BY motivo
         ORDER BY veces DESC
@@ -823,7 +866,7 @@ def consulta_ejemplo_tendencias(spark: SparkSession) -> None:
     print("\n3. Rutas con más bloqueos:")
     spark.sql(f"""
         SELECT origen, destino, COUNT(*) as bloqueos
-        FROM {TABLA_RUTAS}
+        FROM {db}.{TABLA_RUTAS}
         WHERE motivo_bloqueo != 'OK'
         GROUP BY origen, destino
         ORDER BY bloqueos DESC
@@ -833,8 +876,8 @@ def consulta_ejemplo_tendencias(spark: SparkSession) -> None:
     print("\n4. Impacto del clima en estados de las carreteras:")
     spark.sql(f"""
         SELECT c.estado_carretera, e.estado, COUNT(*) as incidentes
-        FROM {TABLA_CLIMA} c
-        JOIN {TABLA_EVENTOS} e ON c.timestamp = e.timestamp AND c.ciudad = e.hub_asociado
+        FROM {db}.{TABLA_CLIMA} c
+        JOIN {db}.{TABLA_EVENTOS} e ON c.timestamp = e.timestamp AND c.ciudad = e.hub_asociado
         GROUP BY c.estado_carretera, e.estado
     """).show()
 

@@ -4,9 +4,14 @@ Tracking Cassandra con columnas estrictas para el gemelo.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
-from servicios.consultas_cuadro_mando import ejecutar_cassandra_consulta, ejecutar_hive_consulta
+from servicios.consultas_cuadro_mando import (
+    ejecutar_cassandra_consulta,
+    ejecutar_hive_consulta,
+    ejecutar_hive_sql_seguro,
+)
 from servicios.gemelo_digital_grafo import generar_grafo
 
 
@@ -123,83 +128,35 @@ def cargar_transporte_ingesta_real_hive() -> List[Dict[str, Any]]:
     return _tsv_texto_a_filas(txt)
 
 
-def cargar_historial_tracking_hive(camion_id: str = None, limite: int = 100) -> List[Dict[str, Any]]:
+def cargar_historial_tracking_hive(camion_id: str | None = None, limite: int = 100) -> List[Dict[str, Any]]:
     """
-    Carga historial de tracking de camiones desde Hive (tabla tracking_camiones_hist).
-    
-    Args:
-        camion_id: Filtrar por ID de camión específico (opcional)
-        limite: Número máximo de registros a devolver
-        
-    Returns:
-        Lista de registros con lat, lon, timestamp, camion_id, origen, destino, etc.
+    Historial de tracking desde Hive (`tracking_camiones_historico` / `HIVE_TABLE_TRACKING_HIST`).
+    Columnas alineadas con `persistencia_hive.TABLE_SCHEMAS`.
     """
-    from config import HIVE_DB
-    
-    db = HIVE_DB or "logistica_analytics"
-    
+    from config import HIVE_DB, HIVE_TABLE_TRACKING_HIST
+
+    db = (HIVE_DB or "logistica_espana").strip()
+    tabla = (HIVE_TABLE_TRACKING_HIST or "tracking_camiones_historico").strip()
+    ts_col = "`timestamp`"
+    lim = max(1, min(int(limite), 5000))
+
     sql = f"""
-        SELECT 
-            camion_id,
-            origen,
-            destino,
-            nodo_actual,
-            lat_actual,
-            lon_actual,
-            progreso_pct,
-            distancia_total_km,
-            distancia_recorrida_km,
-            timestamp_posicion
-        FROM {db}.tracking_camiones_hist
-    """
-    
-    where_clauses = []
+SELECT id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km, {ts_col}
+FROM {db}.{tabla}
+""".strip()
+
+    where_clauses: List[str] = []
     if camion_id:
-        where_clauses.append(f"camion_id = '{camion_id}'")
-    
+        cid = str(camion_id).strip()
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", cid):
+            where_clauses.append(f"id_camion = '{cid}'")
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
-    
-    sql += f" ORDER BY timestamp_posicion DESC LIMIT {limite}"
-    
-    ok, err, txt = ejecutar_hive_consulta("custom")
+    sql += f" ORDER BY {ts_col} DESC LIMIT {lim}"
+
+    ok, _err, txt = ejecutar_hive_sql_seguro(sql)
     if not ok or not txt:
-        try:
-            from pyhive import hive
-            from config import HIVE_SERVER
-            
-            parts = HIVE_SERVER.split(":")
-            host = parts[0] if parts else "localhost"
-            port = int(parts[1]) if len(parts) > 1 else 10000
-            
-            conn = hive.connect(host=host, port=port)
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            conn.close()
-            
-            columnas = [desc[0] for desc in cursor.description] if cursor.description else []
-            resultado = []
-            for row in rows:
-                d = {}
-                for i, col in enumerate(columnas):
-                    val = row[i] if i < len(row) else None
-                    if isinstance(val, float):
-                        d[col] = val
-                    elif isinstance(val, int):
-                        d[col] = val
-                    elif val is not None:
-                        try:
-                            d[col] = float(val)
-                        except (ValueError, TypeError):
-                            d[col] = str(val) if val is not None else None
-                    else:
-                        d[col] = None
-                resultado.append(d)
-            return resultado
-        except Exception:
-            return []
-    
+        return []
     return _tsv_texto_a_filas(txt)
 
 
@@ -213,7 +170,7 @@ def cargar_trayectorias_por_camion(historial: List[Dict[str, Any]]) -> Dict[str,
     trayectorias: Dict[str, List[Dict[str, Any]]] = {}
     
     for reg in historial:
-        cid = str(reg.get("camion_id") or reg.get("camion_id") or "")
+        cid = str(reg.get("id_camion") or reg.get("camion_id") or "")
         if not cid:
             continue
         

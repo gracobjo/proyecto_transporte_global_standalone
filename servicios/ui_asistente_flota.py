@@ -11,6 +11,13 @@ from typing import Optional, Tuple
 import pandas as pd
 import streamlit as st
 
+from servicios.catalogo_tablas_simlog import (
+    dataframe_esquema,
+    columnas_cassandra,
+    columnas_hive,
+    listar_tablas_cassandra,
+    listar_tablas_hive,
+)
 from servicios.consultas_cuadro_mando import ejecutar_hive_sql_seguro
 from servicios.gestor_consultas_sql import aplicar_postproceso_gestor, resolver_intencion_gestor
 
@@ -76,7 +83,7 @@ def render_asistente_flota_tab() -> None:
             "| Tráfico / ciudades con incidencia | Cassandra | `nodos_estado` con `Bloqueado` |\n"
             "| Nodo logístico crítico (PageRank) | Cassandra | `pagerank_nodos` + **top 1 en la app** |\n"
             "| Carreteras cortadas | Cassandra | `aristas_estado` con `Bloqueado` |\n"
-            "| Historial de rutas de un camión | Hive | `SELECT *` sobre tabla `SIMLOG_HIVE_TABLA_TRANSPORTE` |\n"
+            "| Historial de rutas de un camión | Hive | `transporte_ingesta_completa`: `id_camion`, `ruta`, `timestamp`, … |\n"
         )
         st.caption(
             "Hive: ajusta `SIMLOG_HIVE_TABLA_TRANSPORTE` y opcionalmente "

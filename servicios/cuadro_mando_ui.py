@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import time
 
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from servicios.clima_retrasos import (
     evaluar_retraso_integrado,
     obtener_clima_todos_hubs_completo,
 )
+from config import HIVE_TABLE_TRANSPORTE_HIST
 from servicios.consultas_cuadro_mando import (
     CASSANDRA_CONSULTAS,
     CASSANDRA_CATEGORIAS,
@@ -26,7 +28,10 @@ from servicios.consultas_cuadro_mando import (
     ejecutar_cassandra_consulta,
     ejecutar_cassandra_cql_seguro,
     ejecutar_hive_consulta,
+    ejecutar_hive_consulta_detalle,
     ejecutar_hive_sql_seguro,
+    ejecutar_hive_sql_seguro_detalle,
+    limpiar_cache_consultas_hive,
     listar_categorias_cassandra,
     listar_categorias_hive,
     listar_columnas_cassandra,
@@ -40,7 +45,6 @@ from servicios.consultas_cuadro_mando import (
     nombre_categoria_cassandra,
     descripcion_categoria,
     descripcion_categoria_cassandra,
-    obtener_categoria,
     obtener_categoria_cassandra,
     obtener_consultas_de_categoria,
     obtener_consultas_de_categoria_cassandra,
@@ -185,8 +189,10 @@ def render_consultas_cassandra() -> None:
         titulo_cassandra(c) for c in consultas_categoria
     ]
     
-    # Mostrar información de la categoría
-    st.caption(f"📋 {descripcion_categoria_cassandra(cat_seleccionada)}")
+    # Texto informativo (no es un checkbox; antes el emoji 📋 confundía con un control)
+    st.markdown(
+        f"**Descripción de la categoría:** {descripcion_categoria_cassandra(cat_seleccionada)}"
+    )
 
     # Selector de consulta
     consulta_seleccionada = st.selectbox(
@@ -243,24 +249,32 @@ def render_consultas_hive() -> None:
     st.subheader("Consultas supervisadas — Hive (histórico)")
     st.caption(
         "Requiere **HiveServer2** (puerto **10000**). Las consultas usan **PyHive** (Thrift), no `beeline`. "
-        "Timeout: `HIVE_QUERY_TIMEOUT_SEC=300`. "
-        "Tablas: `eventos_historico`, `clima_historico`, `tracking_camiones_historico`, "
-        "`transporte_ingesta_completa`, `rutas_alternativas_historico`, `agg_estadisticas_diarias`."
+        "Timeout por defecto: 600 s (`HIVE_QUERY_TIMEOUT_SEC`). "
+        "Las respuestas **correctas** se guardan en **caché en memoria** (`SIMLOG_HIVE_CACHE_TTL_SEC`, por defecto **120 s**); "
+        "**la misma consulta** repetida debería mostrar un tiempo mucho menor (⚡ en el resultado). "
+        "Tablas típicas: `eventos_historico`, `clima_historico`, `tracking_camiones_historico`, "
+        f"`{HIVE_TABLE_TRANSPORTE_HIST}` (SIMLOG_HIVE_TABLA_TRANSPORTE), `rutas_alternativas_historico`, `agg_estadisticas_diarias`."
     )
 
-    # Descubrir tablas existentes
-    tablas_en_hive: set[str] = set()
-    ok_tabs, err_tabs, out_tabs = ejecutar_hive_consulta("tablas_bd")
-    if ok_tabs and out_tabs:
-        lineas = [l for l in out_tabs.splitlines() if l.strip()]
-        for ln in lineas[1:]:
-            partes = ln.split("\t")
-            tablas_en_hive.add(partes[-1].strip())
+    # Tablas Hive: opcional. Antes se llamaba `tablas_bd` aquí y podía bloquear minutos la página
+    # (solo se veía la fila de caché). Se rellena con el botón «Verificar tablas» o primera ejecución.
+    if "hive_tablas_en_hive" not in st.session_state:
+        st.session_state.hive_tablas_en_hive = set()
+    if "hive_tablas_err" not in st.session_state:
+        st.session_state.hive_tablas_err = ""
+
+    tablas_en_hive: set[str] = st.session_state.hive_tablas_en_hive
 
     # Requisitos por consulta (tablas físicas)
     requiere: dict[str, set[str]] = {
         "diag_smoke_hive": set(),
         "tablas_bd": set(),
+        "historico_nodos_muestra": {"historico_nodos"},
+        "historico_nodos_conteo": {"historico_nodos"},
+        "nodos_maestro_muestra": {"nodos_maestro"},
+        "nodos_maestro_conteo": {"nodos_maestro"},
+        "gemelo_red_nodos": {"red_gemelo_nodos"},
+        "gemelo_red_aristas": {"red_gemelo_aristas"},
         "eventos_historico_muestra": {"eventos_historico"},
         "eventos_nodos_24h": {"eventos_historico"},
         "eventos_bloqueos_24h": {"eventos_historico"},
@@ -280,7 +294,7 @@ def render_consultas_hive() -> None:
         "agg_estadisticas_diarias": {"agg_estadisticas_diarias"},
         "agg_ultima_semana": {"agg_estadisticas_diarias"},
         "gestor_eventos_por_hub": {"eventos_historico"},
-        "gestor_clima_afecta_transporte": {"clima_historico", "transporte_ingesta_completa"},
+        "gestor_clima_afecta_transporte": {"clima_historico", HIVE_TABLE_TRANSPORTE_HIST},
         "gestor_incidencias_resumen": {"eventos_historico"},
         "gestor_pagerank_historico": {"eventos_historico"},
     }
@@ -289,12 +303,39 @@ def render_consultas_hive() -> None:
         req = requiere.get(codigo)
         if req is None:
             return True
+        if not tablas_en_hive:
+            # Sin verificación aún: mostrar todas las consultas (fallará Hive si falta la tabla)
+            return True
         return req.issubset(tablas_en_hive)
 
-    if not ok_tabs:
-        st.warning(f"Hive conectó pero falló al listar tablas: {err_tabs or 'error'}")
-    elif tablas_en_hive:
-        st.caption(f"Tablas detectadas en Hive: **{len(tablas_en_hive)}**")
+    c_ver, c_hint = st.columns([1, 3])
+    with c_ver:
+        if st.button("Verificar tablas en Hive", key="btn_hive_list_tablas", type="secondary"):
+            with st.spinner("Listando tablas (SHOW TABLES)…"):
+                ok_tabs, err_tabs, out_tabs = ejecutar_hive_consulta("tablas_bd")
+            if ok_tabs and out_tabs:
+                lineas = [l for l in out_tabs.splitlines() if l.strip()]
+                nuevas: set[str] = set()
+                for ln in lineas[1:]:
+                    partes = ln.split("\t")
+                    nuevas.add(partes[-1].strip())
+                st.session_state.hive_tablas_en_hive = nuevas
+                st.session_state.hive_tablas_err = ""
+                st.success(f"Detectadas **{len(nuevas)}** tablas.")
+            else:
+                st.session_state.hive_tablas_err = err_tabs or "error"
+                st.warning(f"No se pudieron listar tablas: {err_tabs}")
+            st.rerun()
+    with c_hint:
+        if tablas_en_hive:
+            st.caption(f"Tablas conocidas en Hive: **{len(tablas_en_hive)}** (pulsa verificar tras crear tablas con Spark).")
+        elif st.session_state.hive_tablas_err:
+            st.caption(f"Último error al listar: {st.session_state.hive_tablas_err[:120]}…")
+        else:
+            st.caption(
+                "Opcional: **Verificar tablas** para ocultar consultas cuyas tablas aún no existen. "
+                "Puedes ejecutar consultas igualmente (p. ej. **Diagnóstico — SELECT 1**)."
+            )
 
     # ==========================================================================
     # Interfaz por categorías con expanders
@@ -324,9 +365,8 @@ def render_consultas_hive() -> None:
     disponibles_categoria = [c for c in consultas_categoria if _disponible(c)]
     no_disp_categoria = [c for c in consultas_categoria if c not in disponibles_categoria]
     
-    # Mostrar información de la categoría
-    info_cat = obtener_categoria(cat_seleccionada)
-    st.caption(f"📋 {descripcion_categoria(cat_seleccionada)}")
+    # Texto informativo (no es un checkbox; el emoji 📋 parecía un control deshabilitado)
+    st.markdown(f"**Descripción de la categoría:** {descripcion_categoria(cat_seleccionada)}")
 
     # Selector de consulta dentro de la categoría
     if disponibles_categoria:
@@ -450,11 +490,18 @@ def render_consultas_hive() -> None:
     if sel and st.button("Ejecutar consulta Hive", key="btn_hive", type="primary"):
         t0 = time.monotonic()
         with st.spinner("Ejecutando Hive (PyHive)…"):
-            ok, err, out = ejecutar_hive_consulta(sel)
+            ok, err, out, desde_cache = ejecutar_hive_consulta_detalle(sel)
         elapsed = time.monotonic() - t0
         if ok:
             out_s = out or ""
-            st.caption(f"⏱️ Tiempo: **{elapsed:.1f}s** | Resultado: **{len(out_s)}** caracteres")
+            origen = (
+                "**Caché en memoria** (misma SQL; TTL renovado en cada uso)"
+                if desde_cache
+                else "**HiveServer2** (consulta ejecutada en cluster)"
+            )
+            st.caption(
+                f"⏱️ Tiempo: **{elapsed:.1f}s** | Resultado: **{len(out_s)}** caracteres · Origen: {origen}"
+            )
             if not out_s.strip():
                 st.info("Consulta correcta pero sin filas para los filtros actuales.")
             else:
@@ -491,11 +538,14 @@ def render_consultas_hive() -> None:
         if run_sql and sql_edit:
             t0 = time.monotonic()
             with st.spinner("Ejecutando SQL en Hive…"):
-                ok, err, out = ejecutar_hive_sql_seguro(sql_edit)
+                ok, err, out, desde_cache = ejecutar_hive_sql_seguro_detalle(sql_edit)
             elapsed = time.monotonic() - t0
             if ok:
                 out_s = out or ""
-                st.caption(f"⏱️ Tiempo: **{elapsed:.1f}s** | Resultado: **{len(out_s)}** caracteres")
+                origen = "**Caché**" if desde_cache else "**HiveServer2**"
+                st.caption(
+                    f"⏱️ Tiempo: **{elapsed:.1f}s** | Resultado: **{len(out_s)}** caracteres · Origen: {origen}"
+                )
                 if not out_s.strip():
                     st.info("Consulta correcta pero sin filas.")
                 else:
@@ -505,6 +555,20 @@ def render_consultas_hive() -> None:
                 st.error(f"Error: {err or 'Error desconocido'}")
         elif run_sql and not sql_edit:
             st.warning("Introduce una consulta SQL primero.")
+
+    with st.expander("Caché Hive y TTL", expanded=False):
+        st.caption(
+            f"TTL actual: **{os.environ.get('SIMLOG_HIVE_CACHE_TTL_SEC', '120')}** s · "
+            "`0` = desactivar caché. **Renovación en cada uso** (`SIMLOG_HIVE_CACHE_SLIDING=1` por defecto): "
+            "el plazo cuenta desde la **última** vez que acertaste esa SQL, no solo desde la primera."
+        )
+        st.caption(
+            "Si el tiempo es alto y el origen indica **HiveServer2**, no hubo acierto de caché "
+            "(consulta distinta, caché vaciada o proceso Streamlit reiniciado)."
+        )
+        if st.button("Vaciar caché Hive", key="btn_hive_cache_clear"):
+            limpiar_cache_consultas_hive()
+            st.success("Caché vaciada; la próxima ejecución irá a HiveServer2.")
 
 
 def render_slides_clima_retrasos() -> None:

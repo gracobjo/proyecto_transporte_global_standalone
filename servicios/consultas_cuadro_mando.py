@@ -5,8 +5,12 @@ No se ejecuta SQL arbitrario del usuario: solo plantillas aprobadas para supervi
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from queue import Queue
 from threading import Thread
 from functools import lru_cache
@@ -19,6 +23,12 @@ from config import (
     HIVE_DB,
     HIVE_JDBC_URL,
     HIVE_METASTORE_URIS,
+    HIVE_TABLE_HISTORICO_NODOS,
+    HIVE_TABLE_NODOS_MAESTRO,
+    HIVE_TABLE_RED_GEMELO_ARISTAS,
+    HIVE_TABLE_RED_GEMELO_NODOS,
+    HIVE_TABLE_TRACKING_HIST,
+    HIVE_TABLE_TRANSPORTE_HIST,
     KEYSPACE,
 )
 
@@ -443,7 +453,7 @@ def listar_columnas_hive(tabla: str) -> Tuple[bool, str, List[str]]:
 # - eventos_historico: histórico de eventos nodos/aristas
 # - clima_historico: histórico climático por ciudad
 # - tracking_camiones_historico: tracking histórico de camiones
-# - transporte_ingesta_completa: transporte plano para UI
+# - transporte (HIVE_TABLE_TRANSPORTE_HIST / SIMLOG_HIVE_TABLA_TRANSPORTE): plano para UI
 # - rutas_alternativas_historico: rutas alternativas calculadas
 # - agg_estadisticas_diarias: agregaciones diarias
 # Tablas en HDFS (compatibilidad):
@@ -452,13 +462,25 @@ def listar_columnas_hive(tabla: str) -> Tuple[bool, str, List[str]]:
 HIVE_DB_NAME = HIVE_DB or "logistica_espana"
 _T_EVENTOS = "eventos_historico"
 _T_CLIMA = "clima_historico"
-_T_TRACKING = "tracking_camiones_historico"
-_T_TRANSPORTE = "transporte_ingesta_completa"
+_T_TRACKING = HIVE_TABLE_TRACKING_HIST
+_T_TRANSPORTE = HIVE_TABLE_TRANSPORTE_HIST
 _T_RUTAS = "rutas_alternativas_historico"
 _T_AGG = "agg_estadisticas_diarias"
 # Hive 3+: la columna se llama "timestamp" en persistencia_hive.py; el identificador es palabra reservada.
 # Usar `timestamp` en HiveQL (no afecta a current_timestamp()).
 _HIVE_TS = "`timestamp`"
+
+
+def _hive_txt_norm(col: str) -> str:
+    """
+    Expresión HiveQL: trim, minúsculas y sin tildes típicas (á→a, ó→o) para comparar estados
+    sin depender de mayúsculas ni de «Óptimo» vs «Optimo». `col` es siempre columna fija del código.
+    """
+    return (
+        "translate(lower(trim(coalesce(cast("
+        + col
+        + " as string), ''))), 'áéíóúñÁÉÍÓÚÑ', 'aeiouaeioun')"
+    )
 
 
 def _hive_prune_mes() -> str:
@@ -481,6 +503,60 @@ def _hive_prune_7d() -> str:
 # Fragmentos evaluados al import (cambiar SIMLOG_HIVE_PARTITION_PRUNING requiere reiniciar el proceso).
 _PM = _hive_prune_mes()
 _P7 = _hive_prune_7d()
+
+
+def _hive_filter_24h_dia() -> str:
+    """
+    En ventanas «últimas 24h», restringe a hoy y ayer calendario (solo anio/mes/dia).
+    Evita make_date(), que en algunos despliegues Hive provoca NPE al resolver UDF.
+    Desactivar: SIMLOG_HIVE_DAY_FILTER_24H=0.
+    """
+    if os.environ.get("SIMLOG_HIVE_DAY_FILTER_24H", "1").strip() == "0":
+        return ""
+    return (
+        " AND ("
+        "(anio = year(current_date()) AND mes = month(current_date()) AND dia = day(current_date())) OR "
+        "(anio = year(date_sub(current_date(), 1)) AND mes = month(date_sub(current_date(), 1)) "
+        "AND dia = day(date_sub(current_date(), 1)))"
+        ")"
+    )
+
+
+def _hive_filter_24h_dia_c() -> str:
+    """Igual que _hive_filter_24h_dia pero con alias de tabla `c` (JOIN clima)."""
+    if os.environ.get("SIMLOG_HIVE_DAY_FILTER_24H", "1").strip() == "0":
+        return ""
+    return (
+        " AND ("
+        "(c.anio = year(current_date()) AND c.mes = month(current_date()) AND c.dia = day(current_date())) OR "
+        "(c.anio = year(date_sub(current_date(), 1)) AND c.mes = month(date_sub(current_date(), 1)) "
+        "AND c.dia = day(date_sub(current_date(), 1)))"
+        ")"
+    )
+
+
+def _hive_filter_last_7d_ymd(alias: str = "") -> str:
+    """
+    Ventana robusta últimos 7 días usando columnas anio/mes/dia.
+    Evita comparar `timestamp` STRING con fechas de Hive.
+    """
+    p = f"{alias}." if alias else ""
+    return (
+        f" AND ({p}anio * 10000 + {p}mes * 100 + {p}dia) >= "
+        "year(date_sub(current_date(), 7)) * 10000 + month(date_sub(current_date(), 7)) * 100 "
+        "+ day(date_sub(current_date(), 7))"
+        f" AND ({p}anio * 10000 + {p}mes * 100 + {p}dia) <= "
+        "year(current_date()) * 10000 + month(current_date()) * 100 + day(current_date())"
+    )
+
+
+_F24 = _hive_filter_24h_dia()
+_F24C = _hive_filter_24h_dia_c()
+_F7D = _hive_filter_last_7d_ymd()
+
+# Timeout PyHive (segundos). Por defecto 600: HS2 lento o primera consulta suele superar 300s.
+_DEFAULT_HIVE_QUERY_TIMEOUT_SEC = 600
+
 # Ejecución previa opcional: SIMLOG_HIVE_SET="SET hive.fetch.task.conversion=more;SET hive.execution.engine=tez"
 # (separar con ';'; Tez si existe; en MapReduce el coste fijo del job sigue siendo alto en standalone).
 
@@ -493,6 +569,38 @@ HIVE_CONSULTAS: Dict[str, Dict[str, str]] = {
     "tablas_bd": {
         "titulo": "Listar tablas en la base logística",
         "sql": f"SHOW TABLES IN {HIVE_DB_NAME}",
+    },
+    "historico_nodos_muestra": {
+        "titulo": "Histórico nodos — muestra",
+        "sql": f"SELECT * FROM {HIVE_DB_NAME}.{HIVE_TABLE_HISTORICO_NODOS} LIMIT 100",
+    },
+    "historico_nodos_conteo": {
+        "titulo": "Histórico nodos — conteo",
+        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.{HIVE_TABLE_HISTORICO_NODOS}",
+    },
+    "nodos_maestro_muestra": {
+        "titulo": "Nodos maestro — muestra",
+        "sql": f"SELECT * FROM {HIVE_DB_NAME}.{HIVE_TABLE_NODOS_MAESTRO} LIMIT 100",
+    },
+    "nodos_maestro_conteo": {
+        "titulo": "Nodos maestro — conteo",
+        "sql": f"SELECT COUNT(*) AS total FROM {HIVE_DB_NAME}.{HIVE_TABLE_NODOS_MAESTRO}",
+    },
+    "gemelo_red_nodos": {
+        "titulo": "Gemelo digital — red nodos (Hive)",
+        "sql": f"""
+SELECT id_nodo, tipo, lat, lon, id_capital_ref, nombre
+FROM {HIVE_DB_NAME}.{HIVE_TABLE_RED_GEMELO_NODOS}
+LIMIT 20000
+        """.strip(),
+    },
+    "gemelo_red_aristas": {
+        "titulo": "Gemelo digital — red aristas (Hive)",
+        "sql": f"""
+SELECT src, dst, distancia_km
+FROM {HIVE_DB_NAME}.{HIVE_TABLE_RED_GEMELO_ARISTAS}
+LIMIT 100000
+        """.strip(),
     },
     # --- Eventos histórico (eventos_historico) ---
     "eventos_historico_muestra": {
@@ -510,8 +618,8 @@ LIMIT 100
         "sql": f"""
 SELECT {_HIVE_TS}, id_elemento, estado, motivo, hub_asociado, pagerank
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE tipo_evento = 'nodo'
-  AND {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+WHERE {_hive_txt_norm("tipo_evento")} = 'nodo'
+  AND 1=1{_P7}{_F24}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
@@ -521,8 +629,8 @@ LIMIT 200
         "sql": f"""
 SELECT {_HIVE_TS}, id_elemento, estado, motivo, hub_asociado
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE estado IN ('bloqueado', 'Bloqueado')
-  AND {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+WHERE {_hive_txt_norm("estado")} = 'bloqueado'
+  AND 1=1{_P7}{_F24}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
@@ -532,7 +640,7 @@ LIMIT 100
         "sql": f"""
 SELECT dia, tipo_evento, estado, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+WHERE 1=1{_P7}{_F7D}
 GROUP BY dia, tipo_evento, estado
 ORDER BY dia DESC, total DESC
 LIMIT 200
@@ -554,7 +662,7 @@ LIMIT 100
         "sql": f"""
 SELECT {_HIVE_TS}, ciudad, temperatura, humedad, descripcion, estado_carretera
 FROM {HIVE_DB_NAME}.{_T_CLIMA}
-WHERE dia = current_date(){_PM}
+WHERE anio = year(current_date()) AND mes = month(current_date()) AND dia = day(current_date()){_PM}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 50
         """.strip(),
@@ -564,7 +672,7 @@ LIMIT 50
         "sql": f"""
 SELECT estado_carretera, descripcion, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_CLIMA}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+WHERE 1=1{_P7}{_F24}
 GROUP BY estado_carretera, descripcion
 ORDER BY total DESC
 LIMIT 50
@@ -586,21 +694,22 @@ LIMIT 100
         "sql": f"""
 SELECT {_HIVE_TS}, id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, distancia_total_km, tiene_ruta_alternativa
 FROM {HIVE_DB_NAME}.{_T_TRACKING}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+WHERE 1=1{_P7}{_F7D}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
     },
     "tracking_ultima_posicion": {
-        "titulo": "Tracking — última posición por camión",
+        "titulo": "Tracking — muestra reciente (24h; últimas filas por tiempo)",
         "sql": f"""
 SELECT id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, {_HIVE_TS}
 FROM {HIVE_DB_NAME}.{_T_TRACKING}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+WHERE 1=1{_P7}{_F24}
+ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
     },
-    # --- Transporte ingestado (transporte_ingesta_completa) ---
+    # --- Transporte ingestado (HIVE_TABLE_TRANSPORTE_HIST) ---
     "transporte_ingesta_real_muestra": {
         "titulo": "Transporte ingestado — muestra",
         "sql": f"""
@@ -616,7 +725,7 @@ LIMIT 100
         "sql": f"""
 SELECT {_HIVE_TS}, id_camion, origen, destino, estado_ruta, motivo_retraso, progreso_pct
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-WHERE dia = current_date(){_PM}
+WHERE anio = year(current_date()) AND mes = month(current_date()) AND dia = day(current_date()){_PM}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
@@ -626,8 +735,9 @@ LIMIT 200
         "sql": f"""
 SELECT {_HIVE_TS}, id_camion, origen, destino, estado_ruta, motivo_retraso
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-WHERE estado_ruta != 'En ruta'
-  AND dia = current_date(){_PM}
+WHERE estado_ruta IS NOT NULL
+  AND {_hive_txt_norm("estado_ruta")} <> 'en ruta'
+  AND anio = year(current_date()) AND mes = month(current_date()) AND dia = day(current_date()){_PM}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
@@ -637,7 +747,7 @@ LIMIT 100
         "sql": f"""
 SELECT {_HIVE_TS}, id_camion, origen, destino, nodo_actual, progreso_pct, estado_ruta, motivo_retraso
 FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+WHERE 1=1{_P7}{_F7D}
 ORDER BY id_camion, {_HIVE_TS} DESC
 LIMIT 300
         """.strip(),
@@ -658,9 +768,8 @@ LIMIT 100
         "sql": f"""
 SELECT {_HIVE_TS}, origen, destino, ruta_original, motivo_bloqueo, ahorro_km
 FROM {HIVE_DB_NAME}.{_T_RUTAS}
-WHERE motivo_bloqueo IS NOT NULL
-  AND motivo_bloqueo != ''
-  AND {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+WHERE length(trim(coalesce(cast(motivo_bloqueo as string), ''))) > 0
+  AND 1=1{_P7}{_F7D}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
@@ -681,8 +790,11 @@ LIMIT 200
         "sql": f"""
 SELECT anio, mes, dia, tipo_evento, estado, motivo, contador, pct_total
 FROM {HIVE_DB_NAME}.{_T_AGG}
-WHERE make_date(anio, mes, dia) >= date_sub(current_date(), 7)
-  AND make_date(anio, mes, dia) <= current_date(){_P7}
+WHERE anio * 10000 + mes * 100 + dia >=
+      year(date_sub(current_date(), 7)) * 10000 + month(date_sub(current_date(), 7)) * 100
+      + day(date_sub(current_date(), 7))
+  AND anio * 10000 + mes * 100 + dia <=
+      year(current_date()) * 10000 + month(current_date()) * 100 + day(current_date()){_P7}
 ORDER BY dia DESC, contador DESC
 LIMIT 200
         """.strip(),
@@ -693,7 +805,7 @@ LIMIT 200
         "sql": f"""
 SELECT hub_asociado, estado, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+WHERE 1=1{_P7}{_F24}
 GROUP BY hub_asociado, estado
 ORDER BY total DESC
 LIMIT 100
@@ -701,20 +813,27 @@ LIMIT 100
     },
     "gestor_clima_afecta_transporte": {
         "titulo": "Gestor — clima adverso que afecta transporte",
+        # Subconsultas con poda de partición y ventana 24h. El JOIN es por ciudad = hub_actual
+        # y misma fecha (anio/mes/dia): igualar `timestamp` STRING entre tablas casi nunca coincide.
+        # hive.auto.convert.join=false (sesión) evita MapredLocalTask por mapjoin en HS2/MR.
         "sql": f"""
-SELECT c.{_HIVE_TS}, c.ciudad, c.estado_carretera, c.descripcion, tx.estado_ruta, tx.motivo_retraso
-FROM {HIVE_DB_NAME}.{_T_CLIMA} c
+SELECT c.{_HIVE_TS}, c.ciudad, c.estado_carretera, c.descripcion,
+       max(t.estado_ruta) AS estado_ruta, max(t.motivo_retraso) AS motivo_retraso
+FROM (
+  SELECT {_HIVE_TS}, ciudad, estado_carretera, descripcion, anio, mes, dia
+  FROM {HIVE_DB_NAME}.{_T_CLIMA}
+  WHERE 1=1{_P7}{_F24}
+    AND length(trim(coalesce(cast(estado_carretera as string), ''))) > 0
+    AND {_hive_txt_norm("estado_carretera")} NOT IN ('optimo', 'optimal', 'ok')
+) c
 LEFT JOIN (
-  SELECT {_HIVE_TS}, hub_actual,
-         max(estado_ruta) AS estado_ruta,
-         max(motivo_retraso) AS motivo_retraso
+  SELECT estado_ruta, motivo_retraso, hub_actual, anio, mes, dia
   FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-  WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
-  GROUP BY {_HIVE_TS}, hub_actual
-) tx
-ON c.{_HIVE_TS} = tx.{_HIVE_TS} AND c.ciudad = tx.hub_actual
-WHERE c.{_HIVE_TS} >= date_sub(current_timestamp(), 1)
-  AND c.estado_carretera != 'Optimo'{_P7}
+  WHERE 1=1{_P7}{_F24}
+) t
+  ON c.ciudad = t.hub_actual
+ AND c.anio = t.anio AND c.mes = t.mes AND c.dia = t.dia
+GROUP BY c.{_HIVE_TS}, c.ciudad, c.estado_carretera, c.descripcion
 ORDER BY c.{_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
@@ -724,7 +843,7 @@ LIMIT 100
         "sql": f"""
 SELECT estado, COUNT(*) as total, AVG(pagerank) as pagerank_promedio
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE {_HIVE_TS} >= date_sub(current_timestamp(), 1){_P7}
+WHERE 1=1{_P7}{_F24}
 GROUP BY estado
 ORDER BY total DESC
 LIMIT 20
@@ -735,9 +854,9 @@ LIMIT 20
         "sql": f"""
 SELECT id_elemento as nodo, estado, motivo, pagerank, hub_asociado
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE tipo_evento = 'nodo'
+WHERE {_hive_txt_norm("tipo_evento")} = 'nodo'
   AND pagerank > 0
-  AND {_HIVE_TS} >= date_sub(current_timestamp(), 7){_P7}
+  AND 1=1{_P7}{_F7D}
 ORDER BY pagerank DESC
 LIMIT 100
         """.strip(),
@@ -758,10 +877,50 @@ def _parse_hiveserver2_host_port() -> Tuple[str, int]:
     return server, 10000
 
 
+_hive_pyhive_lock = threading.Lock()
+_hive_pyhive_conn: Any = None
+# Incrementar si cambian los SET por defecto: fuerza re-aplicación en conexiones cacheadas.
+_HIVE_SESSION_TUNING_VERSION = "2"
+
+
+def _hive_default_session_sets() -> List[str]:
+    """
+    SETs aplicados una vez por conexión (consultas UI con LIMIT).
+    Desactivar: SIMLOG_HIVE_APPLY_DEFAULT_SETS=0.
+    Sobrescribir lista: SIMLOG_HIVE_DEFAULT_SETS='SET ...;SET ...'
+    """
+    if os.environ.get("SIMLOG_HIVE_APPLY_DEFAULT_SETS", "1").strip() == "0":
+        return []
+    custom = os.environ.get("SIMLOG_HIVE_DEFAULT_SETS", "").strip()
+    if custom:
+        return [s.strip() for s in custom.split(";") if s.strip()]
+    # Sin hive.fetch.task.conversion=more aquí: en algunos despliegíos MR interfiere con JOINs
+    # y dispara MapredLocalTask (fallo típico HS2). Para SELECT simples rápidos, usa
+    # SIMLOG_HIVE_DEFAULT_SETS o SIMLOG_HIVE_SET con SET hive.fetch.task.conversion=more
+    return [
+        "SET hive.vectorized.execution.enabled=true",
+        "SET hive.auto.convert.join=false",
+    ]
+
+
+def _hive_close_pyhive_conn() -> None:
+    global _hive_pyhive_conn
+    c = _hive_pyhive_conn
+    _hive_pyhive_conn = None
+    if c is not None:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
 def _ejecutar_hive_pyhive(sql: str) -> Tuple[bool, str, str]:
     """
     Ejecuta HiveQL vía PyHive (Thrift a HiveServer2, puerto 10000).
     Salida en formato TSV con cabecera (similar a beeline tsv2).
+
+    Por defecto reutiliza una conexión por proceso (SIMLOG_HIVE_REUSE_CONNECTION=1) para que
+    HiveServer2/Tez no paguen el arranque de sesión en cada clic del cuadro de mando.
     """
     try:
         from pyhive import hive
@@ -771,36 +930,26 @@ def _ejecutar_hive_pyhive(sql: str) -> Tuple[bool, str, str]:
             f"PyHive no disponible ({e}). Instala: pip install pyhive thrift",
             "",
         )
+
     host, port = _parse_hiveserver2_host_port()
     db = (HIVE_DB_NAME or "").strip() or None
     auth_pref = os.environ.get("SIMLOG_HIVE_PYHIVE_AUTH", "").strip().upper()
-    # NOSASL no requiere thrift_sasl; NONE sí (HiveServer2 con SASL/PLAIN típico).
     modos_auth = [auth_pref] if auth_pref else ["NOSASL", "NONE"]
-    conn = None
-    ultimo_err: Optional[str] = None
-    try:
-        for auth in modos_auth:
-            try:
-                conn = hive.Connection(
-                    host=host,
-                    port=port,
-                    username=HIVE_BEELINE_USER,
-                    database=db,
-                    auth=auth,
-                )
-                break
-            except Exception as e:
-                ultimo_err = str(e)
-                continue
-        if conn is None:
-            return (
-                False,
-                ultimo_err
-                or "No se pudo abrir sesión Hive (prueba SIMLOG_HIVE_PYHIVE_AUTH=NOSASL o NONE; "
-                "instala thrift_sasl si usas NONE).",
-                "",
-            )
+    reuse = os.environ.get("SIMLOG_HIVE_REUSE_CONNECTION", "1").strip() != "0"
+    global _hive_pyhive_conn
+
+    def _run_query(conn: Any) -> Tuple[bool, str, str]:
         cur = conn.cursor()
+        if getattr(conn, "_simlog_hive_tune_ver", None) != _HIVE_SESSION_TUNING_VERSION:
+            setattr(conn, "_simlog_hive_warmed", False)
+            setattr(conn, "_simlog_hive_tune_ver", _HIVE_SESSION_TUNING_VERSION)
+        if not getattr(conn, "_simlog_hive_warmed", False):
+            for stmt in _hive_default_session_sets():
+                try:
+                    cur.execute(stmt)
+                except Exception:
+                    pass
+            setattr(conn, "_simlog_hive_warmed", True)
         extra_sets = os.environ.get("SIMLOG_HIVE_SET", "").strip()
         if extra_sets:
             for stmt in extra_sets.split(";"):
@@ -816,14 +965,124 @@ def _ejecutar_hive_pyhive(sql: str) -> Tuple[bool, str, str]:
         for row in rows:
             lines.append("\t".join("" if v is None else str(v) for v in row))
         return True, "", "\n".join(lines)
+
+    def _open_connection() -> Any:
+        ultimo_err: Optional[str] = None
+        for auth in modos_auth:
+            try:
+                return hive.Connection(
+                    host=host,
+                    port=port,
+                    username=HIVE_BEELINE_USER,
+                    database=db,
+                    auth=auth,
+                )
+            except Exception as e:
+                ultimo_err = str(e)
+                continue
+        raise RuntimeError(
+            ultimo_err
+            or "No se pudo abrir sesión Hive (prueba SIMLOG_HIVE_PYHIVE_AUTH=NOSASL o NONE; "
+            "instala thrift_sasl si usas NONE)."
+        )
+
+    created_conn: Any = None
+    try:
+        with _hive_pyhive_lock:
+            if reuse and _hive_pyhive_conn is not None:
+                try:
+                    return _run_query(_hive_pyhive_conn)
+                except Exception:
+                    _hive_close_pyhive_conn()
+            created_conn = _open_connection()
+            if reuse:
+                _hive_pyhive_conn = created_conn
+            return _run_query(created_conn)
     except Exception as e:
+        _hive_close_pyhive_conn()
         return False, str(e), ""
+    finally:
+        if not reuse and created_conn is not None:
+            try:
+                created_conn.close()
+            except Exception:
+                pass
+
+
+# --- Caché resultados Hive (misma SQL → respuesta rápida dentro del TTL) ---
+_hive_sql_cache_lock = threading.Lock()
+_hive_sql_cache: "OrderedDict[str, Tuple[float, Tuple[bool, str, str]]]" = OrderedDict()
+
+
+def _hive_sql_cache_key(sql: str) -> str:
+    return hashlib.sha256(sql.strip().encode("utf-8")).hexdigest()
+
+
+def _hive_sql_cache_ttl_sec() -> float:
+    return float(os.environ.get("SIMLOG_HIVE_CACHE_TTL_SEC", "120"))
+
+
+def _hive_sql_cache_max_entries() -> int:
+    return max(4, int(os.environ.get("SIMLOG_HIVE_CACHE_MAX_ENTRIES", "64")))
+
+
+def _hive_sql_cache_get(sql: str) -> Optional[Tuple[bool, str, str]]:
+    ttl = _hive_sql_cache_ttl_sec()
+    if ttl <= 0:
+        return None
+    key = _hive_sql_cache_key(sql)
+    now = time.monotonic()
+    with _hive_sql_cache_lock:
+        ent = _hive_sql_cache.get(key)
+        if ent is None:
+            return None
+        ts, val = ent
+        # Caduca si pasó TTL desde la última lectura **o** escritura (según sliding).
+        if now - ts > ttl:
+            try:
+                del _hive_sql_cache[key]
+            except KeyError:
+                pass
+            return None
+        _hive_sql_cache.move_to_end(key)
+        # Sliding TTL: cada acierto renueva el reloj (si no, a los 120 s de la *primera*
+        # ejecución la segunda vuelve a Hive aunque acabes de repetir la consulta).
+        if os.environ.get("SIMLOG_HIVE_CACHE_SLIDING", "1").strip() != "0":
+            _hive_sql_cache[key] = (now, val)
+        return val
+
+
+def _hive_sql_cache_set(sql: str, result: Tuple[bool, str, str]) -> None:
+    ttl = _hive_sql_cache_ttl_sec()
+    if ttl <= 0:
+        return
+    ok, _err, _out = result
+    if not ok:
+        return
+    key = _hive_sql_cache_key(sql)
+    now = time.monotonic()
+    with _hive_sql_cache_lock:
+        _hive_sql_cache[key] = (now, result)
+        _hive_sql_cache.move_to_end(key)
+        max_e = _hive_sql_cache_max_entries()
+        while len(_hive_sql_cache) > max_e:
+            _hive_sql_cache.popitem(last=False)
+
+
+def limpiar_cache_consultas_hive() -> None:
+    """Vacía la caché en memoria (útil tras cargas ETL o para forzar lectura fresca)."""
+    with _hive_sql_cache_lock:
+        _hive_sql_cache.clear()
 
 
 def ejecutar_hive_sql_seguro(sql: str) -> Tuple[bool, str, str]:
+    ok, err, out, _meta = ejecutar_hive_sql_seguro_detalle(sql)
+    return ok, err, out
+
+
+def ejecutar_hive_sql_seguro_detalle(sql: str) -> Tuple[bool, str, str, bool]:
     """
-    Ejecuta HiveQL de solo lectura (SHOW / SELECT / WITH / DESCRIBE) vía PyHive.
-    Para integraciones que construyen el SQL en servidor (p. ej. asistente de flota).
+    Como `ejecutar_hive_sql_seguro`, pero el cuarto valor es True si la respuesta salió de caché en memoria.
     """
     sql = sql.strip()
     u = sql.upper().lstrip()
@@ -834,9 +1093,14 @@ def ejecutar_hive_sql_seguro(sql: str) -> Tuple[bool, str, str]:
         or u.startswith("DESCRIBE")
         or u.startswith("DESC ")
     ):
-        return False, "Solo se permiten SHOW, SELECT, WITH o DESCRIBE", ""
-    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
-    return _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
+        return False, "Solo se permiten SHOW, SELECT, WITH o DESCRIBE", "", False
+    cached = _hive_sql_cache_get(sql)
+    if cached is not None:
+        return (*cached, True)
+    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", str(_DEFAULT_HIVE_QUERY_TIMEOUT_SEC)))
+    result = _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
+    _hive_sql_cache_set(sql, result)
+    return (*result, False)
 
 
 def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
@@ -853,26 +1117,36 @@ def ejecutar_hive_sql_internal(sql: str) -> Tuple[bool, str, str]:
         return False, "Solo se permiten CREATE VIEW IF NOT EXISTS para operaciones internas.", ""
     if " AS SELECT * FROM " not in u:
         return False, "CREATE VIEW interno restringido a 'AS SELECT * FROM ...'.", ""
-    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
+    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", str(_DEFAULT_HIVE_QUERY_TIMEOUT_SEC)))
     return _ejecutar_hive_pyhive_con_timeout(sql, timeout=timeout)
 
 
 def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
+    ok, err, out, _desde_cache = ejecutar_hive_consulta_detalle(codigo)
+    return ok, err, out
+
+
+def ejecutar_hive_consulta_detalle(codigo: str) -> Tuple[bool, str, str, bool]:
     """
-    Ejecuta consulta Hive predefinida mediante PyHive (HiveServer2 en el puerto 10000).
-    Devuelve (ok, mensaje_error, salida_texto).
+    Ejecuta consulta Hive predefinida vía PyHive. Cuarto valor: True si la respuesta vino de caché en memoria.
+
+    TTL con renovación en cada uso: `SIMLOG_HIVE_CACHE_SLIDING=1` (por defecto), ver `_hive_sql_cache_get`.
     """
     if codigo not in HIVE_CONSULTAS:
-        return False, f"Consulta no permitida: {codigo}", ""
+        return False, f"Consulta no permitida: {codigo}", "", False
     sql = HIVE_CONSULTAS[codigo]["sql"].strip()
     if not (
         sql.upper().startswith("SHOW")
         or sql.upper().startswith("SELECT")
         or sql.upper().startswith("WITH")
     ):
-        return False, "Solo se permiten SHOW o SELECT", ""
+        return False, "Solo se permiten SHOW o SELECT", "", False
 
-    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", "300"))
+    cached = _hive_sql_cache_get(sql)
+    if cached is not None:
+        return (*cached, True)
+
+    timeout = int(os.environ.get("HIVE_QUERY_TIMEOUT_SEC", str(_DEFAULT_HIVE_QUERY_TIMEOUT_SEC)))
     sql_u = sql.upper().lstrip()
     can_fallback = sql_u.startswith("SELECT") or sql_u.startswith("WITH")
 
@@ -880,35 +1154,41 @@ def ejecutar_hive_consulta(codigo: str) -> Tuple[bool, str, str]:
     timed_out = err.startswith("Timeout PyHive")
 
     if ok:
-        return True, "", out
+        _hive_sql_cache_set(sql, (True, "", out))
+        return True, "", out, False
 
     if timed_out:
         if can_fallback and os.environ.get("SIMLOG_HIVE_EXEC_FALLBACK_SPARK", "0") == "1":
             ok_s, err_s, out_s = _ejecutar_hive_consulta_spark(sql, max_rows=2000)
             if ok_s:
-                return True, "", out_s
+                _hive_sql_cache_set(sql, (True, "", out_s))
+                return True, "", out_s, False
             return (
                 False,
                 f"Timeout PyHive ({timeout}s) y fallback Spark falló. "
                 f"Consulta='{codigo}' · SQL='{sql}'. "
                 f"fallback_spark_error: {err_s[:400]}.",
                 "",
+                False,
             )
         return (
             False,
             f"Timeout PyHive ({timeout}s). Consulta='{codigo}' · SQL='{sql}'. "
-            "Prueba `diag_smoke_hive` (SELECT 1) y sube `HIVE_QUERY_TIMEOUT_SEC` si HS2 va lento.",
+            "Prueba `diag_smoke_hive` (SELECT 1). Si HS2 va lento, sube `HIVE_QUERY_TIMEOUT_SEC` "
+            f"(por defecto {_DEFAULT_HIVE_QUERY_TIMEOUT_SEC}s) o activa `SIMLOG_HIVE_EXEC_FALLBACK_SPARK=1`.",
             "",
+            False,
         )
 
     if err:
-        return False, err, out or ""
+        return False, err, out or "", False
 
     return (
         False,
         f"Hive no devolvió resultado. Consulta='{codigo}' · SQL='{sql}'. "
         "Confirma HiveServer2 en el puerto 10000 (`HIVE_JDBC_URL` / `HIVE_SERVER`).",
         out or "",
+        False,
     )
 
 
@@ -1018,7 +1298,16 @@ HIVE_CATEGORIAS: Dict[str, Dict[str, List[str]]] = {
         "nombre": "Diagnóstico",
         "descripcion": "Verificación de conexión y tablas disponibles",
         "icono": "🔧",
-        "consultas": ["diag_smoke_hive", "tablas_bd"],
+        "consultas": [
+            "diag_smoke_hive",
+            "tablas_bd",
+            "historico_nodos_muestra",
+            "historico_nodos_conteo",
+            "nodos_maestro_muestra",
+            "nodos_maestro_conteo",
+            "gemelo_red_nodos",
+            "gemelo_red_aristas",
+        ],
     },
     "eventos": {
         "nombre": "Eventos Histórico",
@@ -1067,7 +1356,16 @@ HIVE_CATEGORIAS: Dict[str, Dict[str, List[str]]] = {
 
 def listar_categorias_hive() -> List[str]:
     """Lista de claves de categorías ordenadas."""
-    orden = ["diagnostico", "eventos", "clima", "tracking", "transporte", "rutas", "agregaciones", "gestor"]
+    orden = [
+        "diagnostico",
+        "eventos",
+        "clima",
+        "tracking",
+        "transporte",
+        "rutas",
+        "agregaciones",
+        "gestor",
+    ]
     return [c for c in orden if c in HIVE_CATEGORIAS]
 
 

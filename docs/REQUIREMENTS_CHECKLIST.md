@@ -89,7 +89,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 
 | Punto | Estado |
 |------|--------|
-| Ciclo periódico | Airflow (`dag_maestro_smart_grid`, `simlog_kdd_*`) + NiFi |
+| Ciclo periódico | Airflow (`simlog_maestro`, `simlog_kdd_*`) + NiFi |
 | Mantenimiento mensual | `dag_mensual_retrain_limpieza` (si está desplegado) |
 | Arranque stack sin Streamlit | `python -u scripts/simlog_stack.py start` |
 

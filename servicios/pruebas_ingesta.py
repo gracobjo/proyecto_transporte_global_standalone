@@ -107,7 +107,14 @@ def _latest_airflow_report() -> Dict[str, Any]:
 
 
 def describir_canales_ingesta() -> List[Dict[str, str]]:
+    """Canales de ingesta; el primero es el que usa la propia app Streamlit (barra lateral)."""
     return [
+        {
+            "canal": "Frontend Streamlit",
+            "ejecucion": "Barra lateral → «Ejecutar ingesta (fases 1–2 KDD)», «Spark (3–5)» o «Avanzar paso + …»",
+            "detalle": "Llama a `ejecutar_ingesta` / `ejecutar_procesamiento` en `app_visualizacion.py` (módulos `ingesta.ingesta_kdd` y `procesamiento_grafos`). Cada ejecución puede registrarse en el JSON de pruebas.",
+            "evidencia": "Registro `registro_pruebas_ingesta.json` con `canal=Frontend Streamlit`, timeline en sidebar y `ultima_ingesta_meta.json`.",
+        },
         {
             "canal": "NiFi",
             "ejecucion": "Process Group `PG_SIMLOG_KDD`",
@@ -116,17 +123,116 @@ def describir_canales_ingesta() -> List[Dict[str, str]]:
         },
         {
             "canal": "Airflow",
-            "ejecucion": "DAGs `simlog_pipeline_maestro` y `simlog_kdd_*`",
-            "detalle": "Lanza la ingesta Python y deja informes bajo `reports/kdd/<run_id>/`.",
-            "evidencia": "Informes Markdown/HTML y metadatos de ejecución del DAG.",
+            "ejecucion": "DAGs `simlog_maestro`, `simlog_pipeline_maestro`, cadena `simlog_kdd_*`",
+            "detalle": "Lanza ingesta y/o Spark programados o manuales; informes bajo `reports/kdd/<run_id>/`.",
+            "evidencia": "Informes Markdown/HTML en esa carpeta y ejecución visible en la UI de Airflow.",
         },
         {
-            "canal": "Script sin GUI",
-            "ejecucion": "`venv_transporte/bin/python -m ingesta.ingesta_kdd`",
-            "detalle": "Ejecuta la ingesta local directamente, con trazas en `reports/kdd/work/`.",
+            "canal": "Script / terminal",
+            "ejecucion": "`venv_transporte/bin/python -m ingesta.ingesta_kdd` (o `ingesta_kdd.py` en raíz según despliegue)",
+            "detalle": "Ingesta local sin pasar por esta web; trazas en `reports/kdd/work/`.",
             "evidencia": "`ultimo_payload.json` y `ultima_ingesta_meta.json`.",
         },
     ]
+
+
+def tipos_prueba_kdd_resumen() -> List[Dict[str, str]]:
+    """Filas para tabla «qué se prueba» en la UI (estático, alineado al plan KDD)."""
+    return [
+        {
+            "tipo": "Ingesta fases 1–2",
+            "objetivo": "Clima hubs, simulación, GPS, Kafka, backup HDFS",
+            "desde_esta_web": "Sí — botón «Ejecutar ingesta (fases 1–2 KDD)» (sidebar)",
+            "resultado_esperado": "Código 0, JSON en HDFS, metadatos locales; registro OK en pruebas",
+        },
+        {
+            "tipo": "Procesamiento Spark 3–5",
+            "objetivo": "Grafo, métricas, PageRank, persistencia Cassandra/Hive",
+            "desde_esta_web": "Sí — «Ejecutar procesamiento Spark (fases 3–5 KDD)»",
+            "resultado_esperado": "Código 0; tablas Hive/Cassandra actualizadas según pipeline",
+        },
+        {
+            "tipo": "Pipeline completo (paso + ingesta + Spark)",
+            "objetivo": "Un solo clic avanza paso y ejecuta ingesta + Spark",
+            "desde_esta_web": "Sí — «Avanzar paso + ingesta + procesamiento»",
+            "resultado_esperado": "Ambos códigos 0; entrada en registro de pruebas con detalle de paso",
+        },
+        {
+            "tipo": "Flujo NiFi",
+            "objetivo": "Ingesta vía Kafka con trazabilidad NiFi",
+            "desde_esta_web": "No (se opera en NiFi); aquí solo comprobación y snapshot",
+            "resultado_esperado": "PG activo; contadores y HDFS coherentes tras el flujo",
+        },
+        {
+            "tipo": "Airflow (maestro o KDD)",
+            "objetivo": "Ingesta/Spark programados o cadena manual de fases",
+            "desde_esta_web": "Disparo en UI Airflow; aquí se **listan** cadenas con informe fase 99 y puedes **añadir al JSON**",
+            "resultado_esperado": "DAG en verde; tabla «Corridas Airflow» con `informe_99_*.md` en `reports/kdd/`",
+        },
+    ]
+
+
+def resumen_ejecutivo_registro() -> Dict[str, Any]:
+    """Contadores y últimas entradas para el dashboard de pruebas."""
+    reg = leer_registro_pruebas()
+    front = [x for x in reg if x.get("canal") == "Frontend Streamlit"]
+    ultima = reg[-1] if reg else None
+    ultima_front: Optional[Dict[str, Any]] = None
+    for x in reversed(reg):
+        if x.get("canal") == "Frontend Streamlit":
+            ultima_front = x
+            break
+    cadenas_af = listar_cadenas_kdd_airflow_recientes(limit=99)
+    return {
+        "total_registros": len(reg),
+        "registros_desde_streamlit": len(front),
+        "ultima_prueba": ultima,
+        "ultima_desde_streamlit": ultima_front,
+        "cadenas_kdd_airflow_detectadas": len(cadenas_af),
+    }
+
+
+def listar_cadenas_kdd_airflow_recientes(limit: int = 20) -> List[Dict[str, Any]]:
+    """
+    Lista corridas Airflow que completaron la fase 99 (informe `informe_99_*` en `reports/kdd/`).
+    Cada DAG `simlog_kdd_*` escribe su carpeta `manual__...`; la fase 99 confirma que la cadena llegó al final.
+    """
+    if not REPORTS_KDD.is_dir():
+        return []
+    paths = [
+        p
+        for p in REPORTS_KDD.glob("*/informe_99*.md")
+        if p.is_file() and p.parent.name != "work"
+    ]
+    paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    out: List[Dict[str, Any]] = []
+    for p in paths[:limit]:
+        stt = p.stat()
+        out.append(
+            {
+                "carpeta_run_id": p.parent.name,
+                "archivo": p.name,
+                "modificado_utc": datetime.fromtimestamp(stt.st_mtime, tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                ),
+                "ruta": str(p.resolve()),
+            }
+        )
+    return out
+
+
+def registrar_prueba_airflow_cadena_kdd_completa(*, ruta_informe_f99: str) -> Dict[str, Any]:
+    """
+    Añade al JSON una prueba con canal Airflow a partir del informe de fase 99 (cadena KDD completa).
+    """
+    ruta = ruta_informe_f99.strip()
+    return registrar_prueba_ingesta(
+        canal="Airflow",
+        ejecutor="DAGs simlog_kdd_00…99 (informe fase 99 en disco)",
+        resultado="OK",
+        detalle=f"Cadena KDD completada; informe consulta final: {ruta}",
+        observaciones="Registrado desde la pestaña Pruebas al detectar informe_99 en reports/kdd/.",
+    )
 
 
 def capturar_snapshot_pruebas() -> Dict[str, Any]:

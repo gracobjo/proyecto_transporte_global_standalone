@@ -160,6 +160,17 @@ HIVE_TABLE_HISTORICO_NODOS = os.environ.get(
 HIVE_TABLE_NODOS_MAESTRO = os.environ.get(
     "SIMLOG_HIVE_TABLE_NODOS_MAESTRO", "nodos_maestro"
 )
+# Tracking histórico Hive (persistencia_hive / cuadro de mando)
+HIVE_TABLE_TRACKING_HIST = os.environ.get(
+    "SIMLOG_HIVE_TABLE_TRACKING_HIST", "tracking_camiones_historico"
+)
+# Red estática del gemelo (CSV en HDFS + DDL en generar_red_gemelo_digital.py)
+HIVE_TABLE_RED_GEMELO_NODOS = os.environ.get(
+    "SIMLOG_HIVE_TABLE_RED_GEMELO_NODOS", "red_gemelo_nodos"
+)
+HIVE_TABLE_RED_GEMELO_ARISTAS = os.environ.get(
+    "SIMLOG_HIVE_TABLE_RED_GEMELO_ARISTAS", "red_gemelo_aristas"
+)
 HIVE_METASTORE_URIS = os.environ.get(
     "HIVE_METASTORE_URIS",
     f"thrift://127.0.0.1:{HIVE_METASTORE_PORT}",
