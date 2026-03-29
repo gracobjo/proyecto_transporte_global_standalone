@@ -1,0 +1,13 @@
+# {{date}}
+
+## ✅ Qué hice hoy
+...
+
+## 🧠 Qué aprendí
+...
+
+## ⚠️ Problemas
+...
+
+## 🚀 Próximo paso
+...
