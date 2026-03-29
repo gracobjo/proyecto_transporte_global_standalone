@@ -375,3 +375,31 @@ Detalle de **construcción de la imagen** y **pasos Docker** (Cassandra, Kafka, 
 ## Licencia y uso
 
 Proyecto de referencia **SIMLOG**. Ajustar `config.py` y `config_nodos.py` según entorno y topología deseada. No incluir API keys en el repositorio; usar variables de entorno o secretos en producción.
+
+---
+
+## 📚 Obsidian Vault - Documentación Interactiva
+
+Este proyecto incluye un **vault de Obsidian** para gestión del conocimiento, conceptos técnicos y documentación del proyecto.
+
+### Cómo Acceder
+
+1. **Abrir en Obsidian**: Abre la carpeta del proyecto como vault en Obsidian
+2. **Archivo principal**: `Bienvenido.md` - Punto de entrada al índice
+3. **Navegación**: Usa `Ctrl+O` para buscar notas rápidamente
+
+### Estructura del Vault
+
+| Carpeta | Contenido |
+|---------|-----------|
+| `01_Conceptos/` | Glosario técnico (Kafka, Spark, Cassandra, GraphFrames...) |
+| `02_Proyectos/` | Proyectos y documentación principal |
+| `03_Datasets/` | Datasets y fuentes de datos |
+| `05_Snippets_Code/` | Fragmentos de código reutilizables |
+| `06_Modelos_IA/` | Modelos de ML (PageRank, Detección Anomalías) |
+| `07_Documentacion/` | Manuales técnicos y documentación |
+| `Templates/` | Plantillas para nuevas notas |
+
+### Más Información
+
+Ver [`07_Documentacion/OBSIDIAN_VAULT.md`](07_Documentacion/OBSIDIAN_VAULT.md) para guía completa.

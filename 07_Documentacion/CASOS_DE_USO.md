@@ -202,3 +202,13 @@ flowchart LR
   PR --> CU16
   OP --> CU17
 ```
+
+---
+
+## 📚 Obsidian Vault
+
+Para explorar los casos de uso con mayor detalle interactivo y navegar entre conceptos relacionados, consulta el **Obsidian Vault**:
+
+- **Bienvenido.md** - Índice principal
+- **Conceptos**: `01_Conceptos/índice_Conceptos.md`
+- **Proyectos**: `02_Proyectos/índice_Proyectos.md`

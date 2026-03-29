@@ -285,3 +285,16 @@ Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analí
 | RNF-GAI-04 | Consistencia de esquema | `graph_anomalies` se alinea a `cassandra/esquema_logistica.cql` |
 
 Diseño / diagramas: nuevos bloques añadidos en `docs/DIAGRAMAS_MERMAID.md` (FAQ IA, Asistente de Flota, Graph AI y DAG Airflow).
+
+---
+
+## 📚 Documentación Interactiva - Obsidian Vault
+
+Para una experiencia de navegación más rica y búsqueda de conceptos, consulta el **Obsidian Vault** incluido en este proyecto:
+
+- **Archivo principal**: `Bienvenido.md`
+- **Conceptos técnicos**: `01_Conceptos/índice_Conceptos.md`
+- **Snippets de código**: `05_Snippets_Code/índice_Snippets.md`
+- **Modelos IA**: `06_Modelos_IA/índice_Modelos.md`
+
+Para abrir: Obsidian → Open Vault → Seleccionar carpeta del proyecto.

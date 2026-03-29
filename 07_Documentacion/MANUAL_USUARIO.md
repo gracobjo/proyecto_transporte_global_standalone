@@ -350,3 +350,30 @@ Muestra:
 2. Verifica HiveServer2 (pestaña **Resultados pipeline** o **Verificación técnica**).
 3. Si Hive no responde, el núcleo del proyecto igual valida con Cassandra (tiempo casi real).
 
+
+---
+
+## 📚 Obsidian Vault - Documentación Extendida
+
+Este proyecto incluye un **vault de Obsidian** con documentación interactiva adicional.
+
+### Cómo Acceder
+
+1. Abre **Obsidian** en tu ordenador
+2. File → Open Vault → Selecciona la carpeta del proyecto
+3. El archivo `Bienvenido.md` es el punto de entrada
+
+### Contenido Adicional
+
+- **Glosario técnico**: `01_Conceptos/` - Kafka, Spark, Cassandra, GraphFrames...
+- **Snippets de código**: `05_Snippets_Code/` - Código reutilizable
+- **Modelos IA**: `06_Modelos_IA/` - PageRank, Detección de Anomalías
+- **Manuales completos**: `07_Documentacion/`
+
+### Navegación
+
+- `Ctrl+O` - Buscar notas
+- `Ctrl+G` - Ver grafo de conocimientos
+- `Ctrl+P` - Paleta de comandos
+
+Ver [`OBSIDIAN_VAULT.md`](OBSIDIAN_VAULT.md) para guía completa.

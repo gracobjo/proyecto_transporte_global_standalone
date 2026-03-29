@@ -90,3 +90,24 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 ## Diagramas
 
 Los diagramas visuales actualizados (Mermaid) están en [DIAGRAMAS_MERMAID.md](DIAGRAMAS_MERMAID.md) y en [DISENO_SISTEMA.md](DISENO_SISTEMA.md).
+
+---
+
+## 📚 Obsidian Vault - Documentación Interactiva
+
+El vault de Obsidian proporciona una forma visual y navegable de explorar la arquitectura:
+
+### Conceptos Relacionados
+
+- `01_Conceptos/Kafka.md` - Colas de mensajes
+- `01_Conceptos/Spark.md` - Motor de procesamiento
+- `01_Conceptos/Cassandra.md` - Persistencia
+- `01_Conceptos/Hive.md` - Histórico
+- `01_Conceptos/GraphFrames.md` - Grafos
+- `01_Conceptos/Gemelo_Digital.md` - Gemelo digital del sistema
+
+### Navegación
+
+Abre `Bienvenido.md` en Obsidian y navega interactivamente entre componentes de la arquitectura.
+
+Ver [`OBSIDIAN_VAULT.md`](OBSIDIAN_VAULT.md) para guía completa.

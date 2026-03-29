@@ -664,3 +664,37 @@ Antes de añadir nuevas funcionalidades:
 - Evitar SQL dinámico del usuario (siempre whitelist/plantillas).
 - No acoplar Graph AI con Spark: Graph AI solo consume grafo materializado.
 
+
+---
+
+## 📚 Obsidian Vault - Documentación para Desarrolladores
+
+El vault de Obsidian incluye recursos adicionales para desarrolladores:
+
+### Conceptos Técnicos
+
+- `01_Conceptos/Kafka.md` - Sistema de mensajería
+- `01_Conceptos/Spark.md` - Procesamiento distribuido
+- `01_Conceptos/Cassandra.md` - Base de datos NoSQL
+- `01_Conceptos/GraphFrames.md` - Procesamiento de grafos
+- `01_Conceptos/KDD.md` - Knowledge Discovery in Databases
+- `01_Conceptos/Streamlit.md` - Dashboards
+
+### Snippets de Código
+
+- `05_Snippets_Code/Ingesta_KDD.md` - Script de ingesta
+- `05_Snippets_Code/Procesamiento_Grafos_Spark.md` - Procesamiento grafos
+- `05_Snippets_Code/Dashboard_Streamlit.md` - Dashboard
+
+### Modelos IA
+
+- `06_Modelos_IA/PageRank_Nodos_Criticos.md`
+- `06_Modelos_IA/Detección_Anomalías.md`
+
+### Cómo Usar
+
+1. Abre el proyecto en Obsidian
+2. Consulta `Bienvenido.md` para el índice principal
+3. Usa `Ctrl+O` para buscar cualquier concepto o código
+
+Ver [`OBSIDIAN_VAULT.md`](OBSIDIAN_VAULT.md) para guía completa de uso.
