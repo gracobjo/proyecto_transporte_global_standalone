@@ -9,7 +9,8 @@
 | [ALINEACION_SENTINEL360_STANDALONE.md](ALINEACION_SENTINEL360_STANDALONE.md) | Equivalencias con [Sentinel360](https://github.com/gracobjo/Proyecto-Big-Data-Sentinel-360) y principios standalone |
 | [DISENO_ARQUITECTURA.md](DISENO_ARQUITECTURA.md) | Arquitectura, componentes y decisiones |
 | [DISENO_SISTEMA.md](DISENO_SISTEMA.md) | Diseño lógico, restricciones, diagramas Mermaid integrados |
-| [CASOS_DE_USO.md](CASOS_DE_USO.md) | Actores, catálogo CU-01…CU-14, diagrama Mermaid |
+| [CASOS_DE_USO.md](CASOS_DE_USO.md) | Actores, catálogo CU-01…CU-19, diagrama Mermaid |
+| [PRESENTACION_PROYECTO_SIMLOG.md](PRESENTACION_PROYECTO_SIMLOG.md) | Guion breve de presentación (demo, stack, novedades) |
 | [MEMORIA_PROYECTO_SIMLOG.md](MEMORIA_PROYECTO_SIMLOG.md) | Documento único “en papel” para presentación formal (índice + consolidación documental) |
 | [DASHBOARD_KDD_UI.md](DASHBOARD_KDD_UI.md) | **Diseño** de la pestaña Ciclo KDD (Streamlit): módulos, fases 1–2 / 3–5, seguridad API |
 | [FLUJO_DATOS_Y_REQUISITOS.md](FLUJO_DATOS_Y_REQUISITOS.md) | Flujo de datos, JSON, Hive/Cassandra, **RF/RNF dashboard KDD** (§7–8) |

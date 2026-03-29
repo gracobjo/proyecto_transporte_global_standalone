@@ -270,9 +270,21 @@ if (!weatherAvailable || climaHubs.isEmpty()) {
             def dist = haversineKm(incident.lat as Double, incident.lon as Double, meta.lat as Double, meta.lon as Double)
             if (dist > 100.0d) return
             def current = bestWeather[hubId]
-            def candidateScore = [(severityRank[incident.severity] ?: 0), -dist]
-            def currentScore = current ? [(severityRank[current.severity] ?: 0), -(current.distancia_referencia_km as Double)] : null
-            if (current == null || candidateScore > currentScore) {
+            def candRank = severityRank[incident.severity] ?: 0
+            def candDist = Math.round(dist * 100.0d) / 100.0d
+            boolean replace = false
+            if (current == null) {
+                replace = true
+            } else {
+                def curRank = severityRank[current.severity] ?: 0
+                def curDist = (current.distancia_referencia_km != null) ? (current.distancia_referencia_km as Double) : Double.MAX_VALUE
+                if (candRank > curRank) {
+                    replace = true
+                } else if (candRank == curRank && candDist < curDist) {
+                    replace = true
+                }
+            }
+            if (replace) {
                 def resumen = (incident.condiciones_meteorologicas ?: []) ? incident.condiciones_meteorologicas[0] : (incident.estado_carretera ?: "Condiciones adversas")
                 def detalle = "Fallback DGT: ${resumen}"
                 if (incident.carretera) detalle += " en ${incident.carretera}"
@@ -287,7 +299,7 @@ if (!weatherAvailable || climaHubs.isEmpty()) {
                     source: "dgt",
                     fallback_activo: true,
                     id_incidencia: incident.id_incidencia,
-                    distancia_referencia_km: Math.round(dist * 100.0d) / 100.0d,
+                    distancia_referencia_km: candDist,
                     severity: incident.severity,
                 ]
             }

@@ -150,8 +150,14 @@ Qué incluye:
    - Exportación a PDF para visualización o impresión.
 7. **Slides — Clima y anticipación de retrasos**:
    - Genera una estimación orientativa por hub combinando variables meteorológicas y estados.
+8. **Flota: rutas por camión y mapa operativo**:
+   - Añade **varias** rutas (camión + origen + destino) sobre la red de nodos; **Añadir ruta** persiste en Cassandra (`asignaciones_ruta_cuadro`) y actualiza `tracking_camiones`.
+   - Mapa Folium con polilínea según la ruta por nodos (BFS en simulación) o línea plan origen→destino; marcadores de camión con color según estado/retraso.
+   - **Simulación de movimiento (expander):** tras **Iniciar simulación**, la posición se interpola a lo largo del camino mínimo y se refresca el mapa cada *N* segundos (por defecto 5); la **duración total del viaje** define cuándo se alcanza el destino. Al finalizar: **toast** en pantalla y, si activas **Correo al finalizar cada ruta** y hay SMTP configurado, mensaje con ruta, camión, horas de salida/llegada (UTC) e incidencias si las hubo.
+   - **Detener simulación** cancela el refresco automático (no borra filas en Cassandra).
+   - **Correo electrónico** (bloque inferior): resumen de flota; requiere variables `SIMLOG_SMTP_*` (ver `.env.example`).
 
-**Resultado esperado**: tablas y métricas listas para usuario final, con opción de consulta libre segura y generación de informes PDF.
+**Resultado esperado**: tablas y métricas listas para usuario final, con opción de consulta libre segura, generación de informes PDF, asignación operativa de rutas y demostración visual de movimiento en mapa.
 
 ---
 

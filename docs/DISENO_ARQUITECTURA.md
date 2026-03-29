@@ -21,7 +21,7 @@ Definir la arquitectura técnica del sistema para ingesta, procesamiento, persis
 | Estado operativo | Consulta rápida en tiempo casi real | Cassandra |
 | Histórico analítico | Consultas de tendencia, reporting y analítica de incidencias (riesgo por hub 24h, top causas 24h) | Hive |
 | Orquestación | Programación y ejecución encadenada | Airflow |
-| Visualización | Operación, rutas/métricas y **guía del ciclo KDD** (fases, payload, topología vs mapa) + asistente de flota | Streamlit + Folium + Altair (topología en pestaña KDD) |
+| Visualización | Operación, rutas/métricas, **guía del ciclo KDD** (fases, payload, topología vs mapa), **cuadro de mando** (consultas, informes, flota multi-camión, simulación de movimiento en mapa, correo SMTP opcional) + asistente de flota | Streamlit + Folium + Altair (topología en pestaña KDD) |
 | FAQ IA | Resolución de preguntas frecuentes sobre operación, servicios e informes | FastAPI + KB JSON local |
 | Asistente de Flota | Traducción lenguaje natural → consultas supervisadas (Cassandra/Hive) | Streamlit + cassandra-driver + PyHive |
 | Graph AI microservicio | Detección de anomalías y scoring por snapshot de grafo | FastAPI + NetworkX |

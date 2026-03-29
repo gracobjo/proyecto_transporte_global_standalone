@@ -197,3 +197,11 @@ COSTE_EURO_MINUTO_RETASO = float(os.environ.get("SIMLOG_COSTE_RETASO_EUR_MIN", "
 # Ingesta periódica (cron / Airflow / systemd): ventana en minutos entre ejecuciones.
 # 15 = producción; 2–5 para demos más rápidas. Usado con `ingesta/trigger_paso.py`.
 SIMLOG_INGESTA_INTERVAL_MINUTES = int(os.environ.get("SIMLOG_INGESTA_INTERVAL_MINUTES", "15"))
+
+# Correo (alertas cuadro de mando / flota). Sin SIMLOG_SMTP_HOST el envío queda deshabilitado.
+SMTP_HOST = os.environ.get("SIMLOG_SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SIMLOG_SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SIMLOG_SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SIMLOG_SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SIMLOG_SMTP_FROM", "").strip() or SMTP_USER
+SMTP_USE_TLS = os.environ.get("SIMLOG_SMTP_TLS", "1").strip() != "0"

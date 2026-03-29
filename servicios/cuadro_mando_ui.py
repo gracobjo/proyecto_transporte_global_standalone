@@ -7,14 +7,17 @@ import io
 import json
 import os
 import time
+import uuid
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
+from streamlit_folium import st_folium
 
+from config_nodos import get_nodos
 from servicios.clima_retrasos import (
     evaluar_retraso_integrado,
     obtener_clima_todos_hubs_completo,
@@ -51,8 +54,28 @@ from servicios.consultas_cuadro_mando import (
     titulo_cassandra,
     titulo_hive,
 )
+from servicios.asignaciones_ruta_cassandra import (
+    listar_asignaciones_dia,
+    persistir_asignacion_y_tracking,
+)
+from servicios.cuadro_mando_flota_mapa import (
+    construir_mapa_flota_asignaciones,
+    tabla_incidencias_rows,
+    texto_resumen_correo,
+)
 from servicios.ejecucion_pipeline import ejecutar_ingesta, ejecutar_procesamiento
-from servicios.estado_y_datos import cargar_nodos_cassandra, verificar_kafka_topic
+from servicios.estado_y_datos import (
+    cargar_nodos_cassandra,
+    cargar_tracking_cassandra,
+    verificar_kafka_topic,
+)
+from servicios.notificaciones_correo import enviar_correo_texto, smtp_configurado
+from servicios.simulacion_movimiento_flota import (
+    iniciar_estado_simulacion_para_asignaciones,
+    sincronizar_posiciones_desde_reloj,
+    texto_alerta_ruta_finalizada,
+    texto_toast_ruta_finalizada,
+)
 from servicios.kdd_operaciones import OPERACIONES_POR_FASE
 from config import PROJECT_DISPLAY_NAME, TOPIC_TRANSPORTE
 
@@ -1195,6 +1218,302 @@ def _generar_pdf_informe(df: pd.DataFrame, *, ctx: dict) -> bytes:
     return buff.getvalue()
 
 
+def _asignaciones_desde_tabla_cuadro(filas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convierte filas de `listar_asignaciones_dia()` al formato del mapa ({id, camion, origen, destino, id_ruta})."""
+    out: List[Dict[str, Any]] = []
+    for r in filas:
+        cid = str(r.get("id_camion") or "").strip()
+        o = str(r.get("origen") or "").strip()
+        d = str(r.get("destino") or "").strip()
+        ir = str(r.get("id_ruta") or "").strip()
+        if not cid or not o or not d:
+            continue
+        out.append(
+            {
+                "id": f"cuadro_{ir}_{cid}"[:48],
+                "camion": cid,
+                "origen": o,
+                "destino": d,
+                "id_ruta": ir,
+            }
+        )
+    return out
+
+
+def render_flota_rutas_mapa() -> None:
+    """Multi-camión: origen/destino configurables, mapa y alertas por correo."""
+    st.subheader("Flota: rutas por camión y mapa operativo")
+    st.caption(
+        "Configura **varias** rutas (camión + origen + destino) sobre la red de nodos; no está limitado a un solo hub. "
+        "Al pulsar **Añadir ruta** se guarda en **`asignaciones_ruta_cuadro`** (día + camión + `id_ruta`) y se actualiza **`tracking_camiones`**."
+    )
+    with st.expander("Por qué en «Tracking» veo más filas que camiones simulados", expanded=False):
+        st.markdown(
+            "En Cassandra, `tracking_camiones` tiene **una fila por `id_camion`** (clave primaria). "
+            "Los camiones de **pruebas antiguas** (`camion_prueba_*`, etc.) **siguen** hasta que los borres con CQL. "
+            "La ingesta periódica **vuelve a escribir** los 5 camiones de simulación; no elimina ids antiguos. "
+            "Tiempo real = **último valor por camión**, no «solo 5 filas en el mundo»."
+        )
+    st.caption(
+        "Marcadores: verde (OK), naranja (aviso / sin telemetría), rojo (retraso o motivo informado)."
+    )
+    if "cm_flota_asignaciones" not in st.session_state:
+        st.session_state.cm_flota_asignaciones = []
+    if "cm_sim_trucks" not in st.session_state:
+        st.session_state.cm_sim_trucks = {}
+    if "cm_sim_live" not in st.session_state:
+        st.session_state.cm_sim_live = False
+
+    nodos = get_nodos()
+    nombres_nodos = sorted(nodos.keys())
+    tracking = cargar_tracking_cassandra()
+    ids_existentes = sorted({str(t.get("id_camion")) for t in tracking if t.get("id_camion")})
+
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+    with col1:
+        st.selectbox(
+            "Camión (lista en Cassandra)",
+            options=[""] + ids_existentes,
+            format_func=lambda x: "— elegir o escribir abajo —" if x == "" else x,
+            key="cm_fl_camion_sel",
+        )
+        camion_txt = st.text_input(
+            "Id de camión (manual)",
+            key="cm_fl_camion_txt",
+            placeholder="ej. CAMION_01",
+            help="Si rellenas esto, tiene prioridad sobre la lista.",
+        )
+    idx_m = nombres_nodos.index("Madrid") if "Madrid" in nombres_nodos else 0
+    idx_b = nombres_nodos.index("Barcelona") if "Barcelona" in nombres_nodos else min(1, len(nombres_nodos) - 1)
+    with col2:
+        st.selectbox("Origen", options=nombres_nodos, index=idx_m, key="cm_fl_origen")
+    with col3:
+        st.selectbox("Destino", options=nombres_nodos, index=idx_b, key="cm_fl_destino")
+    with col4:
+        st.write("")
+        st.write("")
+        add_clicked = st.button("Añadir ruta", type="primary", key="cm_fl_add")
+
+    if add_clicked:
+        manual = (st.session_state.get("cm_fl_camion_txt") or "").strip()
+        sel = (st.session_state.get("cm_fl_camion_sel") or "").strip()
+        cid = manual or sel
+        origen = st.session_state.get("cm_fl_origen", nombres_nodos[0])
+        destino = st.session_state.get("cm_fl_destino", nombres_nodos[0])
+        if not cid:
+            st.warning("Indica un id de camión (lista o campo manual).")
+        elif origen == destino:
+            st.warning("Origen y destino deben ser distintos.")
+        else:
+            ok_db, err_db, id_ruta = persistir_asignacion_y_tracking(cid, origen, destino)
+            if not ok_db:
+                st.error(err_db)
+            else:
+                st.session_state.cm_flota_asignaciones.append(
+                    {
+                        "id": uuid.uuid4().hex[:10],
+                        "camion": cid,
+                        "origen": origen,
+                        "destino": destino,
+                        "id_ruta": id_ruta,
+                    }
+                )
+                st.success(f"Persistido en Cassandra · `id_ruta`={id_ruta}")
+                st.rerun()
+
+    ok_asg, err_asg, filas_asg = listar_asignaciones_dia()
+    if ok_asg and filas_asg:
+        st.markdown("**Asignaciones guardadas hoy** (`asignaciones_ruta_cuadro`)")
+        st.dataframe(pd.DataFrame(filas_asg), width="stretch", hide_index=True)
+    elif ok_asg and not filas_asg:
+        st.caption("Aún no hay filas en `asignaciones_ruta_cuadro` para hoy (UTC).")
+    elif err_asg:
+        st.warning(f"No se pudo leer `asignaciones_ruta_cuadro`: {err_asg[:200]}")
+
+    ses_list: List[Dict[str, Any]] = st.session_state.cm_flota_asignaciones
+    if ses_list:
+        asignaciones_para_mapa = ses_list
+    elif ok_asg and filas_asg:
+        asignaciones_para_mapa = _asignaciones_desde_tabla_cuadro(filas_asg)
+    else:
+        asignaciones_para_mapa = []
+
+    if ses_list:
+        st.markdown("**Rutas en la sesión (mapa y correo)**")
+        st.caption("«Quitar» solo elimina la entrada de esta vista; los datos ya escritos en Cassandra no se borran.")
+        for a in list(ses_list):
+            c1, c2 = st.columns([5, 1])
+            rid = a.get("id_ruta")
+            extra = f" · `id_ruta={rid}`" if rid else ""
+            c1.markdown(f"**{a['camion']}** · {a['origen']} → **{a['destino']}**{extra}")
+            if c2.button("Quitar", key=f"cm_fl_rm_{a['id']}"):
+                st.session_state.cm_flota_asignaciones = [
+                    x for x in st.session_state.cm_flota_asignaciones if x["id"] != a["id"]
+                ]
+                st.rerun()
+
+    if not ses_list and asignaciones_para_mapa and ok_asg and filas_asg:
+        st.markdown("**Mapa operativo**")
+        st.caption(
+            "Hay rutas en la tabla de **hoy** (Cassandra) pero la lista de sesión está vacía: "
+            "el mapa se muestra igualmente. Usa el botón para copiar la tabla a la sesión y poder **Quitar** filas de la vista."
+        )
+        if st.button("Traer asignaciones de hoy a la sesión editable", key="cm_fl_pull_today"):
+            st.session_state.cm_flota_asignaciones = _asignaciones_desde_tabla_cuadro(filas_asg)
+            st.rerun()
+
+    cimp1, cimp2 = st.columns(2)
+    with cimp1:
+        if st.button("Rellenar desde tracking Cassandra", key="cm_fl_fill_track"):
+            nuevas = []
+            seen = {x["camion"] for x in ses_list}
+            for t in tracking:
+                cid = str(t.get("id_camion") or "").strip()
+                ro = (t.get("ruta_origen") or "").strip()
+                rd = (t.get("ruta_destino") or "").strip()
+                if not cid or not ro or not rd:
+                    continue
+                if ro not in nodos or rd not in nodos:
+                    continue
+                if cid in seen:
+                    continue
+                nuevas.append(
+                    {"id": uuid.uuid4().hex[:10], "camion": cid, "origen": ro, "destino": rd}
+                )
+                seen.add(cid)
+            st.session_state.cm_flota_asignaciones.extend(nuevas)
+            st.rerun()
+    with cimp2:
+        if st.button("Vaciar lista", key="cm_fl_clear"):
+            st.session_state.cm_flota_asignaciones = []
+            st.rerun()
+
+    if asignaciones_para_mapa:
+        st.caption(
+            "Las posiciones vienen de **`tracking_camiones`** (última escritura). Si no hay simulación activa, "
+            "suelen quedarse en el **origen** y varios camiones pueden coincidir en el mismo punto: el mapa **separa los pins** "
+            "un poco para que los distingas. Para ver **movimiento** a lo largo de la ruta, usa el expander siguiente y "
+            "**Iniciar simulación** (intervalo p. ej. 5 s)."
+        )
+        with st.expander("Simulación de movimiento en el mapa (actualización periódica)", expanded=True):
+            st.caption(
+                "Camino mínimo (BFS) entre origen y destino; la posición en `tracking_camiones` se interpola "
+                "según el tiempo para ver el avance en el plano. Al llegar al destino: alerta en pantalla y, "
+                "opcionalmente, correo con ruta, camión, horas e incidencias."
+            )
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                st.number_input("Intervalo de refresco del mapa (s)", 1, 60, 5, key="cm_sim_refresh_sec")
+            with r2:
+                st.number_input("Duración total del viaje (s)", 10, 7200, 120, key="cm_sim_dur_sec")
+            with r3:
+                st.checkbox("Correo al finalizar cada ruta", value=False, key="cm_sim_mail_fin")
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("Iniciar simulación", key="cm_sim_start", width="stretch"):
+                    dur = float(st.session_state.get("cm_sim_dur_sec", 120))
+                    state, warns = iniciar_estado_simulacion_para_asignaciones(
+                        asignaciones_para_mapa, dur
+                    )
+                    st.session_state.cm_sim_trucks = state
+                    st.session_state.cm_sim_live = bool(state)
+                    for w in warns:
+                        st.warning(w)
+                    if state:
+                        sec = int(st.session_state.get("cm_sim_refresh_sec", 5))
+                        st.success(
+                            f"Simulación activa: {len(state)} camión(es). Mapa cada {sec} s · viaje ~{int(dur)} s."
+                        )
+                    elif not warns:
+                        st.warning("No hay rutas válidas para simular.")
+                    st.rerun()
+            with b2:
+                if st.button("Detener simulación", key="cm_sim_stop", width="stretch"):
+                    st.session_state.cm_sim_trucks = {}
+                    st.session_state.cm_sim_live = False
+                    st.rerun()
+            if st.session_state.get("cm_sim_live") and st.session_state.get("cm_sim_trucks"):
+                sim_d = st.session_state.cm_sim_trucks or {}
+                pend = sum(1 for s in sim_d.values() if not s.get("notificado_fin"))
+                if pend == 0:
+                    st.caption(
+                        "Todas las rutas de esta simulación han **finalizado**. Pulsa **Detener simulación** "
+                        "para dejar de refrescar el mapa automáticamente."
+                    )
+
+        iv = max(1, int(st.session_state.get("cm_sim_refresh_sec", 5)))
+
+        def _pintar_mapa_e_incidencias(tracking_list: List[Dict[str, Any]]) -> None:
+            mapa = construir_mapa_flota_asignaciones(asignaciones_para_mapa, tracking_list)
+            st_folium(mapa, width=None, height=520, returned_objects=[], key="folium_cm_flota")
+            df_inc = pd.DataFrame(tabla_incidencias_rows(asignaciones_para_mapa, tracking_list))
+            st.markdown("**Incidencias y retrasos**")
+            st.dataframe(df_inc, width="stretch", hide_index=True)
+
+        if st.session_state.get("cm_sim_live") and st.session_state.get("cm_sim_trucks"):
+            @st.fragment(run_every=timedelta(seconds=iv))
+            def _mapa_vivo() -> None:
+                sim = dict(st.session_state.get("cm_sim_trucks") or {})
+                sim, events = sincronizar_posiciones_desde_reloj(sim)
+                st.session_state.cm_sim_trucks = sim
+                tracking_live = cargar_tracking_cassandra()
+                for ev in events:
+                    st.toast(texto_toast_ruta_finalizada(ev), icon="✅")
+                    if st.session_state.get("cm_sim_mail_fin"):
+                        dests = [
+                            x.strip()
+                            for x in (st.session_state.get("cm_fl_emails") or "").replace(";", ",").split(",")
+                            if x.strip()
+                        ]
+                        if dests and smtp_configurado():
+                            ok_m, msg_m = enviar_correo_texto(
+                                dests,
+                                f"[SIMLOG] Ruta finalizada · {ev.get('id_camion')}",
+                                texto_alerta_ruta_finalizada(ev),
+                            )
+                            if not ok_m:
+                                st.caption(f"Correo no enviado: {msg_m[:160]}")
+                _pintar_mapa_e_incidencias(tracking_live)
+
+            _mapa_vivo()
+        else:
+            tracking_static = cargar_tracking_cassandra()
+            _pintar_mapa_e_incidencias(tracking_static)
+
+        st.markdown("**Correo electrónico**")
+        st.caption(
+            "Varias direcciones separadas por coma. Requiere `SIMLOG_SMTP_HOST` (y credenciales si el servidor las exige)."
+        )
+        emails = st.text_input(
+            "Destinatarios",
+            key="cm_fl_emails",
+            placeholder="logistica@empresa.com, control@empresa.com",
+        )
+        solo_ret = st.checkbox("Enviar solo si hay retraso o aviso (incl. sin telemetría)", value=False, key="cm_fl_mail_delay")
+        if st.button("Enviar resumen por correo", key="cm_fl_send_mail"):
+            dests = [x.strip() for x in emails.replace(";", ",").split(",") if x.strip()]
+            tracking_mail = cargar_tracking_cassandra()
+            rows = tabla_incidencias_rows(st.session_state.cm_flota_asignaciones, tracking_mail)
+            if solo_ret and not any(r.get("nivel") in ("retraso", "aviso") for r in rows):
+                st.info("Nada que enviar según el filtro (sin retrasos ni avisos).")
+            elif not dests:
+                st.warning("Indica al menos un correo.")
+            else:
+                body = texto_resumen_correo(st.session_state.cm_flota_asignaciones, tracking_mail)
+                ok, msg = enviar_correo_texto(dests, "[SIMLOG] Resumen flota y rutas", body)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+        if not smtp_configurado():
+            st.info("SMTP no configurado: exporta `SIMLOG_SMTP_HOST` (p. ej. smtp.gmail.com:587 con TLS).")
+    else:
+        st.info(
+            "No hay rutas para el mapa: añade alguna con **Añadir ruta**, o espera a que existan filas en "
+            "`asignaciones_ruta_cuadro` para hoy (UTC), o usa **Rellenar desde tracking**."
+        )
+
+
 def render_cuadro_mando_tab() -> None:
     """Contenido completo de la pestaña Cuadro de mando."""
     st.header("Cuadro de mando")
@@ -1211,5 +1530,7 @@ def render_cuadro_mando_tab() -> None:
     render_consultas_hive()
     st.divider()
     render_informes_a_medida()
+    st.divider()
+    render_flota_rutas_mapa()
     st.divider()
     render_slides_clima_retrasos()

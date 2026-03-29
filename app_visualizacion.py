@@ -107,10 +107,38 @@ def _render_resumen_dgt_ui() -> None:
 
     alerta = ing.get("alerta_bloqueos") or {}
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Modo DGT", str(ing.get("dgt_source_mode") or "disabled"))
+    modo = ing.get("dgt_source_mode")
+    c1.metric("Modo DGT", str(modo or "disabled"))
     c2.metric("Incidencias DGT", str(ing.get("dgt_incidencias_totales", 0)))
     c3.metric("Nodos DGT", str(ing.get("dgt_nodos_afectados", 0)))
     c4.metric("Bloqueos", str(alerta.get("bloqueados", 0)))
+
+    # Por qué suele verse disabled + ceros (métricas leen `reports/kdd/work/ultimo_payload.json`).
+    dgt_on = ing.get("dgt_habilitado")
+    err = ing.get("dgt_error")
+    tiene_resumen = ing.get("payload_incluye_resumen_dgt")
+    if tiene_resumen is False:
+        st.caption(
+            "El archivo `ultimo_payload.json` **no incluye** la clave `resumen_dgt` (snapshot generado por código antiguo "
+            "u otra ruta). Ejecuta de nuevo la ingesta: `python -m ingesta.ingesta_kdd` o el botón del sidebar."
+        )
+    elif dgt_on is False:
+        st.caption(
+            "**Modo `disabled`:** la ingesta se ejecutó con **DGT desactivado** "
+            "(`SIMLOG_USE_DGT=0`). No se descargó ni parseó DATEX2."
+        )
+    elif modo in (None, "disabled"):
+        st.caption(
+            "**Modo `disabled`:** no hubo XML DATEX2 usable (fallo de red/timeout y **sin caché** en "
+            "`SIMLOG_DGT_XML_CACHE_PATH`, o URL bloqueada). Con red: vuelve a lanzar ingesta; sin red: coloca un XML válido "
+            "en la caché y usa `SIMLOG_DGT_ONLY_CACHE=1`."
+        )
+        if err:
+            st.caption(f"Detalle del último intento: `{err[:280]}`")
+    elif modo in ("live", "cache") and (ing.get("dgt_incidencias_totales") or 0) == 0:
+        st.caption(
+            f"Feed **{modo}** pero **0 incidencias** parseadas (publicación vacía o estructura no reconocida por el parser)."
+        )
 
     if alerta:
         ratio = alerta.get("ratio_bloqueados", alerta.get("ratio", 0))

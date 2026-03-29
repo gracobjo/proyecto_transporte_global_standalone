@@ -32,6 +32,8 @@ flowchart TB
     UC15[CU-15 FAQ IA]
     UC16[CU-16 Integrar DATEX2 DGT]
     UC17[CU-17 Auditar provenance NiFi]
+    UC18[CU-18 Reconfig. logística]
+    UC19[CU-19 Flota cuadro + simulación mapa]
   end
   OP --> UC1
   OP --> UC2
@@ -59,6 +61,10 @@ flowchart TB
   OP --> UC16
   SCH --> UC16
   OP --> UC17
+  OP --> UC18
+  AN --> UC18
+  AN --> UC19
+  OP --> UC19
 ```
 
 ---

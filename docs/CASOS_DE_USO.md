@@ -33,6 +33,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-16 | Integrar incidencias reales DATEX2 DGT | Operador / Programador | Snapshot enriquecido con señal real y prioridad sobre simulación |
 | CU-17 | Auditar procedencia de la ingesta en NiFi | Operador | Trazabilidad por relaciones y atributos de provenance |
 | CU-18 | Reconfigurar la red logística ante fallo crítico | Operador / Analista | Nodos/rutas desactivados, rutas alternativas recalculadas y alertas activas |
+| CU-19 | Asignar rutas en cuadro de mando y simular movimiento en mapa | Analista / Operador | Filas en `asignaciones_ruta_cuadro`, `tracking_camiones` actualizado, mapa en vivo cada *N* s, alerta/correo al finalizar ruta |
 
 ## Detalle breve
 
@@ -71,6 +72,12 @@ Documento funcional para la plataforma en modo standalone.
 
 - **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
 - **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`.
+
+### CU-19 — Cuadro de mando: flota y simulación en mapa
+
+- **Precondiciones:** Cassandra accesible; tabla `asignaciones_ruta_cuadro` creada (migración en `cassandra/migracion_asignaciones_ruta_cuadro.cql` si hace falta).
+- **Flujo:** pestaña **Cuadro de mando** → sección **Flota: rutas por camión** → **Añadir ruta** → opcionalmente **Iniciar simulación** (intervalo de refresco, duración del viaje) → observación del marcador en mapa → al llegar al destino: toast y correo opcional (`SIMLOG_SMTP_*`, mismos destinatarios que el resumen de flota).
+- **Postcondiciones:** `tracking_camiones` refleja posición interpolada por BFS; `estado_ruta` puede pasar a `Finalizada`. Documentación: `servicios/simulacion_movimiento_flota.py`, `docs/MANUAL_USUARIO.md` §4.3.
 
 ### CU-08 — NiFi
 

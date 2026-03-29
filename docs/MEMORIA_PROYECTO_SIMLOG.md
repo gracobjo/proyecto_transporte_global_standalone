@@ -6,7 +6,7 @@
 - **Tipo:** Proyecto de ingenieria informatica aplicado a analitica de datos y sistemas distribuidos
 - **Modalidad:** Standalone (despliegue en una maquina) con opcion de orquestacion y contenedores
 - **Repositorio:** [gracobjo/proyecto_transporte_global_standalone](https://github.com/gracobjo/proyecto_transporte_global_standalone)
-- **Version de memoria:** 1.0
+- **Version de memoria:** 1.1
 
 ---
 
@@ -215,7 +215,7 @@ La aplicacion Streamlit estructura el trabajo en nueve pestanias:
 
 1. **Ciclo KDD:** navegacion por fases, ejecucion por fase y trazabilidad.
 2. **Resultados pipeline:** verificaciones por etapa (ingesta, Kafka/HDFS, Spark, Cassandra, Hive).
-3. **Cuadro de mando:** operaciones, consultas y slides de clima/retrasos.
+3. **Cuadro de mando:** operaciones, consultas supervisadas Cassandra/Hive, informes a medida, slides de clima/retrasos, **flota multi-camión** (asignaciones persistidas en `asignaciones_ruta_cuadro`, mapa Folium, **simulación de movimiento** con refresco periódico y alertas/correo al finalizar ruta).
 4. **Asistente flota:** lenguaje natural hacia consultas supervisadas.
 5. **Rutas hibridas:** planificacion con incidencias y alternativas.
 6. **Gemelo digital:** simulacion de escenarios y comparacion de rutas.
@@ -235,6 +235,7 @@ Aspectos UX destacados:
 - constructor de informes a medida con modo `SELECT *` o por campos,
 - exportacion PDF para consumo de negocio y auditoria,
 - FAQ IA con historial, sugerencias y fuentes para reducir friccion operativa.
+- Cuadro de mando: rutas operativas por camión sobre la red española del proyecto, posición interpolada en `tracking_camiones` durante la simulación y mensajes de cierre de ruta (UI + SMTP opcional).
 
 ---
 

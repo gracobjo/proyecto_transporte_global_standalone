@@ -57,6 +57,9 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
             resumen_dgt = blob.get("resumen_dgt") or {}
             alertas = blob.get("alertas_operativas") or []
             out["resumen_dgt"] = resumen_dgt
+            out["payload_incluye_resumen_dgt"] = "resumen_dgt" in blob
+            out["dgt_habilitado"] = blob.get("dgt_habilitado")
+            out["dgt_error"] = resumen_dgt.get("error")
             out["dgt_source_mode"] = resumen_dgt.get("source_mode")
             out["dgt_incidencias_totales"] = resumen_dgt.get("incidencias_totales", 0)
             out["dgt_nodos_afectados"] = resumen_dgt.get("nodos_afectados", 0)

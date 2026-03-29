@@ -150,6 +150,20 @@ CREATE TABLE IF NOT EXISTS graph_anomalies (
     PRIMARY KEY ((ts_bucket, metric_type), timestamp, node_id, id)
 ) WITH CLUSTERING ORDER BY (timestamp DESC);
 
+-- =============================================================================
+-- Asignaciones de ruta definidas en el cuadro de mando (día + camión + id_ruta)
+-- Spark no escribe aquí; solo la UI al pulsar «Añadir ruta».
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS asignaciones_ruta_cuadro (
+    dia DATE,
+    id_camion TEXT,
+    id_ruta TEXT,
+    origen TEXT,
+    destino TEXT,
+    creado_en TIMESTAMP,
+    PRIMARY KEY ((dia), id_camion)
+) WITH CLUSTERING ORDER BY (id_camion ASC);
+
 -- Índices secundarios (ejecutar solo si no existen)
 -- CREATE INDEX idx_nodos_estado ON nodos_estado (estado);
 -- CREATE INDEX idx_tracking_estado ON tracking_camiones (estado_ruta);

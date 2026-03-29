@@ -100,11 +100,27 @@ Posición GPS actual y estado de los camiones.
 | `ruta_origen` | TEXT | Nodo de origen de la ruta |
 | `ruta_destino` | TEXT | Nodo de destino de la ruta |
 | `ruta_sugerida` | LIST<TEXT> | Ruta calculada (lista de nodos) |
-| `estado_ruta` | TEXT | Estado: "En ruta", "Bloqueado", etc. |
+| `estado_ruta` | TEXT | Estado: `En ruta`, `Finalizada`, `Bloqueado`, etc. (la UI de simulación del cuadro de mando puede fijar `Finalizada` al completar el trayecto) |
 | `motivo_retraso` | TEXT | Motivo del retraso |
 | `ultima_posicion` | TIMESTAMP | Timestamp de la última posición |
 
-#### 2.4 pagerank_nodos
+#### 2.4 asignaciones_ruta_cuadro
+Registro de rutas **origen → destino** creadas desde el cuadro de mando (**Añadir ruta**). No la escribe Spark; la inserta la UI (`servicios/asignaciones_ruta_cassandra.py`).
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `dia` | DATE | Partición: día UTC de la asignación |
+| `id_camion` | TEXT | Clave de clustering: identificador del camión |
+| `id_ruta` | TEXT | Identificador de ruta generado en la UI |
+| `origen` | TEXT | Nodo origen (topología `config_nodos`) |
+| `destino` | TEXT | Nodo destino |
+| `creado_en` | TIMESTAMP | Momento de creación |
+
+**Clave primaria:** `((dia), id_camion)` — un camión puede tener una fila activa por día (nueva asignación sustituye la anterior ese día).
+
+**Migración:** `cassandra/migracion_asignaciones_ruta_cuadro.cql` o el bloque homónimo en `cassandra/esquema_logistica.cql`; script auxiliar: `scripts/aplicar_migracion_asignaciones_cuadro.py`.
+
+#### 2.5 pagerank_nodos
 Criticidad de nodos según algoritmo PageRank.
 
 | Campo | Tipo | Descripción |
@@ -116,7 +132,7 @@ Criticidad de nodos según algoritmo PageRank.
 | `estado` | TEXT | Estado actual del nodo |
 | `ultima_actualizacion` | TIMESTAMP | Última actualización |
 
-#### 2.5 eventos_historico
+#### 2.6 eventos_historico
 Histórico de cambios de estado.
 
 | Campo | Tipo | Descripción |
@@ -133,7 +149,7 @@ Histórico de cambios de estado.
 
 **TTL**: 30 días (2592000 segundos)
 
-#### 2.6 graph_anomalies
+#### 2.7 graph_anomalies
 Anomalías detectadas por Graph AI.
 
 | Campo | Tipo | Descripción |
@@ -152,6 +168,7 @@ Anomalías detectadas por Graph AI.
 
 ### Base de datos
 - **Nombre**: `logistica_espana` (configurable via `HIVE_DB`)
+- Las **asignaciones de ruta** definidas solo desde el cuadro de mando viven en **Cassandra** (`asignaciones_ruta_cuadro`); Hive no duplica esa tabla.
 
 ### Almacenamiento y particiones
 - Tablas externas en **Parquet** con compresión **Snappy**, particionadas por `anio_part` y `mes_part` (escritura vía Spark en `persistencia_hive.py`). Tras cada escritura se ejecuta `MSCK REPAIR TABLE` para registrar particiones nuevas en el metastore.

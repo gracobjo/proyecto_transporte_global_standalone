@@ -198,6 +198,22 @@ En nodos con poca RAM, **priorizar** que Spark inserte en Hive en el mismo job q
    - **SSLContextService** (si Kafka/HDFS con TLS)
    - **HiveConnectionPool** (PutHiveQL)
 
+## Actualizar `Merge_DGT_Into_Payload` desde el repositorio
+
+NiFi **no** lee el repositorio Git por sí solo: los cambios en `nifi/groovy/MergeDgtDatex2IntoPayload.groovy` hay que **reflejarlos en el procesador** del canvas (o en la ruta de fichero que use el nodo).
+
+1. En el servidor donde está el código, actualizar el repo (`git pull` o copia desplegada) para que el fichero `nifi/groovy/MergeDgtDatex2IntoPayload.groovy` sea la versión deseada.
+2. En la UI de NiFi, abrir el grupo `PG_SIMLOG_KDD` y el procesador **`Merge_DGT_Into_Payload`** (tipo **ExecuteScript**, motor **Groovy**).
+3. Elegir **una** de estas dos formas de enlazar el script (no hace falta usar ambas):
+   - **Script File:** en **Properties**, `Script File` = ruta **absoluta** al `.groovy` en ese host (debe ser el mismo fichero que en el repo; la especificación declarativa usa `${PROJECT_ROOT}/nifi/groovy/MergeDgtDatex2IntoPayload.groovy`, ver `flow/simlog_kdd_flow_spec.yaml`). Tras cambiar el fichero en disco, según la versión de NiFi puede bastar con **Apply** o con detener y arrancar el procesador para que cargue el contenido nuevo.
+   - **Script Body:** dejar `Script File` vacío y pegar en la pestaña del script **todo** el contenido del fichero `MergeDgtDatex2IntoPayload.groovy` del proyecto.
+4. **Apply** / guardar la configuración.
+5. Si había FlowFiles atascados o en **failure**, vaciar las colas de las conexiones de salida de ese procesador y, si aplica, **Stop** → **Start** en el procesador antes de volver a disparar el flujo.
+
+Tras actualizar, la relación **success** no debería mostrar el bulletin por comparación incorrecta entre listas en el fallback de clima DGT (error del tipo `Cannot compare java.util.ArrayList ...` en versiones anteriores del script).
+
+**Comprobación en el repo:** `pytest tests/test_merge_dgt_nifi_groovy.py` (evita regresiones antes de volver a pegar el script en NiFi).
+
 ## Provenance y relaciones
 
 Para comprobar el linaje en la UI de NiFi:
@@ -219,6 +235,18 @@ Relaciones clave del flujo final:
 - `DGT_DATEX2_InvokeHTTP.Original -> Merge_DGT_Into_Payload`
 - `Merge_DGT_Into_Payload.success -> Kafka_Publish_DGT_RAW | Kafka_Publish_RAW | Kafka_Publish_FILTERED | HDFS_Backup_JSON`
 - `Kafka_Publish_FILTERED.success -> Spark_Submit_Procesamiento`
+
+## Incidencias frecuentes
+
+### OpenWeather: `401 Unauthorized` en `Log_Fallos` o atributos `invokehttp.status.code`
+
+- La API de OpenWeather devuelve **401** si el `appid` no es válido (clave errónea, revocada o cuenta sin activar la API).
+- Comprueba **`OWM_API_KEY`** / **`owm.api.key`** en Parameter Context o `Set_Parametros_Ingesta`, alineado con `.env` del proyecto.
+- Tras cambiar la clave: **Apply**, **Stop → Start** en `OpenWeather_InvokeHTTP` si hace falta, vaciar colas hacia **failure** y relanzar.
+
+### Merge DGT: `Cannot compare java.util.ArrayList`
+
+- Sustituir el script del procesador **`Merge_DGT_Into_Payload`** por la versión del repo (`nifi/groovy/MergeDgtDatex2IntoPayload.groovy`). Ver sección [Actualizar `Merge_DGT_Into_Payload` desde el repositorio](#actualizar-merge_dgt_into_payload-desde-el-repositorio).
 
 ## Seguridad
 

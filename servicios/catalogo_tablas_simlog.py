@@ -24,6 +24,13 @@ CASSANDRA_TABLAS: Dict[str, List[Col]] = {
         ("distancia_km, peso_penalizado", "FLOAT"),
         ("estado", "TEXT"),
     ],
+    "asignaciones_ruta_cuadro": [
+        ("dia", "DATE (partition)"),
+        ("id_camion", "TEXT (clustering)"),
+        ("id_ruta", "TEXT"),
+        ("origen, destino", "TEXT"),
+        ("creado_en", "TIMESTAMP"),
+    ],
     "tracking_camiones": [
         ("id_camion", "TEXT (PK)"),
         ("lat, lon", "FLOAT"),
