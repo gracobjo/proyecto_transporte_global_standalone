@@ -24,8 +24,8 @@ if str(_PROJ) not in sys.path:
     sys.path.insert(0, str(_PROJ))
 
 from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 from kdd_ejecucion import (
     tarea_fase00,

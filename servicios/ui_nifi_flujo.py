@@ -25,9 +25,9 @@ PROCESSORS: List[Dict[str, Any]] = [
     {
         "name": "Set_Parametros_Ingesta",
         "type": "UpdateAttribute",
-        "responsibility": "Inyecta parámetros operativos y secretos en atributos.",
-        "inputs": ["FlowFile disparado", "API key OpenWeather", "URL DATEX2 DGT"],
-        "outputs": ["Atributos `owm.*`, `dgt.url`, `filename`, `paso_15min`"],
+        "responsibility": "Inyecta parámetros operativos en atributos.",
+        "inputs": ["FlowFile disparado", "URL DATEX2 DGT"],
+        "outputs": ["Atributos `dgt.url`, `filename`, `paso_15min`"],
     },
     {
         "name": "Build_GPS_Sintetico",
@@ -37,18 +37,18 @@ PROCESSORS: List[Dict[str, Any]] = [
         "outputs": ["JSON base", "atributos `simlog.provenance.*` iniciales"],
     },
     {
-        "name": "OpenWeather_InvokeHTTP",
+        "name": "OpenMeteo_InvokeHTTP",
         "type": "InvokeHTTP",
-        "responsibility": "Obtiene clima externo de OpenWeather para enriquecer el snapshot.",
-        "inputs": ["Payload sintético", "URL OpenWeather resuelta"],
-        "outputs": ["Respuesta HTTP en `owm.response`", "estado HTTP y métricas `invokehttp.*`"],
+        "responsibility": "Obtiene clima (Open-Meteo, multi-hub) para enriquecer el snapshot.",
+        "inputs": ["Payload sintético", "URL Open-Meteo (sin API key)"],
+        "outputs": ["Respuesta HTTP (JSON Open-Meteo) en `owm.response`", "estado HTTP y métricas `invokehttp.*`"],
     },
     {
         "name": "Merge_Weather_Into_Payload",
         "type": "ExecuteScript",
         "responsibility": "Fusiona clima con el payload base y actualiza provenance.",
-        "inputs": ["Payload sintético", "atributo `owm.response`"],
-        "outputs": ["Payload enriquecido con clima", "`simlog.provenance.sources=simulacion,openweather`"],
+        "inputs": ["Payload sintético", "atributo `owm.response` (cuerpo JSON Open-Meteo)"],
+        "outputs": ["Payload enriquecido con clima", "`simlog.provenance.sources=simulacion,openmeteo` (u openweather si flujo legacy)"],
     },
     {
         "name": "DGT_DATEX2_InvokeHTTP",
@@ -114,8 +114,8 @@ PROCESSORS: List[Dict[str, Any]] = [
 CONNECTIONS: List[Dict[str, str]] = [
     {"src": "Timer_Ingesta_15min", "dst": "Set_Parametros_Ingesta", "rel": "success"},
     {"src": "Set_Parametros_Ingesta", "dst": "Build_GPS_Sintetico", "rel": "success"},
-    {"src": "Build_GPS_Sintetico", "dst": "OpenWeather_InvokeHTTP", "rel": "success"},
-    {"src": "OpenWeather_InvokeHTTP", "dst": "Merge_Weather_Into_Payload", "rel": "Original"},
+    {"src": "Build_GPS_Sintetico", "dst": "OpenMeteo_InvokeHTTP", "rel": "success"},
+    {"src": "OpenMeteo_InvokeHTTP", "dst": "Merge_Weather_Into_Payload", "rel": "Original"},
     {"src": "Merge_Weather_Into_Payload", "dst": "DGT_DATEX2_InvokeHTTP", "rel": "success"},
     {"src": "DGT_DATEX2_InvokeHTTP", "dst": "Merge_DGT_Into_Payload", "rel": "Original"},
     {"src": "Merge_DGT_Into_Payload", "dst": "Kafka_Publish_DGT_RAW", "rel": "success"},
@@ -126,7 +126,7 @@ CONNECTIONS: List[Dict[str, str]] = [
 
 ERROR_CONNECTIONS: List[Dict[str, str]] = [
     {"src": "Build_GPS_Sintetico", "dst": "Log_Fallos", "rel": "failure"},
-    {"src": "OpenWeather_InvokeHTTP", "dst": "Log_Fallos", "rel": "Failure/Retry/No Retry"},
+    {"src": "OpenMeteo_InvokeHTTP", "dst": "Log_Fallos", "rel": "Failure/Retry/No Retry"},
     {"src": "Merge_Weather_Into_Payload", "dst": "Log_Fallos", "rel": "failure"},
     {"src": "DGT_DATEX2_InvokeHTTP", "dst": "Log_Fallos", "rel": "Failure/Retry/No Retry"},
     {"src": "Merge_DGT_Into_Payload", "dst": "Log_Fallos", "rel": "failure"},

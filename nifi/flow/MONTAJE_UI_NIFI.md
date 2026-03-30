@@ -2,7 +2,7 @@
 
 Este montaje implementa lo que usa SIMLOG:
 
-- Ingesta cada 15 min (GPS + OpenWeather).
+- Ingesta cada 15 min (GPS + clima Open-Meteo).
 - Publicación en Kafka (`raw` + `filtered`).
 - Persistencia en HDFS desde Kafka.
 - Trigger de Spark para persistir en Cassandra + Hive.
@@ -15,7 +15,6 @@ Referencia principal: `nifi/flow/simlog_kdd_flow_spec.yaml` (v3.0).
 2. Crear/importar Parameter Context con `nifi/parameter-context.env.example`.
 3. Verificar al menos:
    - `KAFKA_BOOTSTRAP`, `TOPIC_RAW`, `TOPIC_FILTERED`
-   - `OWM_API_KEY`
    - `HDFS_BACKUP_PATH`
    - `PROJECT_ROOT`, `SPARK_HOME`, `SPARK_MASTER`, `DEPLOY_MODE`
 
@@ -26,9 +25,8 @@ Referencia principal: `nifi/flow/simlog_kdd_flow_spec.yaml` (v3.0).
 1. `GenerateFlowFile` → `Timer_Ingesta_15min`
    - Scheduling: `15 min`
 2. `UpdateAttribute` → `Set_Parametros_Ingesta`
-   - `owm.api.key = ${OWM_API_KEY}`
    - `simlog.interval.min = 15`
-3. `ExecuteScript` → `Build_JSON_GPS_OpenWeather`
+3. `ExecuteScript` → `Build_JSON_Ingesta_KDD`
    - Engine: `Groovy`
    - Script file: `${PROJECT_ROOT}/nifi/groovy/GenerateFullPayloadSimlog.groovy`
 4. `PublishKafka` → `Kafka_Publish_RAW`
@@ -67,9 +65,9 @@ Referencia principal: `nifi/flow/simlog_kdd_flow_spec.yaml` (v3.0).
 ## 3) Conexiones (relationships)
 
 - `Timer_Ingesta_15min.success -> Set_Parametros_Ingesta`
-- `Set_Parametros_Ingesta.success -> Build_JSON_GPS_OpenWeather`
-- `Build_JSON_GPS_OpenWeather.success -> Kafka_Publish_RAW`
-- `Build_JSON_GPS_OpenWeather.success -> Kafka_Publish_FILTERED`
+- `Set_Parametros_Ingesta.success -> Build_JSON_Ingesta_KDD`
+- `Build_JSON_Ingesta_KDD.success -> Kafka_Publish_RAW`
+- `Build_JSON_Ingesta_KDD.success -> Kafka_Publish_FILTERED`
 - `Kafka_Consume_Filtered_for_HDFS.success -> HDFS_Backup_JSON`
 - `Kafka_Consume_Filtered_for_Spark.success -> Spark_Submit_Procesamiento`
 
@@ -80,7 +78,7 @@ Errores (`failure`) de los procesadores de negocio → `Log_Fallos` → `DLQ_Loc
 1. Arrancar consumidores: `Kafka_Consume_Filtered_for_HDFS`, `Kafka_Consume_Filtered_for_Spark`.
 2. Arrancar salidas: `HDFS_Backup_JSON`, `Spark_Submit_Procesamiento`.
 3. Arrancar publishers: `Kafka_Publish_RAW`, `Kafka_Publish_FILTERED`.
-4. Arrancar ingesta: `Build_JSON_GPS_OpenWeather`, `Set_Parametros_Ingesta`, `Timer_Ingesta_15min`.
+4. Arrancar ingesta: `Build_JSON_Ingesta_KDD`, `Set_Parametros_Ingesta`, `Timer_Ingesta_15min`.
 5. Arrancar bloque de errores.
 
 ## 5) Validación end-to-end

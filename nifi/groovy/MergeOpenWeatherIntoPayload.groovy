@@ -1,9 +1,14 @@
 /**
- * NiFi ExecuteScript (Groovy) - Mezcla respuesta OpenWeather en payload sintetico.
+ * NiFi ExecuteScript (Groovy) — Mezcla respuesta meteorológica en el payload sintético.
+ *
+ * Soporta:
+ * - Open-Meteo (por defecto en el proyecto): cuerpo JSON = **array** de resultados
+ *   (una petición multi-hub: latitude=lat1,lat2,...&longitude=lon1,lon2,...).
+ * - OpenWeather (legacy): objeto con `list` (Group API).
  *
  * Requiere:
- * - FlowFile content: payload JSON sintetico
- * - Atributo "owm.response": respuesta JSON de OpenWeather Group API
+ * - FlowFile content: payload JSON sintético
+ * - Atributo "owm.response": cuerpo JSON de la API (nombre histórico; puede ser Open-Meteo)
  */
 
 import groovy.json.JsonOutput
@@ -42,7 +47,8 @@ try {
 } catch (Exception ignored) {
     statusCode = 0
 }
-def openWeatherOk = statusCode >= 200 && statusCode < 300 && weather instanceof Map && (weather.list instanceof List)
+
+def httpOk = statusCode >= 200 && statusCode < 300
 
 def estadoCarretera = { String descripcion ->
     def desc = (descripcion ?: "").toLowerCase(Locale.ROOT)
@@ -53,7 +59,60 @@ def estadoCarretera = { String descripcion ->
     return "Optimo"
 }
 
-if (openWeatherOk) {
+/** WMO code (Open-Meteo) → descripción corta ES — alineado con `servicios/open_meteo_clima.py` */
+def wmoDescEs = { int code ->
+    def m = [
+        0: "cielo despejado", 1: "mayormente despejado", 2: "parcialmente nublado", 3: "nublado",
+        45: "niebla", 48: "niebla con escarcha",
+        51: "llovizna ligera", 53: "llovizna moderada", 55: "llovizna densa",
+        56: "llovizna helada ligera", 57: "llovizna helada densa",
+        61: "lluvia ligera", 63: "lluvia moderada", 65: "lluvia fuerte",
+        66: "lluvia helada ligera", 67: "lluvia helada fuerte",
+        71: "nieve ligera", 73: "nieve moderada", 75: "nieve fuerte", 77: "granizo / nieve",
+        80: "chubascos ligeros", 81: "chubascos moderados", 82: "chubascos violentos",
+        85: "chubascos de nieve ligeros", 86: "chubascos de nieve fuertes",
+        95: "tormenta", 96: "tormenta con granizo ligero", 99: "tormenta con granizo fuerte"
+    ]
+    return m[code] ?: "condición WMO ${code}"
+}
+
+def weatherOk = false
+def weatherSource = "openmeteo"
+
+if (httpOk && weather instanceof List && weather.size() > 0) {
+    // Open-Meteo: array de ubicaciones (mismo orden que lat/lon en la URL)
+    def hubNames = ["Madrid", "Barcelona", "Bilbao", "Vigo", "Sevilla"]
+    climaHubs = [:]
+    weather.eachWithIndex { loc, idx ->
+        if (idx >= hubNames.size()) return
+        def hub = hubNames[idx]
+        def cur = loc?.current
+        if (cur == null) return
+        def wmo = (cur.weather_code != null) ? (cur.weather_code as Integer) : 0
+        def desc = wmoDescEs(wmo)
+        def vis = cur.visibility
+        if (vis != null) {
+            try {
+                vis = (vis as Double).round() as Integer
+            } catch (Exception ignored) {
+                vis = null
+            }
+        }
+        climaHubs[hub] = [
+            descripcion: desc,
+            temp: cur.temperature_2m,
+            humedad: cur.relative_humidity_2m,
+            viento: cur.wind_speed_10m,
+            visibilidad: vis,
+            estado_carretera: estadoCarretera(desc),
+            source: "openmeteo",
+            fallback_activo: false
+        ]
+    }
+    weatherOk = climaHubs.size() > 0
+    weatherSource = "openmeteo"
+} else if (httpOk && weather instanceof Map && (weather.list instanceof List)) {
+    // OpenWeather Group API (legacy)
     climaHubs = [:]
     def items = weather.list ?: []
     items.each { w ->
@@ -70,6 +129,11 @@ if (openWeatherOk) {
             fallback_activo: false
         ]
     }
+    weatherOk = climaHubs.size() > 0
+    weatherSource = "openweather"
+}
+
+if (weatherOk) {
     climaLista = climaHubs.collect { ciudad, datos ->
         [
             ciudad: ciudad,
@@ -94,7 +158,11 @@ flowFile = session.write(flowFile, { out ->
 } as OutputStreamCallback)
 
 session.putAttribute(flowFile, "mime.type", "application/json")
-session.putAttribute(flowFile, "simlog.weather.available", String.valueOf(openWeatherOk))
-session.putAttribute(flowFile, "simlog.provenance.stage", openWeatherOk ? "weather_merged" : "weather_unavailable")
-session.putAttribute(flowFile, "simlog.provenance.sources", openWeatherOk ? "simulacion,openweather" : "simulacion")
+session.putAttribute(flowFile, "simlog.weather.available", String.valueOf(weatherOk))
+if (weatherOk) {
+    session.putAttribute(flowFile, "simlog.weather.source", weatherSource)
+}
+session.putAttribute(flowFile, "simlog.provenance.stage", weatherOk ? "weather_merged" : "weather_unavailable")
+def provSrc = weatherOk ? "simulacion,${weatherSource}" : "simulacion"
+session.putAttribute(flowFile, "simlog.provenance.sources", provSrc)
 session.transfer(flowFile, REL_SUCCESS)

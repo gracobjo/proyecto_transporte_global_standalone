@@ -1,6 +1,6 @@
 """
 Vista previa en Streamlit: primeras y últimas líneas de ficheros del repo citados en cada fase KDD.
-Fases 1–2: además, GPS sintético (`camiones`) y clima OpenWeather (`clima_hubs`) desde el último payload.
+Fases 1–2: además, GPS sintético (`camiones`) y clima por hubs (`clima_hubs`) desde el último payload.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
 
-from servicios.kdd_fases import FaseKDD
+from servicios.kdd_fases import FaseKDD, etiqueta_proveedor_clima_ui
 
 N_LINEAS = 5
 MAX_BYTES_LECTURA = 2 * 1024 * 1024  # evita cargar ficheros enormes en memoria
@@ -254,7 +254,8 @@ def _render_panel_simulacion_ventana(st, base: Path, widget_scope: str) -> None:
     st.markdown("##### Simulación por ventana (15 min) e instantáneas")
     st.caption(
         "Cada **paso** entero y el **día** fijan la semilla (`ingesta.trigger_paso.semilla_simulacion`): "
-        "cambian incidentes simulados y la posición GPS en ruta. Cada ingesta consulta de nuevo **OpenWeather**."
+        "cambian incidentes simulados y la posición GPS en ruta. Cada ingesta consulta de nuevo la **API de clima** "
+        f"({etiqueta_proveedor_clima_ui()})."
     )
 
     try:
@@ -412,14 +413,14 @@ def _tabla_clima_markdown(clima: Dict[str, Any]) -> str:
 def render_vista_previa_fase_ingesta_1_2(st, fase: FaseKDD, base: Path, widget_scope: str) -> None:
     """
     Fases selección / preprocesamiento: un solo preview del script de ingesta,
-    más `camiones` (GPS sintético) y `clima_hubs` (OpenWeather) del último payload.
+    más `camiones` (GPS sintético) y `clima_hubs` (Open-Meteo u OpenWeather según config) del último payload.
 
     `widget_scope` debe ser único por cada sitio que renderiza la misma fase
     (p. ej. tarjeta principal vs. lista «Ver todas las fases») para claves Streamlit.
     """
     orden = fase.orden
     ws = widget_scope
-    st.markdown("**Script, GPS sintético y clima OpenWeather**")
+    st.markdown(f"**Script, GPS sintético y clima ({etiqueta_proveedor_clima_ui()})**")
     st.caption(
         "El script `ingesta/ingesta_kdd.py` consulta la API, simula la red e interpola posiciones; "
         "los fragmentos siguientes salen del último JSON guardado en `reports/kdd/work/`."
@@ -485,9 +486,9 @@ def render_vista_previa_fase_ingesta_1_2(st, fase: FaseKDD, base: Path, widget_s
                     st.code(t, language="json")
 
     with st.expander(
-        "OpenWeatherMap — campo `clima_hubs` (última ingesta y consulta en vivo)",
+        "Clima por nodo — campo `clima_hubs` (toda la red o solo hubs según `SIMLOG_CLIMA_TODOS_NODOS`; última ingesta y consulta en vivo)",
         expanded=False,
-        key=f"{ws}_vf_ing_{orden}_owm",
+        key=f"{ws}_vf_ing_{orden}_clima",
     ):
         if err_pay and not payload:
             st.info(err_pay)
@@ -499,9 +500,10 @@ def render_vista_previa_fase_ingesta_1_2(st, fase: FaseKDD, base: Path, widget_s
 
         st.divider()
         st.markdown(
-            "**Consulta en vivo** — introduce tu API Key ([OpenWeather](https://openweathermap.org/api)); "
-            "se envía como `appid` en la petición. La clave queda en la **sesión del navegador** (no se escribe en disco). "
-            "Si el campo está **vacío**, se usa `API_WEATHER_KEY` del entorno / `.env`, si existe."
+            "**Consulta en vivo** — por defecto el proyecto usa **Open-Meteo** (sin clave). "
+            "Si configuras `SIMLOG_WEATHER_PROVIDER=openweather`, introduce tu API Key ([OpenWeather](https://openweathermap.org/api)); "
+            "se envía como `appid`. La clave queda en la **sesión del navegador**. "
+            "Si el campo está **vacío** y usas OpenWeather, se usa `API_WEATHER_KEY` del entorno / `.env`, si existe."
         )
         sk_api = f"{ws}_vf_owm_api_key_f{orden}"
         sk_res = f"{ws}_vf_owm_live_result_f{orden}"
@@ -509,7 +511,7 @@ def render_vista_previa_fase_ingesta_1_2(st, fase: FaseKDD, base: Path, widget_s
             st.session_state[sk_api] = ""
         with st.form(key=f"{ws}_vf_owm_form_f{orden}", clear_on_submit=False):
             st.text_input(
-                "OpenWeather API Key (appid)",
+                "API Key OpenWeather (appid), solo si SIMLOG_WEATHER_PROVIDER=openweather",
                 type="password",
                 placeholder="Opcional si ya tienes API_WEATHER_KEY configurada",
                 help="Tras enviar el formulario, la clave permanece en este campo durante la sesión.",

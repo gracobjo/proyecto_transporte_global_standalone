@@ -1,13 +1,11 @@
 /**
  * NiFi ExecuteScript (Groovy) — Ingesta KDD completa compatible con Spark (`procesamiento_grafos`).
  *
- * Incluye:
- * - Clima real OpenWeather para los 5 hubs (HTTP desde Groovy).
- * - Estados simulados de nodos/aristas y camiones (misma idea que `ingesta/ingesta_kdd.py`).
+ * Clima: Open-Meteo (una petición multi-hub; sin API key).
+ * Estados simulados de nodos/aristas y camiones (alineado con `ingesta/ingesta_kdd.py`).
  *
- * Atributos de entrada (desde UpdateAttribute / Parameter Context):
- *   - owm.api.key  (obligatorio) — API key OpenWeather
- *   - paso_15min   (opcional, default 0)
+ * Atributos de entrada (opcional):
+ *   - paso_15min   (default 0)
  *
  * Salida: FlowFile JSON en el cuerpo; mime.type application/json
  */
@@ -18,13 +16,6 @@ import org.apache.nifi.processor.io.OutputStreamCallback
 
 def flowFile = session.get()
 if (!flowFile) return
-
-def apiKey = flowFile.getAttribute("owm.api.key")
-if (!apiKey) {
-    session.putAttribute(flowFile, "error", "missing owm.api.key")
-    session.transfer(flowFile, REL_FAILURE)
-    return
-}
 
 def pasoStr = flowFile.getAttribute("paso_15min")
 def paso = (pasoStr != null && !pasoStr.isEmpty()) ? pasoStr.toInteger() : 0
@@ -39,32 +30,64 @@ def hubs = [
     [id: "Sevilla", lat: 37.3891d, lon: -5.9845d]
 ]
 
-def estados = ["OK", "Congestionado", "Bloqueado"]
+def wmoDescEs = { int code ->
+    def m = [
+        0: "cielo despejado", 1: "mayormente despejado", 2: "parcialmente nublado", 3: "nublado",
+        45: "niebla", 48: "niebla con escarcha",
+        51: "llovizna ligera", 53: "llovizna moderada", 55: "llovizna densa",
+        61: "lluvia ligera", 63: "lluvia moderada", 65: "lluvia fuerte",
+        71: "nieve ligera", 73: "nieve moderada", 75: "nieve fuerte",
+        80: "chubascos ligeros", 81: "chubascos moderados", 82: "chubascos violentos",
+        95: "tormenta", 96: "tormenta con granizo ligero", 99: "tormenta con granizo fuerte"
+    ]
+    return m[code] ?: "condición WMO ${code}"
+}
+
+def lats = hubs.collect { it.lat }.join(",")
+def lons = hubs.collect { it.lon }.join(",")
+def url = "https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}" +
+    "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_gusts_10m,visibility,rain,snowfall,cloud_cover" +
+    "&timezone=auto&wind_speed_unit=ms"
 
 def clima = [:]
-hubs.each { h ->
-    def url = "https://api.openweathermap.org/data/2.5/weather?lat=${h.lat}&lon=${h.lon}&appid=${apiKey}&units=metric&lang=es"
-    try {
-        def conn = new URL(url).openConnection()
-        conn.setConnectTimeout(15000)
-        conn.setReadTimeout(25000)
-        def slurper = new JsonSlurper()
-        def w = slurper.parse(conn.getInputStream())
-        clima[h.id] = [
-            descripcion: w.weather ? w.weather[0].description : "N/A",
-            temp: w.main?.temp,
-            humedad: w.main?.humidity,
-            viento: w.wind?.speed
-        ]
-    } catch (Exception e) {
+try {
+    def conn = new URL(url).openConnection()
+    conn.setConnectTimeout(15000)
+    conn.setReadTimeout(25000)
+    def slurper = new JsonSlurper()
+    def arr = slurper.parse(conn.getInputStream())
+    if (arr instanceof List) {
+        arr.eachWithIndex { loc, idx ->
+            if (idx >= hubs.size()) return
+            def hid = hubs[idx].id
+            def cur = loc?.current
+            if (cur == null) {
+                clima[hid] = [descripcion: "sin current", temp: null, humedad: null, viento: null, source: "openmeteo"]
+                return
+            }
+            def wmo = (cur.weather_code != null) ? (cur.weather_code as Integer) : 0
+            clima[hid] = [
+                descripcion: wmoDescEs(wmo),
+                temp: cur.temperature_2m,
+                humedad: cur.relative_humidity_2m,
+                viento: cur.wind_speed_10m,
+                source: "openmeteo"
+            ]
+        }
+    }
+} catch (Exception e) {
+    hubs.each { h ->
         clima[h.id] = [
             descripcion: "Error: ${e.class.simpleName}",
             temp: null,
             humedad: null,
-            viento: null
+            viento: null,
+            source: "openmeteo"
         ]
     }
 }
+
+def estados = ["OK", "Congestionado", "Bloqueado"]
 
 def nodos = [:]
 hubs.each { h ->
@@ -108,7 +131,6 @@ def camiones = (1..5).collect { i ->
         progreso_pct: 25 * (i % 4),
         estado_ruta: "En ruta",
         motivo_retraso: null,
-        # Compatibilidad con consumidores antiguos
         id: cid
     ]
 }

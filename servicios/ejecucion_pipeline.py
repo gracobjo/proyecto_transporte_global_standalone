@@ -117,7 +117,7 @@ def ejecutar_fase_kdd(
     simular_incidencias: Optional[bool] = None,
 ) -> Tuple[int, str, str]:
     """
-    Ejecuta la fase KDD indicada (orden 1–5, alineado con `servicios.kdd_fases.FASES_KDD`).
+    Ejecuta la fase KDD indicada (orden 1–5, alineado con `servicios.kdd_fases.get_fases_kdd()`).
 
     - 1–2: ingesta completa (mismo script; cubre selección + preprocesamiento).
     - 3–4: Spark parcial (`fase_kdd_spark`: transformación / minería).

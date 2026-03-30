@@ -49,7 +49,7 @@ from servicios.estado_y_datos import (
     estado_servicios,
     verificacion_tecnica_completa,
 )
-from servicios.kdd_fases import FASES_KDD, FaseKDD
+from servicios.kdd_fases import FaseKDD, etiqueta_proveedor_clima_ui, get_fases_kdd
 
 from servicios.gemelo_digital_datos import (
     cargar_red_gemelo,
@@ -186,13 +186,15 @@ def _fase_to_schema(f: FaseKDD) -> FaseKDDOut:
 
 # --- App ---
 
+_CLIMA_UI = etiqueta_proveedor_clima_ui()
+
 app = FastAPI(
     title=f"{PROJECT_DISPLAY_NAME} — API",
     description=(
         f"{PROJECT_DESCRIPTION}\n\n"
         "Endpoints de **solo lectura** para integración con otras aplicaciones: "
         "topología, estado de servicios, datos en Cassandra (tras procesamiento Spark) "
-        "y clima por hubs (OpenWeather)."
+        f"y clima por hubs ({_CLIMA_UI}; configurable con `SIMLOG_WEATHER_PROVIDER`)."
     ),
     version="1.0.0",
     openapi_tags=[
@@ -200,7 +202,7 @@ app = FastAPI(
         {"name": "infraestructura", "description": "HDFS, Kafka, Cassandra (puertos y comprobaciones)"},
         {"name": "topologia", "description": "Red estática (config_nodos)"},
         {"name": "datos", "description": "Lecturas desde Cassandra (operativo)"},
-        {"name": "clima", "description": "Consulta en tiempo real a OpenWeather (hubs)"},
+        {"name": "clima", "description": f"Consulta en tiempo real a {_CLIMA_UI} (hubs)"},
         {"name": "kdd", "description": "Fases del ciclo KDD documentadas en el proyecto"},
         {"name": "gemelo", "description": "Gemelo Digital Logístico (red, tracking y rutas)"},
     ],
@@ -331,7 +333,7 @@ def api_datos_pagerank() -> List[Dict[str, Any]]:
 @app.get(
     "/api/v1/clima/hubs",
     tags=["clima"],
-    summary="Clima actual por hub (OpenWeather)",
+    summary=f"Clima actual por hub ({_CLIMA_UI})",
     response_model=Dict[str, Dict[str, Any]],
 )
 def api_clima_hubs() -> Dict[str, Dict[str, Any]]:
@@ -345,7 +347,7 @@ def api_clima_hubs() -> Dict[str, Dict[str, Any]]:
     response_model=List[FaseKDDOut],
 )
 def api_kdd_fases() -> List[FaseKDDOut]:
-    return [_fase_to_schema(f) for f in FASES_KDD]
+    return [_fase_to_schema(f) for f in get_fases_kdd()]
 
 
 @lru_cache(maxsize=1)

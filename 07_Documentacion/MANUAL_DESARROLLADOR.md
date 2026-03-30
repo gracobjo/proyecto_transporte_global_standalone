@@ -304,7 +304,7 @@ Los tests cubren parseo mínimo de DATEX2, mapeo a nodos y prioridad del merge f
 La configuración actual deja a OpenWeather como fuente **preferente pero opcional**. El respaldo operativo se implementa así:
 
 1. `ingesta/ingesta_kdd.py` llama a `consulta_clima_hubs()` para OpenWeather.
-2. La respuesta se valida con `_clima_openweather_valido(...)`.
+2. La respuesta se valida con `_clima_primario_valido(...)`.
 3. En paralelo, `obtener_incidencias_dgt()` devuelve incidencias y `clima_hubs` inferido desde DATEX2.
 4. `combinar_clima_hubs(clima_owm, info_dgt["clima_hubs"])` prioriza OpenWeather si es válido; en caso contrario rellena los hubs desde DGT y marca `fallback_activo=true`.
 5. `clima_hubs_a_lista(...)` expone el resultado final en el payload canónico que consumen Kafka, HDFS, Spark y UI.

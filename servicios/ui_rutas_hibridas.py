@@ -85,7 +85,7 @@ def render_rutas_hibridas_tab() -> None:
     st.markdown("##### Incidencias (red híbrida: nodos o tramos no disponibles)")
     cc1, cc2, cc3, cc4 = st.columns(4)
     with cc1:
-        usar_clima = st.checkbox("Usar API clima en retrasos (OWM)", value=True, key="rh_clima_ret")
+        usar_clima = st.checkbox("Usar API clima en retrasos (Open-Meteo / heurísticas)", value=True, key="rh_clima_ret")
     with cc2:
         clima_bloquea = st.checkbox(
             "Clima severo bloquea nodos del hub (tormenta, nieve, granizo…)",
@@ -111,7 +111,7 @@ def render_rutas_hibridas_tab() -> None:
         )
 
     if calcular:
-        with st.spinner("Consultando Cassandra y OpenWeather…"):
+        with st.spinner("Consultando Cassandra y API de clima…"):
             res = analizar_ruta_completa(
                 origen,
                 destino,

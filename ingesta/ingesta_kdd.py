@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SIMLOG España — Fase I: Ingesta KDD
-- Consulta climática API OpenWeather (5 Hubs)
+- Consulta climática Open-Meteo por defecto (5 hubs o todos los nodos según `SIMLOG_CLIMA_TODOS_NODOS`); OpenWeather opcional
 - Simulación de incidentes (OK/Congestionado/Bloqueado)
 - Interpolación GPS cada 15 min para 5 camiones
 - Publicación a Kafka (transporte_status) y backup HDFS
@@ -23,11 +23,13 @@ from config_nodos import RED, get_aristas, get_nodos
 from config import (
     API_WEATHER_KEY,
     API_WEATHER_BASE,
+    WEATHER_PROVIDER,
     KAFKA_BOOTSTRAP,
     TOPIC_DGT_RAW,
     TOPIC_RAW,
     TOPIC_TRANSPORTE,
     HDFS_BACKUP_PATH,
+    usar_clima_todos_los_nodos,
 )
 from ingesta.ingesta_dgt_datex2 import fusionar_estados, obtener_incidencias_dgt
 from ingesta.trigger_paso import resolver_paso_ingesta, semilla_simulacion
@@ -65,28 +67,45 @@ def _env_flag(key: str, default: bool = True) -> bool:
     return default
 
 
+def _targets_clima_nodos() -> list[tuple[str, float, float]]:
+    """(id_nodo, lat, lon) para hubs solamente o para toda la red según configuración."""
+    nodos = get_nodos()
+    if not usar_clima_todos_los_nodos():
+        return [(h, nodos[h]["lat"], nodos[h]["lon"]) for h in RED["hubs"]]
+    return [(nid, d["lat"], d["lon"]) for nid, d in sorted(nodos.items())]
+
+
+def _consulta_clima_hubs_openmeteo() -> dict:
+    """Clima vía Open-Meteo (sin API key): una petición agrupada si hay varios nodos."""
+    from servicios.open_meteo_clima import fetch_openmeteo_bulk_slim
+
+    return fetch_openmeteo_bulk_slim(_targets_clima_nodos())
+
+
 def consulta_clima_hubs(api_key: str | None = None) -> dict:
     """
-    Obtener clima actual de los 5 Hubs vía API OpenWeather.
-    Si `api_key` viene rellena (p. ej. desde el dashboard), se usa como `appid`;
-    si no, `API_WEATHER_KEY` de config / entorno.
+    Clima actual por coordenadas de nodo (hubs o red completa según `usar_clima_todos_los_nodos()` / `SIMLOG_CLIMA_TODOS_NODOS`).
+    Open-Meteo por defecto; OpenWeather si `SIMLOG_WEATHER_PROVIDER=openweather` + clave.
+    Si `api_key` viene rellena (p. ej. desde el dashboard), se usa como `appid` en OpenWeather;
+    si no, `API_WEATHER_KEY` de config / entorno (solo rama OpenWeather).
     """
+    if WEATHER_PROVIDER in ("openmeteo", "open-meteo"):
+        return _consulta_clima_hubs_openmeteo()
+
     appid = (api_key or "").strip() or (API_WEATHER_KEY or "").strip()
-    hubs = RED["hubs"]
-    nodos = get_nodos()
+    targets = _targets_clima_nodos()
     clima: dict = {}
     if not appid:
-        for hub in hubs:
-            clima[hub] = {
+        for nid, _, _ in targets:
+            clima[nid] = {
                 "descripcion": "Sin API key: define API_WEATHER_KEY o pasa api_key a consulta_clima_hubs().",
                 "temp": None,
                 "humedad": None,
                 "viento": None,
+                "source": "openweather",
             }
         return clima
-    for hub in hubs:
-        lat = nodos[hub]["lat"]
-        lon = nodos[hub]["lon"]
+    for nid, lat, lon in targets:
         try:
             r = requests.get(
                 API_WEATHER_BASE,
@@ -101,11 +120,12 @@ def consulta_clima_hubs(api_key: str | None = None) -> dict:
             )
             if r.status_code == 200:
                 d = r.json()
-                clima[hub] = {
+                clima[nid] = {
                     "descripcion": d.get("weather", [{}])[0].get("description", "N/A"),
                     "temp": d.get("main", {}).get("temp"),
                     "humedad": d.get("main", {}).get("humidity"),
                     "viento": d.get("wind", {}).get("speed"),
+                    "source": "openweather",
                 }
             else:
                 msg = "HTTP " + str(r.status_code)
@@ -115,13 +135,25 @@ def consulta_clima_hubs(api_key: str | None = None) -> dict:
                         msg += f": {err_j['message']}"
                 except Exception:
                     pass
-                clima[hub] = {"descripcion": msg, "temp": None, "humedad": None, "viento": None}
+                clima[nid] = {
+                    "descripcion": msg,
+                    "temp": None,
+                    "humedad": None,
+                    "viento": None,
+                    "source": "openweather",
+                }
         except Exception as e:
-            clima[hub] = {"descripcion": f"Error: {e}", "temp": None, "humedad": None, "viento": None}
+            clima[nid] = {
+                "descripcion": f"Error: {e}",
+                "temp": None,
+                "humedad": None,
+                "viento": None,
+                "source": "openweather",
+            }
     return clima
 
 
-def _clima_openweather_valido(item: dict | None) -> bool:
+def _clima_primario_valido(item: dict | None) -> bool:
     if not isinstance(item, dict):
         return False
     desc = str(item.get("descripcion") or "").strip().lower()
@@ -130,19 +162,22 @@ def _clima_openweather_valido(item: dict | None) -> bool:
     return any(item.get(k) is not None for k in ("temp", "humedad", "viento", "visibilidad"))
 
 
-def combinar_clima_hubs(clima_owm: dict, clima_dgt: dict) -> dict:
-    clima_owm = clima_owm or {}
+def combinar_clima_hubs(clima_primario: dict, clima_dgt: dict) -> dict:
+    clima_primario = clima_primario or {}
     clima_dgt = clima_dgt or {}
     combined: dict = {}
-    hub_ids = sorted(set(clima_owm.keys()) | set(clima_dgt.keys()))
+    hub_ids = sorted(set(clima_primario.keys()) | set(clima_dgt.keys()))
 
     for hub in hub_ids:
-        owm = dict(clima_owm.get(hub) or {})
+        prim = dict(clima_primario.get(hub) or {})
         dgt = dict(clima_dgt.get(hub) or {})
-        if _clima_openweather_valido(owm):
+        if _clima_primario_valido(prim):
+            src = prim.get("source") or "openmeteo"
+            if src not in ("openweather", "openmeteo"):
+                src = "openmeteo"
             merged = {
-                **owm,
-                "source": "openweather",
+                **prim,
+                "source": src,
                 "fallback_activo": False,
             }
             if dgt:
@@ -158,13 +193,13 @@ def combinar_clima_hubs(clima_owm: dict, clima_dgt: dict) -> dict:
                 **dgt,
                 "source": "dgt",
                 "fallback_activo": True,
-                "owm_error": owm.get("descripcion") if owm else None,
+                "clima_api_error": prim.get("descripcion") if prim else None,
             }
             continue
 
         combined[hub] = {
-            **owm,
-            "source": "openweather_unavailable",
+            **prim,
+            "source": "openmeteo_unavailable",
             "fallback_activo": False,
         }
     return combined
@@ -450,7 +485,7 @@ def main(paso_15min=0):
     origen_ingesta = os.environ.get("SIMLOG_INGESTA_ORIGEN", "cli_script").strip() or "cli_script"
     ejecutor_ingesta = os.environ.get("SIMLOG_INGESTA_EJECUTOR", "python -m ingesta.ingesta_kdd").strip()
 
-    clima_owm = consulta_clima_hubs()
+    clima_primario = consulta_clima_hubs()
     sim_incid = _env_flag("SIMLOG_SIMULAR_INCIDENCIAS", True)
     use_dgt = _env_flag("SIMLOG_USE_DGT", True)
     dgt_cache_only = _env_flag("SIMLOG_DGT_ONLY_CACHE", False)
@@ -475,7 +510,7 @@ def main(paso_15min=0):
     rutas = generar_rutas_camiones(5)
     posiciones = interpolacion_gps_15min(rutas, paso_15min)
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    clima = combinar_clima_hubs(clima_owm, info_dgt.get("clima_hubs", {}))
+    clima = combinar_clima_hubs(clima_primario, info_dgt.get("clima_hubs", {}))
     clima_lista = clima_hubs_a_lista(clima, timestamp)
     alerta_bloqueos = evaluar_alerta_bloqueos(estados_nodos)
 

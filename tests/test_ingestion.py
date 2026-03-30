@@ -65,7 +65,7 @@ def test_main_generates_payload_and_meta(monkeypatch, tmp_path):
     assert saved_payload["origen"] == "pytest_cli"
 
 
-def test_main_usa_respaldo_dgt_cuando_openweather_falla(monkeypatch, tmp_path):
+def test_main_usa_respaldo_dgt_cuando_clima_api_falla(monkeypatch, tmp_path):
     monkeypatch.setattr(ingesta_kdd, "BASE", tmp_path)
     monkeypatch.setattr(
         ingesta_kdd,

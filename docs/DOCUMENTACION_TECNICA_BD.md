@@ -20,7 +20,7 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           INGESTA (NiFi / Python)                          │
 │  • GPS sintético generado por Groovy                                        │
-│  • OpenWeather API → clima por hub                                         │
+│  • Open-Meteo (API clima) → clima por hub                                  │
 │  • DATEX2 DGT → incidencias de tráfico                                    │
 └────────────────────────────┬────────────────────────────────────────────────┘
                              │
@@ -490,7 +490,7 @@ streamlit run app_visualizacion.py
 | **Hive** | Data warehouse para histórico y análisis |
 | **PageRank** | Algoritmo para determinar criticidad de nodos |
 | **Gemelo Digital** | Réplica virtual de la red de transporte |
-| **OpenWeather** | API de datos meteorológicos |
+| **Open-Meteo** | API de datos meteorológicos (por defecto en el proyecto) |
 | **DATEX2** | Estándar europeo para intercambio de información de tráfico |
 | **NiFi** | Sistema de ingestión de datos |
 | **Spark** | Motor de procesamiento distribuido |

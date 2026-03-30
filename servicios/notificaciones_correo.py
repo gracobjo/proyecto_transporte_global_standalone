@@ -11,6 +11,39 @@ from typing import List, Tuple
 from config import SMTP_FROM, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_USE_TLS, SMTP_USER
 
 
+def _explicar_error_smtp(exc: BaseException) -> str:
+    """
+    Traduce errores frecuentes (p. ej. Microsoft 365 sin SMTP AUTH) a texto útil en español.
+    """
+    raw = str(exc)
+    low = raw.lower()
+    if "535" in raw and (
+        "basic authentication" in low
+        or "5.7.139" in raw
+        or "authentication unsuccessful" in low
+    ):
+        return (
+            "Microsoft 365 / Outlook rechazó el inicio de sesión SMTP (código 535): "
+            "la autenticación básica (usuario + contraseña) está deshabilitada para este buzón o para el inquilino.\n\n"
+            "Opciones:\n"
+            "• Que un administrador de Microsoft 365 active «SMTP autenticado» / Authenticated SMTP "
+            "para tu cuenta (Centro de administración de Exchange → buzones → correo electrónico → "
+            "«Autenticación SMTP» o, en conjunto, directivas de autenticación).\n"
+            "• Usar otro proveedor que permita SMTP con contraseña de aplicación, "
+            "p. ej. Gmail: `smtp.gmail.com`, puerto 587, TLS, y una «contraseña de aplicación» "
+            "(no la contraseña normal de la cuenta).\n"
+            "• Para solo avisos automáticos, puedes usar Telegram (SIMLOG_TELEGRAM_*), sin SMTP.\n\n"
+            f"Detalle técnico: {raw[:400]}"
+        )
+    if "534" in raw or ("5.7.0" in raw and "authentication" in low):
+        return (
+            "El servidor SMTP rechazó la autenticación. Revisa usuario, contraseña y que el "
+            "proveedor permita el método de acceso (TLS en 587, o SSL en 465).\n\n"
+            f"Detalle: {raw[:400]}"
+        )
+    return raw[:500]
+
+
 def smtp_configurado() -> bool:
     return bool((SMTP_HOST or "").strip())
 
@@ -55,4 +88,4 @@ def enviar_correo_texto(
         server.quit()
         return True, f"Enviado a {len(tos)} destinatario(s)."
     except Exception as e:
-        return False, str(e)[:500]
+        return False, _explicar_error_smtp(e)

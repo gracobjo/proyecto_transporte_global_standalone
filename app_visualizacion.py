@@ -44,12 +44,13 @@ from servicios.estado_y_datos import (
     cargar_estado_rutas_reconfiguracion,
     cargar_alertas_activas_cassandra,
 )
-from servicios.kdd_fases import FaseKDD, FASES_KDD
+from servicios.kdd_fases import FaseKDD, etiqueta_proveedor_clima_ui, get_fases_kdd
 from servicios.ejecucion_pipeline import (
     ejecutar_ingesta,
     ejecutar_procesamiento,
     ejecutar_fase_kdd,
 )
+from servicios.notificaciones_eventos import notificar_ejecucion_pipeline
 from servicios.cuadro_mando_ui import render_cuadro_mando_tab
 from servicios.ui_gestion_servicios import render_panel_gestion_servicios
 from servicios.ui_servicios_web import render_sidebar_enlaces_ui
@@ -183,7 +184,7 @@ def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
         {"tab": "Resultados pipeline", "titulo": "Resultado de fases y persistencia", "keywords": "pipeline resultado fases ingesta spark"},
         {"tab": "Resultados pipeline", "titulo": "Estado DGT y alertas de bloqueos", "keywords": "dgt datex2 live cache disabled alertas bloqueos provenance"},
         {"tab": "Pruebas", "titulo": "Registro de pruebas y trazabilidad", "keywords": "pruebas test evidencias nifi airflow script ingesta historico"},
-        {"tab": "Flujo NiFi", "titulo": "Canvas, procesadores y relaciones NiFi", "keywords": "nifi procesadores relaciones provenance canvas openweather dgt kafka hdfs"},
+        {"tab": "Flujo NiFi", "titulo": "Canvas, procesadores y relaciones NiFi", "keywords": "nifi procesadores relaciones provenance canvas openmeteo dgt kafka hdfs"},
         {"tab": "Verificación técnica", "titulo": "Checks rápidos HDFS/Kafka/Cassandra", "keywords": "verificacion tecnica hdfs kafka cassandra checks"},
         {"tab": "Ciclo KDD", "titulo": "Fases KDD y ejecución por fase", "keywords": "kdd fases seleccion preprocesamiento transformacion mineria interpretacion"},
         {"tab": "Gemelo digital", "titulo": "Visualización del gemelo y red", "keywords": "gemelo digital red nodos aristas"},
@@ -393,12 +394,13 @@ def crear_mapa(
 
 def _kdd_sync_idx() -> tuple[int, int, list[str]]:
     """Índice acotado, n y etiquetas de fase."""
-    n = len(FASES_KDD)
+    fases = get_fases_kdd()
+    n = len(fases)
     if "kdd_fase_idx" not in st.session_state:
         st.session_state.kdd_fase_idx = 0
     idx = max(0, min(n - 1, int(st.session_state.kdd_fase_idx)))
     st.session_state.kdd_fase_idx = idx
-    labels = [f"{f.orden}. {f.titulo}" for f in FASES_KDD]
+    labels = [f"{f.orden}. {f.titulo}" for f in fases]
     return idx, n, labels
 
 
@@ -491,7 +493,7 @@ def _render_fase_kdd_card(
             render_vista_previa_ficheros_fase(st, f, BASE, widget_scope=widget_scope)
         else:
             st.caption(
-                "Vista previa de ficheros, simulación por paso, GPS y OpenWeather: "
+                f"Vista previa de ficheros, simulación por paso, GPS y clima ({etiqueta_proveedor_clima_ui()}): "
                 "elige esta fase con **◀ / ▶** o «Ir a fase» en la cabecera de la pestaña."
             )
 
@@ -678,14 +680,21 @@ def main() -> None:
                     resultado="OK",
                     detalle=detalle_prueba,
                 )
+                notificar_ejecucion_pipeline("Ingesta (fases 1–2) — sidebar", True, detalle_prueba)
                 st.success("Ingesta terminada.")
             else:
+                err_tail = (err[-1200:] or out[-1200:] or "").strip()
                 registrar_prueba_ingesta(
                     canal="Frontend Streamlit",
                     ejecutor="Sidebar Streamlit",
                     resultado="FAIL",
                     detalle=f"Ingesta lanzada desde Streamlit terminó con código {code}.",
                     observaciones=(err[-1000:] or out[-1000:]),
+                )
+                notificar_ejecucion_pipeline(
+                    "Ingesta (fases 1–2) — sidebar",
+                    False,
+                    f"código_salida={code}\n{err_tail}",
                 )
                 st.error(f"Código {code}")
                 st.code(err[-2000:] or out[-2000:])
@@ -697,21 +706,29 @@ def main() -> None:
                 code, out, err = ejecutar_procesamiento()
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
             if code == 0:
+                detalle_sp = "procesamiento_grafos ejecutado desde la barra lateral (fases 3–5 KDD)."
                 st.session_state.timeline.append(f"{ts} — Procesamiento OK")
                 registrar_prueba_ingesta(
                     canal="Frontend Streamlit",
                     ejecutor="Sidebar Streamlit — procesamiento Spark",
                     resultado="OK",
-                    detalle="procesamiento_grafos ejecutado desde la barra lateral (fases 3–5 KDD).",
+                    detalle=detalle_sp,
                 )
+                notificar_ejecucion_pipeline("Procesamiento Spark (fases 3–5) — sidebar", True, detalle_sp)
                 st.success("Procesamiento terminado.")
             else:
+                err_tail = (err[-1200:] or out[-1200:] or "").strip()
                 registrar_prueba_ingesta(
                     canal="Frontend Streamlit",
                     ejecutor="Sidebar Streamlit — procesamiento Spark",
                     resultado="FAIL",
                     detalle=f"Procesamiento Spark terminó con código {code}.",
                     observaciones=(err[-1000:] or out[-1000:]),
+                )
+                notificar_ejecucion_pipeline(
+                    "Procesamiento Spark (fases 3–5) — sidebar",
+                    False,
+                    f"código_salida={code}\n{err_tail}",
                 )
                 st.error(f"Código {code}")
                 st.code(err[-2000:] or out[-2000:])
@@ -730,20 +747,30 @@ def main() -> None:
             if c1 == 0 and c2 == 0:
                 st.session_state.paso_15min = p + 1
                 st.session_state.timeline.append(f"{ts} — Pipeline completo (ingesta paso {p})")
+                detalle_pipe = (
+                    f"Pipeline completo desde Streamlit: ingesta paso {p} + procesamiento Spark (fases 3–5)."
+                )
                 registrar_prueba_ingesta(
                     canal="Frontend Streamlit",
                     ejecutor="Sidebar Streamlit",
                     resultado="OK",
-                    detalle=f"Pipeline completo desde Streamlit con ingesta en paso {p} y procesamiento Spark posterior.",
+                    detalle=detalle_pipe,
                 )
+                notificar_ejecucion_pipeline("Pipeline ingesta + Spark — sidebar", True, detalle_pipe)
                 st.success("Pipeline OK.")
             else:
+                err_comb = ((e1 or o1) + "\n---\n" + (e2 or o2)).strip()
                 registrar_prueba_ingesta(
                     canal="Frontend Streamlit",
                     ejecutor="Sidebar Streamlit",
                     resultado="FAIL",
                     detalle=f"Pipeline completo desde Streamlit falló (ingesta {c1} | procesamiento {c2}).",
-                    observaciones=((e1 or o1) + "\n---\n" + (e2 or o2))[-1500:],
+                    observaciones=err_comb[-1500:],
+                )
+                notificar_ejecucion_pipeline(
+                    "Pipeline ingesta + Spark — sidebar",
+                    False,
+                    f"ingesta={c1} procesamiento={c2}\n{err_comb[-1200:]}",
                 )
                 st.error(f"Ingesta {c1} | Procesamiento {c2}")
                 st.code((e1 or o1) + "\n---\n" + (e2 or o2))
@@ -780,7 +807,7 @@ def main() -> None:
             st.markdown("**Estado actual de la fuente DGT**")
             _render_resumen_dgt_ui()
         idx = _render_kdd_prev_next()
-        fase_actual = FASES_KDD[idx]
+        fase_actual = get_fases_kdd()[idx]
 
         paso = int(st.session_state.paso_15min)
         st.caption(
@@ -828,12 +855,23 @@ def main() -> None:
                         simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
                     )
                 ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+                titulo_fase = f"Fase KDD {fase_actual.orden}: {fase_actual.titulo}"
                 if code == 0:
                     st.session_state.timeline.append(
                         f"{ts} — Fase {fase_actual.orden} ({fase_actual.codigo}) OK"
                     )
+                    detalle_ok = (
+                        f"código={fase_actual.codigo} · paso_15min={paso} · script `{fase_actual.script or '—'}`"
+                    )
+                    notificar_ejecucion_pipeline(titulo_fase, True, detalle_ok)
                     st.success("Ejecución terminada correctamente.")
                 else:
+                    err_tail = (err[-1200:] or out[-1200:] or "").strip()
+                    notificar_ejecucion_pipeline(
+                        titulo_fase,
+                        False,
+                        f"código_salida={code}\n{err_tail}",
+                    )
                     st.error(f"Código de salida {code}")
                     st.code(err[-4000:] or out[-4000:])
                 st.session_state.last_fase_kdd_out = out
@@ -842,7 +880,7 @@ def main() -> None:
         _render_fase_kdd_card(fase_actual)
 
         with st.expander("Ver todas las fases (lista completa)", expanded=False):
-            for f in FASES_KDD:
+            for f in get_fases_kdd():
                 _render_fase_kdd_card(
                     f,
                     widget_scope=f"kdd_lista_f{f.orden}",

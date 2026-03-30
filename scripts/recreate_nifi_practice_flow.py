@@ -13,6 +13,10 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BASE = Path(__file__).resolve().parent.parent
+import sys
+
+sys.path.insert(0, str(BASE))
+from config import OPEN_METEO_MULTI_HUBS_URL
 NIFI_API = os.environ.get("SIMLOG_NIFI_API", "https://localhost:8443/nifi-api").rstrip("/")
 NIFI_USER = os.environ.get("SIMLOG_NIFI_USER", "nifi")
 NIFI_PASSWORD = os.environ.get("SIMLOG_NIFI_PASSWORD", "nifinifinifi")
@@ -283,9 +287,6 @@ def main() -> None:
     pg_id = pg["component"]["id"]
 
     scripts_root = BASE / "nifi"
-    owm_key = ENV.get("OWM_API_KEY") or ENV.get("API_WEATHER_KEY") or ""
-    if not owm_key:
-        raise SystemExit("No se encontro OWM_API_KEY/API_WEATHER_KEY en .env")
 
     p1 = create_processor(client, pg_id, "Timer_Ingesta_15min", "org.apache.nifi.processors.standard.GenerateFlowFile", 80, 180)
     p1 = update_processor(client, p1, properties={"Batch Size": "1"}, scheduling_period="15 min",
@@ -297,9 +298,6 @@ def main() -> None:
         client,
         p2,
         properties={
-            "owm.api.key": owm_key,
-            "owm.city.ids": "3117735,3128760,3128026,3105976,2510911",
-            "owm.url": None,
             "dgt.url": "https://nap.dgt.es/datex2/v3/dgt/SituationPublication/datex2_v36.xml",
             "paso_15min": "0",
             "filename": "simlog_practice_${now():format(\"yyyyMMdd_HHmmss\")}.json",
@@ -320,12 +318,12 @@ def main() -> None:
         position=(700, 180),
     )
 
-    p4 = create_processor(client, pg_id, "OpenWeather_InvokeHTTP", "org.apache.nifi.processors.standard.InvokeHTTP", 1040, 180)
+    p4 = create_processor(client, pg_id, "OpenMeteo_InvokeHTTP", "org.apache.nifi.processors.standard.InvokeHTTP", 1040, 180)
     p4 = update_processor(
         client,
         p4,
         properties={
-            "HTTP URL": "https://api.openweathermap.org/data/2.5/group?id=${owm.city.ids}&appid=${owm.api.key}&units=metric&lang=es",
+            "HTTP URL": OPEN_METEO_MULTI_HUBS_URL,
             "Remote URL": None,
             "HTTP Method": "GET",
             "Response Body Attribute Name": "owm.response",

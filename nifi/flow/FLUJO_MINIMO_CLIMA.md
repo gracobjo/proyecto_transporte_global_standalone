@@ -1,6 +1,6 @@
-# Flujo minimo NiFi para API clima (OpenWeather)
+# Flujo minimo NiFi para API clima (Open-Meteo)
 
-Objetivo: tener una ingesta funcional en NiFi que consulte clima real (5 hubs), publique en Kafka y guarde backup en HDFS.
+Objetivo: tener una ingesta funcional en NiFi que consulte clima real (5 hubs vía Open-Meteo, sin API key), publique en Kafka y guarde backup en HDFS.
 
 Este flujo usa el script ya incluido en el repo: `nifi/groovy/GenerateFullPayloadSimlog.groovy`.
 
@@ -17,7 +17,6 @@ Si tu version de NiFi no soporta importacion JSON directa en la UI, usa ese arch
 
 En el Process Group `PG_SIMLOG_KDD`, crea/asigna estos parametros:
 
-- `OWM_API_KEY` = tu clave OpenWeather (marcar como sensible)
 - `KAFKA_BOOTSTRAP` = `localhost:9092`
 - `TOPIC_RAW` = `transporte_raw`
 - `TOPIC_FILTERED` = `transporte_filtered`
@@ -58,7 +57,6 @@ En el Process Group `PG_SIMLOG_KDD`, crea/asigna estos parametros:
 
 Agregar atributos:
 
-- `owm.api.key` = `${OWM_API_KEY}`
 - `paso_15min` = `0`
 
 ### 3.3 `ExecuteScript`
@@ -141,6 +139,6 @@ Este paso ejecuta `procesamiento/procesamiento_grafos.py`, que persiste en:
 
 ## 6) Notas practicas
 
-- Si `ExecuteScript` falla con `missing owm.api.key`, revisa `UpdateAttribute` y `Parameter Context`.
-- Si OpenWeather rate limit falla, aumenta el `Run Schedule`.
-- Para produccion, mantener `OWM_API_KEY` solo en Parameter Context sensible (no en ficheros de repo).
+- Si el JSON no trae `clima_hubs`, revisa conectividad a `api.open-meteo.com` y el script `GenerateFullPayloadSimlog.groovy`.
+- Si el intervalo de ingesta satura la red, aumenta el `Run Schedule`.
+- OpenWeather (legacy): solo si vuelves a un flujo que exige `owm.api.key`; no commitear claves en el repo.

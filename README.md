@@ -35,7 +35,7 @@ Cada pieza del sistema tiene una función concreta. Ningún componente “le pas
 
 | Componente | Responsabilidad única | Entrada | Salida |
 |------------|------------------------|---------|--------|
-| **Ingesta** (`ingesta_kdd.py`) | Generar el “snapshot” del sistema cada 15 min: clima real, estados simulados de nodos/aristas, posiciones de camiones. | API OpenWeatherMap, topología `config_nodos`. | Un JSON enriquecido → Kafka (temas `transporte_raw` y `transporte_filtered`) y copia en HDFS. |
+| **Ingesta** (`ingesta_kdd.py`) | Generar el “snapshot” del sistema cada 15 min: clima real, estados simulados de nodos/aristas, posiciones de camiones. | Open-Meteo (por defecto) u OpenWeather opcional, topología `config_nodos`. | Un JSON enriquecido → Kafka (temas `transporte_raw` y `transporte_filtered`) y copia en HDFS. |
 | **Kafka** | Cola de mensajes: recibe el JSON de la ingesta y lo deja disponible para el consumidor (Spark u otro). | Mensajes publicados por la ingesta. | Lectura por el procesamiento (o por cualquier consumidor de ambos temas). |
 | **HDFS** | Almacén de respaldo: guardar copias del JSON de ingesta por si Kafka no está o para reprocesar. | JSON escrito por la ingesta. | Archivos JSON que el procesamiento Spark puede leer como fuente alternativa. |
 | **Procesamiento Spark** (`procesamiento_grafos.py`) | Construir el grafo, autosanación, rutas alternativas, PageRank, y persistir resultados. | JSON de ingesta desde HDFS (o datos simulados). Topología `config_nodos`. | Escritura en **Cassandra** (nodos, aristas, camiones, PageRank) y opcional en **Hive** (histórico). |
@@ -65,7 +65,7 @@ La **ingesta** es la **Fase I** del pipeline (Knowledge Discovery in Data). Su o
 ### Qué hace la ingesta
 
 1. **Clima por API**  
-   Consulta [OpenWeatherMap](https://openweathermap.org/) para los **5 hubs** (Madrid, Barcelona, Bilbao, Vigo, Sevilla). Obtiene temperatura, humedad, descripción y visibilidad. Los resultados se incluyen en el JSON como lista `clima`.
+   Consulta **[Open-Meteo](https://open-meteo.com/)** para los **5 hubs** (Madrid, Barcelona, Bilbao, Vigo, Sevilla) sin API key; opcionalmente OpenWeather con `SIMLOG_WEATHER_PROVIDER=openweather` y clave. Los resultados se incluyen en el JSON como lista `clima`.
 
 2. **Simulación de incidentes**  
    Asigna a cada **nodo** y cada **arista** un estado aleatorio:
@@ -96,7 +96,7 @@ La **ingesta** es la **Fase I** del pipeline (Knowledge Discovery in Data). Su o
 ### Qué incluye el script
 
 - **Configuración**: uso de `config_nodos.py` para `RED`, `HUBS`, `get_nodos()`, `get_aristas()`.
-- **API de clima**: `API_KEY` y `WEATHER_API_URL` (OpenWeatherMap); funciones `obtener_clima_hub` y `obtener_clima_todos_hubs`.
+- **API de clima**: **Open-Meteo** por defecto; OpenWeather opcional (`SIMLOG_WEATHER_PROVIDER=openweather`, `API_WEATHER_KEY`).
 - **Cálculo de distancias**: `calcular_distancia_haversine` (no se usa en el flujo actual pero está disponible); las distancias de aristas vienen de `get_aristas()`.
 - **Simulación**: `simular_incidentes`, `interpolar_posicion`, `simular_camiones`, `crear_json_enriquecido`.
 - **Salidas**: `guardar_en_hdfs` (subprocess a `hdfs dfs -put`) y `publicar_en_kafka` (KafkaProducer).
@@ -282,7 +282,7 @@ source venv_transporte/bin/activate
 pip install -r requirements.txt
 ```
 
-Configurar (opcional) la API key de OpenWeatherMap en `config.py` o por variable de entorno.
+Configurar (opcional) OpenWeather: `SIMLOG_WEATHER_PROVIDER=openweather` y `API_WEATHER_KEY` / `OWM_API_KEY` en `.env`. Por defecto se usa Open-Meteo sin clave.
 
 ### 2. Topic Kafka
 
@@ -324,7 +324,7 @@ En el dashboard, "Paso Siguiente (15 min)" ejecuta ingesta + procesamiento y act
 - **README_SIMLOG.md**: instrucciones de despliegue, arranque de servicios (Cassandra, Kafka), troubleshooting.
 - **docs/AIRFLOW.md**: ejecucion del pipeline sin Streamlit con DAGs de servicios + DAGs por fases KDD + pipeline maestro cada 15 min.
 - **docs/DIAGRAMAS_MERMAID.md**: diagramas UML en Mermaid (casos de uso incl. CU-09, componentes con `servicios/kdd_*`, secuencias, despliegue).
-- **docs/DASHBOARD_KDD_UI.md**: diseño de la pestaña **Ciclo KDD** (vista previa, OpenWeather, simulación, grafo topológico).
+- **docs/DASHBOARD_KDD_UI.md**: diseño de la pestaña **Ciclo KDD** (vista previa, clima API, simulación, grafo topológico).
 - **docs/CODESPACES_DEMO.md**: guía de demo en GitHub Codespaces (arranque en un comando y checklist de presentación).
 - **docs/DISENO_SISTEMA.md** / **docs/CASOS_DE_USO.md**: diseño y casos de uso (CU-01…CU-09) con diagramas Mermaid.
 - **docs/REQUIREMENTS_CHECKLIST.md**: cotejo con el PDF *Proyecto Big Data.pdf* (Fases I–IV, rúbrica).

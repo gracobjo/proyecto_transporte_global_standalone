@@ -1,5 +1,5 @@
 """
-Red híbrida (topología estática + estado Cassandra + clima OpenWeather).
+Red híbrida (topología estática + estado Cassandra + clima Open-Meteo).
 
 - Caminos mínimos en **número de saltos** (peso 1 por arista) vía BFS.
 - Retrasos, motivos, coste y vehículos afectados a partir de datos operativos.
@@ -112,7 +112,7 @@ def estimar_retraso_tramo(
         e2 = (evaluacion_clima_por_hub.get(hv) or {}).get("minutos_estimados", 0) or 0
         extra_cli = max(int(e1), int(e2)) // 3
         if extra_cli > 0:
-            cli_txt = f"Clima (OWM) hubs {hu}/{hv}: +{extra_cli} min orient."
+            cli_txt = f"Clima (API) hubs {hu}/{hv}: +{extra_cli} min orient."
 
     incidencia_grave = m_max >= 999
     if incidencia_grave and cap_bloqueo_operativo_min is not None:
@@ -224,7 +224,7 @@ def construir_bloqueos_clima_obras(
     nodos_map: Dict[str, Dict[str, Any]],
 ) -> Tuple[Set[str], Set[Tuple[str, str]], List[str]]:
     """
-    Marca nodos/aristas afectados por umbrales OWM (tormenta/nieve fuerte) y por palabra 'obras' en descripción hub.
+    Marca nodos/aristas afectados por clima severo (tormenta/nieve fuerte) y por palabra 'obras' en descripción hub.
     """
     nodos_b: Set[str] = set()
     aristas_b: Set[Tuple[str, str]] = set()

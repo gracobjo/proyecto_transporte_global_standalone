@@ -3,7 +3,7 @@
 > **Documentación detallada (process group, procesadores, relaciones y criterio):**  
 > **[`PROCESADORES_Y_RELACIONES.md`](PROCESADORES_Y_RELACIONES.md)** — incluye el **flujo compacto recomendado (v2)** y el **flujo granular (v1)**.
 
-Este directorio describe el **grupo de procesadores** y el flujo de datos alineado con el PDF / práctica: **GPS sintético**, **OpenWeather (InvokeHTTP)**, **DGT DATEX2 (InvokeHTTP)**, **Kafka**, **HDFS (cliente Hadoop; cluster con YARN)**, **Spark** (job batch vía `spark-submit`), **Cassandra**, **Hive** (histórico analítico).
+Este directorio describe el **grupo de procesadores** y el flujo de datos alineado con el PDF / práctica: **GPS sintético**, **Open-Meteo (InvokeHTTP; sin API key)**, **DGT DATEX2 (InvokeHTTP)**, **Kafka**, **HDFS (cliente Hadoop; cluster con YARN)**, **Spark** (job batch vía `spark-submit`), **Cassandra**, **Hive** (histórico analítico).
 
 > **Nota:** NiFi no sustituye a Spark en memoria: orquesta **ingesta y disparo de jobs**. El procesamiento masivo (GraphFrames) sigue siendo `procesamiento/procesamiento_grafos.py` o un JAR equivalente.
 
@@ -29,7 +29,7 @@ Guia y scripts listos en:
 (GPS sintético)
       │
       ▼
-[InvokeHTTP OpenWeather]
+[InvokeHTTP Open-Meteo]
       │
       ▼
 [ExecuteScript MergeWeather]
@@ -62,7 +62,7 @@ Definir en **NiFi → Parameter Contexts** (o Variables del grupo):
 | `TOPIC_DGT_RAW` | `transporte_dgt_raw` | Auditoría XML/merge DGT |
 | `TOPIC_RAW` | `transporte_raw` | Datos crudos (auditoría) |
 | `TOPIC_FILTERED` | `transporte_filtered` | Consumo Spark / pipeline |
-| `OWM_API_KEY` | *(tu clave)* | InvokeHTTP |
+| `SIMLOG_OPEN_METEO_MULTI_HUBS_URL` | *(opcional)* URL completa multi-hub; por defecto coincide con `OPEN_METEO_MULTI_HUBS_URL` en `config.py` | InvokeHTTP clima |
 | `DGT_DATEX2_URL` | `https://nap.dgt.es/.../datex2_v36.xml` | InvokeHTTP DGT |
 | `HDFS_RAW_BASE` | `/user/hadoop/transporte_backup/nifi_raw` | PutHDFS |
 | `CASSANDRA_HOST` | `127.0.0.1` | ExecuteScript / Spark |
@@ -89,15 +89,14 @@ Orden lógico y tipos de procesador **Apache NiFi 1.x / 2.x** (los nombres exact
 
 Script de referencia: `groovy/GenerateSyntheticPayload.groovy`.
 
-### 2. Clima real (OpenWeather)
+### 2. Clima real (Open-Meteo)
 
 | # | Tipo | Rol |
 |---|------|-----|
-| 3 | **UpdateAttribute** | Atributos: `lat`, `lon`, `hub`, `owm_url` = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${OWM_API_KEY}&units=metric` |
-| 4 | **InvokeHTTP** | `GET` → cuerpo JSON de OpenWeather (una llamada por FlowFile; duplicar rama o usar **RouteOnAttribute** + 5 flujos para los 5 hubs) |
-| 5 | **MergeRecord** o **MergeContent** | Unir respuesta HTTP con el JSON sintético (binario `plain`, `Demarcator: \n---\n`) |
+| 3 | **InvokeHTTP** (`OpenMeteo_InvokeHTTP`) | `GET` → JSON **array** (una petición multi-hub). URL por defecto: misma cadena que `OPEN_METEO_MULTI_HUBS_URL` en `config.py` (5 hubs: Madrid … Sevilla). Cuerpo de respuesta en atributo `owm.response` (nombre histórico). |
+| 4 | **ExecuteScript** | `groovy/MergeOpenWeatherIntoPayload.groovy` interpreta el array Open-Meteo y rellena `clima_hubs` con `source=openmeteo`. |
 
-Para **5 hubs en paralelo**, crear **5 ramas** (Madrid, Barcelona, …) con `UpdateAttribute` fijo + `InvokeHTTP`, y **MergeContent** con `Minimum Number of Entries = 5`.
+**OpenWeather (legacy):** el mismo script acepta respuestas **Group API** (`list[]`) si aún usas el flujo antiguo.
 
 ### 2.b DATEX2 DGT real
 
@@ -109,7 +108,7 @@ Para **5 hubs en paralelo**, crear **5 ramas** (Madrid, Barcelona, …) con `Upd
 Este paso deja trazabilidad adicional en atributos:
 
 - `simlog.provenance.stage=dgt_merged`
-- `simlog.provenance.sources=simulacion,openweather,dgt`
+- `simlog.provenance.sources=simulacion,openmeteo,dgt` (o `openweather` si el merge vino de Group API legacy)
 - `simlog.provenance.dgt_mode=live|disabled`
 - `simlog.provenance.dgt_incidents=<n>`
 - `simlog.provenance.dgt_nodes_affected=<n>`
@@ -180,7 +179,7 @@ En nodos con poca RAM, **priorizar** que Spark inserte en Hive en el mismo job q
 | Archivo | Descripción |
 |---------|-------------|
 | `flow/simlog_kdd_flow_spec.yaml` | Especificación legible de procesadores y conexiones |
-| `flow/FLUJO_MINIMO_CLIMA.md` | Montaje mínimo operativo (OpenWeather -> Kafka + HDFS) |
+| `flow/FLUJO_MINIMO_CLIMA.md` | Montaje mínimo operativo (Open-Meteo → Kafka + HDFS) |
 | `groovy/GenerateSyntheticPayload.groovy` | GPS sintético + envelope JSON |
 | `groovy/MergeDgtDatex2IntoPayload.groovy` | Fusión DATEX2 DGT con prioridad y provenance |
 | `scripts/spark_submit_yarn.sh` | Ejemplo `spark-submit` con YARN |
@@ -229,8 +228,8 @@ Para comprobar el linaje en la UI de NiFi:
 
 Relaciones clave del flujo final:
 
-- `Build_GPS_Sintetico.success -> OpenWeather_InvokeHTTP`
-- `OpenWeather_InvokeHTTP.Original -> Merge_Weather_Into_Payload`
+- `Build_GPS_Sintetico.success -> OpenMeteo_InvokeHTTP`
+- `OpenMeteo_InvokeHTTP.Original -> Merge_Weather_Into_Payload`
 - `Merge_Weather_Into_Payload.success -> DGT_DATEX2_InvokeHTTP`
 - `DGT_DATEX2_InvokeHTTP.Original -> Merge_DGT_Into_Payload`
 - `Merge_DGT_Into_Payload.success -> Kafka_Publish_DGT_RAW | Kafka_Publish_RAW | Kafka_Publish_FILTERED | HDFS_Backup_JSON`
@@ -238,11 +237,11 @@ Relaciones clave del flujo final:
 
 ## Incidencias frecuentes
 
-### OpenWeather: `401 Unauthorized` en `Log_Fallos` o atributos `invokehttp.status.code`
+### Open-Meteo: fallos HTTP o `simlog.weather.available=false`
 
-- La API de OpenWeather devuelve **401** si el `appid` no es válido (clave errónea, revocada o cuenta sin activar la API).
-- Comprueba **`OWM_API_KEY`** / **`owm.api.key`** en Parameter Context o `Set_Parametros_Ingesta`, alineado con `.env` del proyecto.
-- Tras cambiar la clave: **Apply**, **Stop → Start** en `OpenWeather_InvokeHTTP` si hace falta, vaciar colas hacia **failure** y relanzar.
+- Comprueba conectividad HTTPS a `api.open-meteo.com` y que la URL tenga **cinco** pares lat/lon en el mismo orden que el script (`MergeOpenWeatherIntoPayload.groovy`).
+- Respuesta esperada: **array JSON** de longitud 5. Si cambias coordenadas, actualiza también el script o la variable `SIMLOG_OPEN_METEO_MULTI_HUBS_URL`.
+- **OpenWeather (solo si vuelves a `SIMLOG_WEATHER_PROVIDER=openweather` en Python):** `401` indica `appid` inválido; revisa `OWM_API_KEY` en Parameter Context.
 
 ### Merge DGT: `Cannot compare java.util.ArrayList`
 
@@ -250,4 +249,4 @@ Relaciones clave del flujo final:
 
 ## Seguridad
 
-- No commitear `OWM_API_KEY` en texto plano; usar **Parameter Providers** o **NiFi sensitive parameters**.
+- Si usas OpenWeather en algún entorno legacy, no commitear `OWM_API_KEY` en texto plano; usar **Parameter Providers** o **NiFi sensitive parameters**.

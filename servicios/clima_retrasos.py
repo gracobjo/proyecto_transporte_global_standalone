@@ -1,8 +1,8 @@
 """
-Anticipación de retrasos logísticos a partir de variables OpenWeather + contexto operativo.
+Anticipación de retrasos logísticos a partir de variables meteorológicas + contexto operativo.
 
-Usa códigos de condición OWM (https://openweathermap.org/weather-conditions) y reglas
-heurísticas de negocio (congestión, obras, incidentes simulados en Cassandra).
+Proveedor por defecto: Open-Meteo (códigos WMO → heurísticas compatibles con rangos OWM).
+Alternativa: OpenWeather (`SIMLOG_WEATHER_PROVIDER=openweather` + API_WEATHER_KEY). Reglas de negocio: congestión, obras, incidentes simulados en Cassandra.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from config import API_WEATHER_BASE, API_WEATHER_KEY
+from config import API_WEATHER_BASE, API_WEATHER_KEY, WEATHER_PROVIDER
 from config_nodos import get_nodos
 
 
@@ -31,13 +31,19 @@ def _secundarios_por_hub_cached() -> Dict[str, List[str]]:
 
 
 def obtener_clima_completo_hub(hub: str, lat: float, lon: float) -> Dict[str, Any]:
-    """Respuesta cruda de OpenWeather Current Weather (métricas para el cuadro de mando)."""
+    """Clima actual por hub: Open-Meteo u OpenWeather según `SIMLOG_WEATHER_PROVIDER`."""
+    if WEATHER_PROVIDER in ("openmeteo", "open-meteo"):
+        from servicios.open_meteo_clima import fetch_openmeteo_current
+
+        return fetch_openmeteo_current(hub, lat, lon)
+
     if not (API_WEATHER_KEY or "").strip():
         return {
             "hub": hub,
             "error": "API_WEATHER_KEY no configurada (define API_WEATHER_KEY u OWM_API_KEY/OPENWEATHER_API_KEY).",
             "lat": lat,
             "lon": lon,
+            "weather_source": "openweather",
         }
     try:
         timeout = float(os.environ.get("OWM_REQUEST_TIMEOUT_SEC", "8"))
@@ -53,7 +59,13 @@ def obtener_clima_completo_hub(hub: str, lat: float, lon: float) -> Dict[str, An
             timeout=timeout,
         )
         if r.status_code != 200:
-            return {"hub": hub, "error": f"HTTP {r.status_code}", "lat": lat, "lon": lon}
+            return {
+                "hub": hub,
+                "error": f"HTTP {r.status_code}",
+                "lat": lat,
+                "lon": lon,
+                "weather_source": "openweather",
+            }
         d = r.json()
         w0 = (d.get("weather") or [{}])[0]
         main = d.get("main") or {}
@@ -82,9 +94,10 @@ def obtener_clima_completo_hub(hub: str, lat: float, lon: float) -> Dict[str, An
             "nieve_1h_mm": snow.get("1h"),
             "dt": d.get("dt"),
             "timezone": d.get("timezone"),
+            "weather_source": "openweather",
         }
     except Exception as e:
-        return {"hub": hub, "error": str(e), "lat": lat, "lon": lon}
+        return {"hub": hub, "error": str(e), "lat": lat, "lon": lon, "weather_source": "openweather"}
 
 
 def obtener_clima_todos_hubs_completo() -> Dict[str, Dict[str, Any]]:
@@ -232,7 +245,7 @@ def evaluar_retraso_integrado(
     nodos_cassandra: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Combina clima OWM + estado operativo (Cassandra) para un hub.
+    Combina clima (API) + estado operativo (Cassandra) para un hub.
     """
     hub = clima_hub.get("hub", "?")
     if clima_hub.get("error"):

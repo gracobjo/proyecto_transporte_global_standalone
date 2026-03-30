@@ -203,6 +203,13 @@ def ejecutar_fase_spark(subfase: str, **context) -> Dict[str, Any]:
 
     script = BASE / "procesamiento" / "fase_kdd_spark.py"
     paso = _paso_desde_context(**context)
+    # Timeout configurable: Spark (GraphFrames/PageRank) puede tardar >15 min en primer arranque.
+    # Se puede ajustar sin tocar código exportando SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC.
+    try:
+        timeout_sec = int(os.environ.get("SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC", "3600"))
+    except Exception:
+        timeout_sec = 3600
+    timeout_sec = max(300, timeout_sec)
     # Hive es opcional en el proyecto; para la subfase de interpretación (fase 5)
     # necesitamos que Spark habilite soporte Hive para que se creen/actualicen
     # tablas en `logistica_espana` y el frontend pueda consultarlas con beeline.
@@ -227,7 +234,7 @@ def ejecutar_fase_spark(subfase: str, **context) -> Dict[str, Any]:
         cwd=str(BASE),
         capture_output=True,
         text=True,
-        timeout=900,
+        timeout=timeout_sec,
         env={**os.environ, "PASO_15MIN": str(paso), **env_extra},
     )
     if detener_hive:

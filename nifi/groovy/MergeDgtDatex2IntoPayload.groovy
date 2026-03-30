@@ -2,7 +2,7 @@
  * NiFi ExecuteScript (Groovy) - Mezcla incidencias DATEX2 DGT en el payload.
  *
  * Requiere:
- * - FlowFile content: payload JSON ya enriquecido con OpenWeather.
+ * - FlowFile content: payload JSON ya enriquecido con clima API (Open-Meteo u OpenWeather legacy).
  * - Atributo "dgt.response.xml": XML DATEX2 v3.x descargado por InvokeHTTP.
  *
  * Añade:
@@ -336,7 +336,8 @@ flowFile = session.write(flowFile, { out ->
 
 session.putAttribute(flowFile, "mime.type", "application/json")
 session.putAttribute(flowFile, "simlog.provenance.stage", "dgt_merged")
-session.putAttribute(flowFile, "simlog.provenance.sources", allRecords ? (weatherAvailable ? "simulacion,openweather,dgt" : "simulacion,dgt") : (weatherAvailable ? "simulacion,openweather" : "simulacion"))
+def weatherSrc = flowFile.getAttribute("simlog.weather.source") ?: "openmeteo"
+session.putAttribute(flowFile, "simlog.provenance.sources", allRecords ? (weatherAvailable ? "simulacion,${weatherSrc},dgt" : "simulacion,dgt") : (weatherAvailable ? "simulacion,${weatherSrc}" : "simulacion"))
 session.putAttribute(flowFile, "simlog.provenance.dgt_mode", allRecords ? "live" : "disabled")
 session.putAttribute(flowFile, "simlog.provenance.dgt_xml_source", xmlSource)
 session.putAttribute(flowFile, "simlog.provenance.dgt_incidents", String.valueOf(allRecords.size()))

@@ -70,14 +70,15 @@ from servicios.estado_y_datos import (
     verificar_kafka_topic,
 )
 from servicios.notificaciones_correo import enviar_correo_texto, smtp_configurado
+from servicios.notificaciones_telegram import notificar_cuadro_mando, probar_telegram_desde_ui
 from servicios.simulacion_movimiento_flota import (
     iniciar_estado_simulacion_para_asignaciones,
     sincronizar_posiciones_desde_reloj,
     texto_alerta_ruta_finalizada,
     texto_toast_ruta_finalizada,
 )
-from servicios.kdd_operaciones import OPERACIONES_POR_FASE
-from config import PROJECT_DISPLAY_NAME, TOPIC_TRANSPORTE
+from servicios.kdd_operaciones import get_operaciones_por_fase
+from config import PROJECT_DISPLAY_NAME, SMTP_HOST, TOPIC_TRANSPORTE
 
 REPORT_TEMPLATES_PATH = Path(__file__).resolve().parents[1] / "servicios" / "report_templates.json"
 LOGO_PATH = Path(__file__).resolve().parents[1] / "logo.png"
@@ -118,7 +119,7 @@ def render_operaciones_por_fase() -> None:
         "Supervisión del modelo de negocio: qué hace cada fase y qué consultas "
         "encajan con Cassandra (tiempo real) o Hive (histórico)."
     )
-    for orden, ops in OPERACIONES_POR_FASE:
+    for orden, ops in get_operaciones_por_fase():
         with st.expander(f"**Fase {orden}** — { _titulo_fase(orden) }", expanded=(orden == 1)):
             for op in ops:
                 c1, c2 = st.columns([1, 4])
@@ -155,29 +156,46 @@ def render_acciones_rapidas() -> None:
                 )
             if code == 0:
                 st.success("Ingesta OK.")
+                notificar_cuadro_mando("Ingesta (fases 1–2)", True, f"returncode={code}")
                 st.session_state.timeline = st.session_state.get("timeline", []) + [
                     f"{datetime.now(timezone.utc).strftime('%H:%M:%S UTC')} — Ingesta (cuadro)"
                 ]
             else:
                 st.error(f"Código {code}")
                 st.code(err[-2500:] or out[-2500:])
+                notificar_cuadro_mando(
+                    "Ingesta (fases 1–2)",
+                    False,
+                    (err or out or "")[-600:],
+                )
     with c2:
         if st.button("Ejecutar Spark (fases 3–5)", key="cm_spark", width="stretch"):
             with st.spinner("Spark…"):
                 code, out, err = ejecutar_procesamiento()
             if code == 0:
                 st.success("Procesamiento OK.")
+                notificar_cuadro_mando("Spark (fases 3–5)", True, f"returncode={code}")
                 st.session_state.timeline = st.session_state.get("timeline", []) + [
                     f"{datetime.now(timezone.utc).strftime('%H:%M:%S UTC')} — Spark (cuadro)"
                 ]
             else:
                 st.error(f"Código {code}")
                 st.code(err[-2500:] or out[-2500:])
+                notificar_cuadro_mando(
+                    "Spark (fases 3–5)",
+                    False,
+                    (err or out or "")[-600:],
+                )
     with c3:
         if st.button("Refrescar datos clima (API)", key="cm_clima", width="stretch"):
             st.session_state["clima_refresh"] = datetime.now(timezone.utc).isoformat()
-            # Forzamos recarga de slides (OpenWeather) en el siguiente render
+            # Forzamos recarga de slides (API clima) en el siguiente render
             st.session_state["slides_clima_ready"] = False
+            notificar_cuadro_mando(
+                "Refrescar datos clima (API)",
+                True,
+                "Sesión marcada para recargar datos de clima en la vista de slides.",
+            )
             st.rerun()
 
 
@@ -233,10 +251,25 @@ def render_consultas_cassandra() -> None:
         if ok and rows:
             st.dataframe(pd.DataFrame(rows), width="stretch")
             st.caption(f"✅ {len(rows)} fila(s) devueltas.")
+            notificar_cuadro_mando(
+                f"Consulta Cassandra: {titulo_cassandra(consulta_seleccionada)}",
+                True,
+                f"{len(rows)} fila(s)",
+            )
         elif ok:
             st.info("Consulta correcta pero sin filas (tabla vacía).")
+            notificar_cuadro_mando(
+                f"Consulta Cassandra: {titulo_cassandra(consulta_seleccionada)}",
+                True,
+                "Sin filas",
+            )
         else:
             st.error(f"Error Cassandra: {err}")
+            notificar_cuadro_mando(
+                f"Consulta Cassandra: {titulo_cassandra(consulta_seleccionada)}",
+                False,
+                str(err or "")[:500],
+            )
 
     # CQL personalizado
     with st.expander("CQL personalizado (copiar / pegar / ejecutar)", expanded=False):
@@ -260,10 +293,13 @@ def render_consultas_cassandra() -> None:
             if ok and rows:
                 st.dataframe(pd.DataFrame(rows), width="stretch")
                 st.caption(f"✅ {len(rows)} fila(s).")
+                notificar_cuadro_mando("CQL personalizado (Cassandra)", True, f"{len(rows)} fila(s)")
             elif ok:
                 st.info("Consulta correcta pero sin filas.")
+                notificar_cuadro_mando("CQL personalizado (Cassandra)", True, "Sin filas")
             else:
                 st.error(f"Error: {err or 'Error desconocido'}")
+                notificar_cuadro_mando("CQL personalizado (Cassandra)", False, str(err or "")[:500])
         elif run_cql and not cql_edit:
             st.warning("Introduce una consulta CQL primero.")
 
@@ -345,9 +381,11 @@ def render_consultas_hive() -> None:
                 st.session_state.hive_tablas_en_hive = nuevas
                 st.session_state.hive_tablas_err = ""
                 st.success(f"Detectadas **{len(nuevas)}** tablas.")
+                notificar_cuadro_mando("Verificar tablas en Hive", True, f"{len(nuevas)} tablas")
             else:
                 st.session_state.hive_tablas_err = err_tabs or "error"
                 st.warning(f"No se pudieron listar tablas: {err_tabs}")
+                notificar_cuadro_mando("Verificar tablas en Hive", False, str(err_tabs or "")[:500])
             st.rerun()
     with c_hint:
         if tablas_en_hive:
@@ -453,7 +491,7 @@ def render_consultas_hive() -> None:
             return ""
         s = str(v)
         if s.startswith("Error: HTTPSConnectionPool") or "Failed to resolve" in s:
-            return "Sin conexión a OpenWeather"
+            return "Sin conexión a la API de clima"
         return _recortar_texto(s, max_len=120)
 
     def _render_df_usuario(df: pd.DataFrame) -> None:
@@ -527,13 +565,28 @@ def render_consultas_hive() -> None:
             )
             if not out_s.strip():
                 st.info("Consulta correcta pero sin filas para los filtros actuales.")
+                notificar_cuadro_mando(
+                    f"Consulta Hive: {titulo_hive(sel)}",
+                    True,
+                    f"{elapsed:.1f}s · sin filas · caché={'sí' if desde_cache else 'no'}",
+                )
             else:
                 df = _hive_tsv_a_dataframe(out_s)
                 _render_df_usuario(df)
                 with st.expander("Ver salida raw (TSV)"):
                     st.text_area("Salida (TSV)", value=out_s, height=220)
+                notificar_cuadro_mando(
+                    f"Consulta Hive: {titulo_hive(sel)}",
+                    True,
+                    f"{elapsed:.1f}s · {len(df)} fila(s) · caché={'sí' if desde_cache else 'no'}",
+                )
         else:
             st.error(f"Error Hive: {err}")
+            notificar_cuadro_mando(
+                f"Consulta Hive: {titulo_hive(sel)}",
+                False,
+                str(err or "")[:500],
+            )
             if "Table not found" in (err or ""):
                 st.info(
                     "La tabla no existe. Ejecuta Spark con `SIMLOG_ENABLE_HIVE=1` para crear las tablas."
@@ -571,11 +624,18 @@ def render_consultas_hive() -> None:
                 )
                 if not out_s.strip():
                     st.info("Consulta correcta pero sin filas.")
+                    notificar_cuadro_mando("SQL personalizado (Hive)", True, f"{elapsed:.1f}s · sin filas")
                 else:
                     df = _hive_tsv_a_dataframe(out_s)
                     _render_df_usuario(df)
+                    notificar_cuadro_mando(
+                        "SQL personalizado (Hive)",
+                        True,
+                        f"{elapsed:.1f}s · {len(df)} fila(s)",
+                    )
             else:
                 st.error(f"Error: {err or 'Error desconocido'}")
+                notificar_cuadro_mando("SQL personalizado (Hive)", False, str(err or "")[:500])
         elif run_sql and not sql_edit:
             st.warning("Introduce una consulta SQL primero.")
 
@@ -592,6 +652,7 @@ def render_consultas_hive() -> None:
         if st.button("Vaciar caché Hive", key="btn_hive_cache_clear"):
             limpiar_cache_consultas_hive()
             st.success("Caché vaciada; la próxima ejecución irá a HiveServer2.")
+            notificar_cuadro_mando("Vaciar caché Hive", True, "Caché de consultas en memoria limpiada.")
 
 
 def render_slides_clima_retrasos() -> None:
@@ -602,20 +663,21 @@ def render_slides_clima_retrasos() -> None:
         "principal y **alternativas** en otro color), abre la pestaña **Rutas híbridas**."
     )
     st.caption(
-        "Cada **slide** corresponde a un hub. Se combinan variables OpenWeather (tormenta, nieve, "
+        "Cada **slide** corresponde a un hub. Se combinan variables meteorológicas (tormenta, nieve, "
         "lluvia, niebla, viento, visibilidad) con el **estado operativo** en Cassandra (atascos, "
         "obras, bloqueos simulados) para estimar un margen de retraso orientativo."
     )
 
     # Evita que cada recarga del dashboard haga 5 llamadas HTTP + lecturas Cassandra.
-    # Esto hace que el tab "Cuadro de mando" sea rápido incluso si OpenWeather/Hive/Cassandra están lentos.
+    # Esto hace que el tab "Cuadro de mando" sea rápido incluso si la API de clima/Hive/Cassandra están lentos.
     if not st.session_state.get("slides_clima_ready"):
         st.caption(
-            "Para generar las slides (requiere OpenWeather y Cassandra), pulsa el botón. "
+            "Para generar las slides (requiere API de clima y Cassandra), pulsa el botón. "
             "Así la app carga rápido y no se bloquea al refrescar la página."
         )
         if st.button("Cargar clima y generar slides", key="slides_clima_load"):
             st.session_state["slides_clima_ready"] = True
+            st.session_state["tg_slides_pending"] = True
             st.rerun()
         return
 
@@ -633,6 +695,12 @@ def render_slides_clima_retrasos() -> None:
 
     if not slides:
         st.warning("No se pudo obtener clima para los hubs.")
+        if st.session_state.pop("tg_slides_pending", False):
+            notificar_cuadro_mando(
+                "Slides clima y retrasos",
+                False,
+                "Sin datos de clima para los hubs.",
+            )
         return
 
     # Slide de síntesis
@@ -655,6 +723,13 @@ def render_slides_clima_retrasos() -> None:
         )
     )
 
+    if st.session_state.pop("tg_slides_pending", False):
+        notificar_cuadro_mando(
+            "Slides clima y retrasos",
+            True,
+            f"{len(slides)} slide(s) (incl. síntesis).",
+        )
+
     n_slides = len(slides)
     idx = st.slider("Slide (hub)", min_value=0, max_value=n_slides - 1, value=0, key="slide_clima")
     hub, raw, ev = slides[idx]
@@ -666,7 +741,7 @@ def render_slides_clima_retrasos() -> None:
     with c2:
         st.metric("Margen de retraso estimado (min)", f"{ev.get('minutos_estimados', 0)}")
         if ev.get("categoria"):
-            st.caption(f"Categoría OWM: **{ev['categoria']}**")
+            st.caption(f"Categoría (heurística): **{ev['categoria']}**")
     with c3:
         if raw.get("temp") is not None:
             st.metric("Temperatura (°C)", f"{raw['temp']:.1f}")
@@ -674,7 +749,7 @@ def render_slides_clima_retrasos() -> None:
             st.metric("Viento (m/s)", f"{raw['viento_vel']:.1f}")
 
     if hub != "Síntesis red nacional" and not raw.get("error"):
-        st.markdown("**Variables meteorológicas (OpenWeather)**")
+        st.markdown("**Variables meteorológicas (API clima)**")
         mcols = st.columns(4)
         with mcols[0]:
             st.write("Descripción:", raw.get("descripcion", "—"))
@@ -703,7 +778,7 @@ def render_slides_clima_retrasos() -> None:
     st.caption(
         f"{PROJECT_DISPLAY_NAME} — estimación no contractual. "
         "Incluye analogías de incidencias: tormenta, granizo, nieve, niebla, atascos, obras, etc., "
-        "según códigos OWM y estado de nodos en Cassandra."
+        "según heurísticas de condición y estado de nodos en Cassandra."
     )
 
 
@@ -829,6 +904,11 @@ def render_informes_a_medida() -> None:
                 "plantilla": plantilla,
                 "meta": admin_meta,
             }
+            notificar_cuadro_mando(
+                "Informe PDF administrativo",
+                True,
+                "Vista previa lista; descarga desde «Descargar PDF».",
+            )
 
     motor = st.radio(
         "Base de datos",
@@ -953,6 +1033,11 @@ def render_informes_a_medida() -> None:
             ok, err, rows = ejecutar_cassandra_cql_seguro(cql)
             if not ok:
                 st.error(err or "Error Cassandra")
+                notificar_cuadro_mando(
+                    f"Previsualizar informe (Cassandra · {tabla})",
+                    False,
+                    str(err or "")[:500],
+                )
                 return
             df = pd.DataFrame(rows)
             st.session_state["rep_last_df"] = df
@@ -963,6 +1048,11 @@ def render_informes_a_medida() -> None:
                 "plantilla": plantilla,
                 "meta": admin_meta,
             }
+            notificar_cuadro_mando(
+                f"Previsualizar informe (Cassandra · {tabla})",
+                True,
+                f"{len(df)} fila(s)",
+            )
     else:
         sql = f"SELECT {campos_sql} FROM {tabla}"
         if "." not in tabla:
@@ -977,6 +1067,11 @@ def render_informes_a_medida() -> None:
             ok, err, out = ejecutar_hive_sql_seguro(sql)
             if not ok:
                 st.error(err or "Error Hive")
+                notificar_cuadro_mando(
+                    f"Previsualizar informe (Hive · {tabla})",
+                    False,
+                    str(err or "")[:500],
+                )
                 return
             df = pd.read_csv(io.StringIO(out), sep="\t") if (out or "").strip() else pd.DataFrame()
             st.session_state["rep_last_df"] = df
@@ -987,6 +1082,11 @@ def render_informes_a_medida() -> None:
                 "plantilla": plantilla,
                 "meta": admin_meta,
             }
+            notificar_cuadro_mando(
+                f"Previsualizar informe (Hive · {tabla})",
+                True,
+                f"{len(df)} fila(s)",
+            )
 
     df = st.session_state.get("rep_last_df")
     ctx = st.session_state.get("rep_last_ctx") or {}
@@ -1058,8 +1158,10 @@ def render_informes_a_medida() -> None:
                     ok_g, err_g = _guardar_plantillas_usuario(plantillas_usuario)
                     if ok_g:
                         st.success(f"Plantilla guardada: {tpl_name}")
+                        notificar_cuadro_mando("Guardar plantilla informes", True, tpl_name)
                     else:
                         st.error(f"No se pudo guardar plantilla: {err_g}")
+                        notificar_cuadro_mando("Guardar plantilla informes", False, str(err_g)[:500])
         with ctp2:
             if st.button("Eliminar plantilla seleccionada", key="rep_tpl_delete"):
                 if plantilla in plantillas_base:
@@ -1069,8 +1171,10 @@ def render_informes_a_medida() -> None:
                     ok_g, err_g = _guardar_plantillas_usuario(plantillas_usuario)
                     if ok_g:
                         st.success(f"Plantilla eliminada: {plantilla}")
+                        notificar_cuadro_mando("Eliminar plantilla informes", True, str(plantilla))
                     else:
                         st.error(f"No se pudo eliminar plantilla: {err_g}")
+                        notificar_cuadro_mando("Eliminar plantilla informes", False, str(err_g)[:500])
 
 
 def _generar_pdf_informe(df: pd.DataFrame, *, ctx: dict) -> bytes:
@@ -1308,6 +1412,7 @@ def render_flota_rutas_mapa() -> None:
             ok_db, err_db, id_ruta = persistir_asignacion_y_tracking(cid, origen, destino)
             if not ok_db:
                 st.error(err_db)
+                notificar_cuadro_mando("Flota: añadir ruta", False, str(err_db)[:500])
             else:
                 st.session_state.cm_flota_asignaciones.append(
                     {
@@ -1319,6 +1424,11 @@ def render_flota_rutas_mapa() -> None:
                     }
                 )
                 st.success(f"Persistido en Cassandra · `id_ruta`={id_ruta}")
+                notificar_cuadro_mando(
+                    "Flota: añadir ruta",
+                    True,
+                    f"{cid} {origen}→{destino} · id_ruta={id_ruta}",
+                )
                 st.rerun()
 
     ok_asg, err_asg, filas_asg = listar_asignaciones_dia()
@@ -1360,6 +1470,11 @@ def render_flota_rutas_mapa() -> None:
         )
         if st.button("Traer asignaciones de hoy a la sesión editable", key="cm_fl_pull_today"):
             st.session_state.cm_flota_asignaciones = _asignaciones_desde_tabla_cuadro(filas_asg)
+            notificar_cuadro_mando(
+                "Flota: traer asignaciones de hoy",
+                True,
+                f"{len(filas_asg)} fila(s) en tabla",
+            )
             st.rerun()
 
     cimp1, cimp2 = st.columns(2)
@@ -1381,11 +1496,24 @@ def render_flota_rutas_mapa() -> None:
                     {"id": uuid.uuid4().hex[:10], "camion": cid, "origen": ro, "destino": rd}
                 )
                 seen.add(cid)
+            if nuevas:
+                notificar_cuadro_mando(
+                    "Flota: rellenar desde tracking",
+                    True,
+                    f"{len(nuevas)} ruta(s) nueva(s)",
+                )
+            else:
+                notificar_cuadro_mando(
+                    "Flota: rellenar desde tracking",
+                    True,
+                    "Sin rutas nuevas que añadir",
+                )
             st.session_state.cm_flota_asignaciones.extend(nuevas)
             st.rerun()
     with cimp2:
         if st.button("Vaciar lista", key="cm_fl_clear"):
             st.session_state.cm_flota_asignaciones = []
+            notificar_cuadro_mando("Flota: vaciar lista sesión", True, "Lista de rutas en sesión vaciada.")
             st.rerun()
 
     if asignaciones_para_mapa:
@@ -1424,13 +1552,20 @@ def render_flota_rutas_mapa() -> None:
                         st.success(
                             f"Simulación activa: {len(state)} camión(es). Mapa cada {sec} s · viaje ~{int(dur)} s."
                         )
+                        notificar_cuadro_mando(
+                            "Flota: iniciar simulación",
+                            True,
+                            f"{len(state)} camión(es) · intervalo {sec}s · duración ~{int(dur)}s",
+                        )
                     elif not warns:
                         st.warning("No hay rutas válidas para simular.")
+                        notificar_cuadro_mando("Flota: iniciar simulación", False, "Sin rutas válidas")
                     st.rerun()
             with b2:
                 if st.button("Detener simulación", key="cm_sim_stop", width="stretch"):
                     st.session_state.cm_sim_trucks = {}
                     st.session_state.cm_sim_live = False
+                    notificar_cuadro_mando("Flota: detener simulación", True, "Simulación de mapa detenida.")
                     st.rerun()
             if st.session_state.get("cm_sim_live") and st.session_state.get("cm_sim_trucks"):
                 sim_d = st.session_state.cm_sim_trucks or {}
@@ -1459,6 +1594,11 @@ def render_flota_rutas_mapa() -> None:
                 tracking_live = cargar_tracking_cassandra()
                 for ev in events:
                     st.toast(texto_toast_ruta_finalizada(ev), icon="✅")
+                    notificar_cuadro_mando(
+                        "Flota: ruta finalizada (simulación mapa)",
+                        True,
+                        texto_toast_ruta_finalizada(ev)[:800],
+                    )
                     if st.session_state.get("cm_sim_mail_fin"):
                         dests = [
                             x.strip()
@@ -1496,21 +1636,62 @@ def render_flota_rutas_mapa() -> None:
             rows = tabla_incidencias_rows(st.session_state.cm_flota_asignaciones, tracking_mail)
             if solo_ret and not any(r.get("nivel") in ("retraso", "aviso") for r in rows):
                 st.info("Nada que enviar según el filtro (sin retrasos ni avisos).")
+                notificar_cuadro_mando(
+                    "Flota: enviar resumen por correo",
+                    True,
+                    "Sin contenido según filtro (solo retrasos/avisos)",
+                )
             elif not dests:
                 st.warning("Indica al menos un correo.")
+                notificar_cuadro_mando("Flota: enviar resumen por correo", False, "Sin destinatarios")
             else:
                 body = texto_resumen_correo(st.session_state.cm_flota_asignaciones, tracking_mail)
                 ok, msg = enviar_correo_texto(dests, "[SIMLOG] Resumen flota y rutas", body)
                 if ok:
                     st.success(msg)
+                    notificar_cuadro_mando(
+                        "Flota: enviar resumen por correo",
+                        True,
+                        f"{len(dests)} destinatario(s)",
+                    )
                 else:
                     st.error(msg)
+                    notificar_cuadro_mando("Flota: enviar resumen por correo", False, msg[:500])
+        if smtp_configurado() and (
+            "office365" in (SMTP_HOST or "").lower()
+            or "outlook.office365" in (SMTP_HOST or "").lower()
+        ):
+            st.caption(
+                "**Microsoft 365:** si aparece error 535 / «basic authentication is disabled», un administrador "
+                "debe habilitar **SMTP autenticado** para el buzón, o configura **smtp.gmail.com** con "
+                "**contraseña de aplicación** (2FA activado en Google)."
+            )
         if not smtp_configurado():
             st.info("SMTP no configurado: exporta `SIMLOG_SMTP_HOST` (p. ej. smtp.gmail.com:587 con TLS).")
     else:
         st.info(
             "No hay rutas para el mapa: añade alguna con **Añadir ruta**, o espera a que existan filas en "
             "`asignaciones_ruta_cuadro` para hoy (UTC), o usa **Rellenar desde tracking**."
+        )
+
+
+def render_diagnostico_notificaciones() -> None:
+    """Comprueba Telegram (y recuerda requisitos de Gmail) sin exponer secretos."""
+    with st.expander("Notificaciones: probar Telegram y recordatorio Gmail", expanded=False):
+        st.caption(
+            "Tras editar `.env`, **reinicia Streamlit** para recargar variables. "
+            "En Telegram, abre el bot y envía **/start** antes de esperar mensajes."
+        )
+        if st.button("Enviar mensaje de prueba a Telegram", key="cm_test_telegram"):
+            ok, msg = probar_telegram_desde_ui()
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+        st.markdown(
+            "**Gmail con 2FA:** rellena en `.env` `SIMLOG_SMTP_USER`, `SIMLOG_SMTP_PASSWORD` "
+            "(contraseña de **aplicación** de 16 caracteres, no la de la cuenta) y `SIMLOG_SMTP_FROM`. "
+            "[Crear contraseña de aplicación](https://myaccount.google.com/apppasswords)"
         )
 
 
@@ -1523,6 +1704,7 @@ def render_cuadro_mando_tab() -> None:
     )
     render_operaciones_por_fase()
     render_acciones_rapidas()
+    render_diagnostico_notificaciones()
     render_verificacion_kafka_cuadro()
     st.divider()
     render_consultas_cassandra()
