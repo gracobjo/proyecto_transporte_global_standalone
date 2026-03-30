@@ -3,13 +3,23 @@ SIMLOG España — configuración central
 Paths de JARs y parámetros configurables
 """
 import os
+import re
 from pathlib import Path
+
+
+def _entorno_vacio_o_ausente(key: str) -> bool:
+    """True si no hay valor útil en el proceso (ausente o solo espacios)."""
+    if key not in os.environ:
+        return True
+    return not str(os.environ.get(key, "")).strip()
 
 
 def _cargar_env_local() -> None:
     """
     Carga variables desde `.env` en la raíz del proyecto si existen.
-    No sobreescribe variables ya definidas en el entorno.
+    No sobreescribe variables **con valor** ya definidas en el entorno.
+    Si una variable existe pero está vacía (p. ej. `export SIMLOG_SMTP_USER=`),
+    sí se rellena desde `.env`.
     """
     env_path = Path(__file__).resolve().parent / ".env"
     if not env_path.exists():
@@ -21,7 +31,7 @@ def _cargar_env_local() -> None:
         k, v = line.split("=", 1)
         key = k.strip()
         val = v.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key and _entorno_vacio_o_ausente(key):
             os.environ[key] = val
 
 
@@ -44,8 +54,7 @@ def _load_local_env() -> None:
                 key, value = line.split("=", 1)
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                # Respeta variables ya definidas en el entorno.
-                if key and key not in os.environ:
+                if key and _entorno_vacio_o_ausente(key):
                     os.environ[key] = value
     except OSError:
         # Si falla la lectura, la app sigue usando variables del entorno del sistema.
@@ -93,6 +102,39 @@ API_WEATHER_KEY = (
     or ""
 )
 API_WEATHER_BASE = "https://api.openweathermap.org/data/2.5/weather"
+# Proveedor: openmeteo (por defecto; sin API key) | openweather (requiere API_WEATHER_KEY / OWM_API_KEY)
+WEATHER_PROVIDER = os.environ.get("SIMLOG_WEATHER_PROVIDER", "openmeteo").strip().lower()
+
+
+def usar_clima_todos_los_nodos() -> bool:
+    """
+    Si True, la ingesta pide clima por coordenadas de **todos** los nodos (hubs + secundarios).
+    Si False, solo los 5 hubs (menos llamadas a la API).
+    Por defecto: True con Open-Meteo (una petición con muchas coordenadas); False con OpenWeather
+    (evita ~30 llamadas salvo que se fuerce con SIMLOG_CLIMA_TODOS_NODOS=1).
+    """
+    w = (WEATHER_PROVIDER or "openmeteo").strip().lower()
+    raw = (os.environ.get("SIMLOG_CLIMA_TODOS_NODOS", "") or "").strip().lower()
+    if raw in ("1", "true", "yes", "si", "sí", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return w in ("openmeteo", "open-meteo")
+
+
+OPEN_METEO_FORECAST_URL = os.environ.get(
+    "SIMLOG_OPEN_METEO_URL",
+    "https://api.open-meteo.com/v1/forecast",
+)
+# Petición única para los 5 hubs (orden: Madrid, Barcelona, Bilbao, Vigo, Sevilla). NiFi InvokeHTTP / Groovy.
+_OME_BASE = OPEN_METEO_FORECAST_URL.rstrip("/")
+_OME_LAT = "40.4168,41.3851,43.2630,42.2406,37.3891"
+_OME_LON = "-3.7038,2.1734,-2.9350,-8.7207,-5.9845"
+OPEN_METEO_MULTI_HUBS_URL = os.environ.get("SIMLOG_OPEN_METEO_MULTI_HUBS_URL") or (
+    f"{_OME_BASE}?latitude={_OME_LAT}&longitude={_OME_LON}"
+    "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,"
+    "wind_gusts_10m,visibility,rain,snowfall,cloud_cover&timezone=auto&wind_speed_unit=ms"
+)
 
 # Kafka - Dos temas según PDF: Datos Crudos y Datos Filtrados
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
@@ -202,6 +244,41 @@ SIMLOG_INGESTA_INTERVAL_MINUTES = int(os.environ.get("SIMLOG_INGESTA_INTERVAL_MI
 SMTP_HOST = os.environ.get("SIMLOG_SMTP_HOST", "").strip()
 SMTP_PORT = int(os.environ.get("SIMLOG_SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SIMLOG_SMTP_USER", "").strip()
-SMTP_PASSWORD = os.environ.get("SIMLOG_SMTP_PASSWORD", "").strip()
+# Gmail muestra la contraseña de aplicación en grupos con espacios; debe usarse sin espacios (16 caracteres).
+SMTP_PASSWORD = re.sub(r"\s+", "", os.environ.get("SIMLOG_SMTP_PASSWORD", "") or "")
 SMTP_FROM = os.environ.get("SIMLOG_SMTP_FROM", "").strip() or SMTP_USER
 SMTP_USE_TLS = os.environ.get("SIMLOG_SMTP_TLS", "1").strip() != "0"
+
+# Telegram (cuadro de mando / scripts). Sin token y chat_id no se envía nada.
+TELEGRAM_BOT_TOKEN = os.environ.get("SIMLOG_TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("SIMLOG_TELEGRAM_CHAT_ID", "").strip()
+
+
+def destinatarios_notificacion_email_pipeline() -> list[str]:
+    """
+    Destinatarios para correos automáticos tras ingesta / Spark / fases KDD (Streamlit).
+    `SIMLOG_NOTIFY_EMAIL_TO` (coma o punto y coma); si está vacío y
+    `SIMLOG_NOTIFY_EMAIL_FALLBACK_SMTP_USER` no es 0, se usa `SMTP_FROM` o `SMTP_USER`.
+    """
+    raw = (os.environ.get("SIMLOG_NOTIFY_EMAIL_TO", "") or "").strip()
+    if raw:
+        return [x.strip() for x in raw.replace(";", ",").split(",") if x.strip()]
+    if (os.environ.get("SIMLOG_NOTIFY_EMAIL_FALLBACK_SMTP_USER", "1") or "").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
+        return []
+    u = (SMTP_FROM or SMTP_USER or "").strip()
+    return [u] if u else []
+
+
+def notificaciones_email_pipeline_habilitadas() -> bool:
+    """Correo automático de pipeline; desactivar con SIMLOG_NOTIFY_EMAIL_PIPELINE=0."""
+    return (os.environ.get("SIMLOG_NOTIFY_EMAIL_PIPELINE", "1") or "").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )

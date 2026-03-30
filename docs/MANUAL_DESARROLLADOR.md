@@ -11,7 +11,7 @@ Gu?a para extender y operar la plataforma SIMLOG, incluyendo:
 
 Componentes principales:
 
-- `ingesta/`: genera snapshots (clima OpenWeather o respaldo DGT + incidentes + GPS simulado) y publica en Kafka + backup JSON en HDFS. Incluye `ingesta_dgt_datex2.py` para integrar incidencias reales DATEX2.
+- `ingesta/`: genera snapshots (clima Open-Meteo por defecto, u OpenWeather opcional, o respaldo DGT + incidentes + GPS simulado) y publica en Kafka + backup JSON en HDFS. Incluye `ingesta_dgt_datex2.py` para integrar incidencias reales DATEX2.
 - `procesamiento/`: Spark (GraphFrames) ? escribe en Cassandra y (opcionalmente) Hive.
 - `orquestacion/`: DAGs Airflow.
 - `servicios/`: m?dulos para Streamlit (UI) y consultas supervisadas (Cassandra/Hive).
@@ -281,7 +281,7 @@ El m?dulo `ingesta/ingesta_dgt_datex2.py`:
   - `id_incidencia`
   - `carretera`, `municipio`, `provincia`
 - `clima_hubs` / `clima` con:
-  - `source` (`openweather` o `dgt`)
+  - `source` (`openmeteo`, `openweather` o `dgt`)
   - `fallback_activo`
   - `estado_carretera`
   - `visibilidad`
@@ -299,23 +299,24 @@ venv_transporte/bin/python scripts/ejecutar_ingesta_dgt.py --skip-processing
 
 Los tests cubren parseo m?nimo de DATEX2, mapeo a nodos y prioridad del merge frente a la simulaci?n.
 
-### C?mo est? configurado el uso de informaci?n alternativa a OpenWeather
+### Cómo está configurado el uso de información alternativa (DGT) frente a la API de clima
 
-La configuraci?n actual deja a OpenWeather como fuente **preferente pero opcional**. El respaldo operativo se implementa as?:
+La configuración actual usa **Open-Meteo** como fuente primaria (sin clave). OpenWeather queda como opción (`SIMLOG_WEATHER_PROVIDER=openweather`). El respaldo operativo se implementa así:
 
-1. `ingesta/ingesta_kdd.py` llama a `consulta_clima_hubs()` para OpenWeather.
-2. La respuesta se valida con `_clima_openweather_valido(...)`.
+1. `ingesta/ingesta_kdd.py` llama a `consulta_clima_hubs()` (Open-Meteo u OpenWeather según `SIMLOG_WEATHER_PROVIDER`).
+2. La respuesta se valida con `_clima_primario_valido(...)`.
 3. En paralelo, `obtener_incidencias_dgt()` devuelve incidencias y `clima_hubs` inferido desde DATEX2.
-4. `combinar_clima_hubs(clima_owm, info_dgt["clima_hubs"])` prioriza OpenWeather si es v?lido; en caso contrario rellena los hubs desde DGT y marca `fallback_activo=true`.
-5. `clima_hubs_a_lista(...)` expone el resultado final en el payload can?nico que consumen Kafka, HDFS, Spark y UI.
+4. `combinar_clima_hubs(clima_primario, info_dgt["clima_hubs"])` prioriza la API primaria si es válida; en caso contrario rellena los hubs desde DGT y marca `fallback_activo=true`.
+5. `clima_hubs_a_lista(...)` expone el resultado final en el payload canónico que consumen Kafka, HDFS, Spark y UI.
 
 Variables y banderas relevantes:
 
-- `OWM_API_KEY` / `API_WEATHER_KEY`: clave OpenWeather para el camino principal.
-- `SIMLOG_USE_DGT`: habilita la integraci?n DATEX2.
-- `SIMLOG_DGT_ONLY_CACHE`: fuerza uso de cach? DGT si hace falta degradar a?n m?s.
+- `SIMLOG_WEATHER_PROVIDER`: `openmeteo` (por defecto) u `openweather`.
+- `OWM_API_KEY` / `API_WEATHER_KEY`: solo para la rama OpenWeather.
+- `SIMLOG_USE_DGT`: habilita la integración DATEX2.
+- `SIMLOG_DGT_ONLY_CACHE`: fuerza uso de caché DGT si hace falta degradar aún más.
 
-Consecuencia pr?ctica: si OpenWeather devuelve `401`, timeout o JSON inv?lido, el pipeline sigue siendo consistente y publica clima operativo derivado de DGT.
+Consecuencia práctica: si Open-Meteo falla (red, timeout) o OpenWeather devuelve `401` / JSON inválido cuando está activo, el pipeline sigue siendo consistente y publica clima operativo derivado de DGT.
 
 ## 4. Graph AI (FastAPI + NetworkX)
 
@@ -406,7 +407,7 @@ Ejecuci?n:
 
 La rama NiFi enriquecida queda as?:
 
-`Build_GPS_Sintetico -> OpenWeather_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload -> Kafka/HDFS/Spark`
+`Build_GPS_Sintetico -> OpenMeteo_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload -> Kafka/HDFS/Spark`
 
 Archivos relevantes:
 
@@ -426,19 +427,19 @@ El merge NiFi deja atributos consultables en `Data Provenance`:
 - `simlog.provenance.dgt_incidents`
 - `simlog.provenance.dgt_nodes_affected`
 
-Esto permite diferenciar snapshots puramente simulados de snapshots enriquecidos con se?al real DGT, y distinguir cu?ndo el clima procede de OpenWeather o cu?ndo se ha tenido que reconstruir desde la fuente alternativa.
+Esto permite diferenciar snapshots puramente simulados de snapshots enriquecidos con señal real DGT, y distinguir cuándo el clima procede de Open-Meteo (u OpenWeather legacy) o cuándo se ha tenido que reconstruir desde la fuente alternativa.
 
-### Configuraci?n concreta en NiFi
+### Configuración concreta en NiFi
 
-El fallback a OpenWeather est? repartido en estos componentes:
+El fallback y la API de clima están repartidos en estos componentes:
 
-- `Set_Parametros_Ingesta`: inyecta `owm.api.key`, `owm.city.ids` y `dgt.url`.
-- `OpenWeather_InvokeHTTP`: intenta la llamada HTTP a OpenWeather.
-- `MergeOpenWeatherIntoPayload.groovy`: solo mezcla clima si el estado HTTP es 2xx y el JSON es v?lido; si no, deja `clima_hubs` vac?o o intacto para que el flujo contin?e.
+- `Set_Parametros_Ingesta`: inyecta `dgt.url` (y parámetros de ingesta; sin clave OWM por defecto).
+- `OpenMeteo_InvokeHTTP`: llamada HTTP a Open-Meteo (multi-hub; sin API key).
+- `MergeOpenWeatherIntoPayload.groovy`: solo mezcla clima si el estado HTTP es 2xx y el JSON es válido; si no, deja `clima_hubs` vacío o intacto para que el flujo continúe.
 - `DGT_DATEX2_InvokeHTTP`: descarga el XML DATEX2.
-- `MergeDgtDatex2IntoPayload.groovy`: fusiona incidencias DGT y, si no hay clima OpenWeather disponible (`simlog.weather.available=false` o `clima_hubs` vac?o), crea `clima_hubs` alternativo a partir de `condiciones_meteorologicas`, `estado_carretera` y `visibilidad`.
+- `MergeDgtDatex2IntoPayload.groovy`: fusiona incidencias DGT y, si no hay clima de API disponible (`simlog.weather.available=false` o `clima_hubs` vacío), crea `clima_hubs` alternativo a partir de `condiciones_meteorologicas`, `estado_carretera` y `visibilidad`.
 
-En otras palabras, el flujo se ha configurado para que **OpenWeather no bloquee la ingesta**: la meteorolog?a alternativa entra en el ?ltimo merge y mantiene intactos Kafka, HDFS y el contrato del payload.
+En otras palabras, el flujo se ha configurado para que **la API de clima no bloquee la ingesta**: la meteorología alternativa entra en el último merge y mantiene intactos Kafka, HDFS y el contrato del payload.
 
 ## 6.b Reconfiguraci?n log?stica en tiempo real
 
@@ -462,9 +463,11 @@ Documento de referencia: `docs/RECONFIGURACION_LOGISTICA_CRITICA.md`.
 - `servicios/cuadro_mando_flota_mapa.py`: construye el mapa Folium; si `ruta_sugerida` en Cassandra tiene varios nodos, dibuja la polil�nea por la red.
 - `servicios/simulacion_movimiento_flota.py`: BFS (`red_hibrida_rutas`), interpolaci�n geod�sica, escritura peri�dica en `tracking_camiones`, eventos de llegada para toast/correo (`texto_alerta_ruta_finalizada`).
 - `servicios/notificaciones_correo.py`: SMTP v�a `SIMLOG_SMTP_*` (ver `config.py`).
+- `servicios/notificaciones_telegram.py`: Telegram vía `SIMLOG_TELEGRAM_BOT_TOKEN` y `SIMLOG_TELEGRAM_CHAT_ID`.
+- Documentación: [NOTIFICACIONES_EMAIL_TELEGRAM.md](NOTIFICACIONES_EMAIL_TELEGRAM.md).
 - Streamlit: fragmento con `run_every` para refrescar mapa e incidencias mientras la simulaci�n est� activa (`servicios/cuadro_mando_ui.py`).
 
-**NiFi ? OpenWeather 401:** si `InvokeHTTP` recibe **401**, la clave `OWM_API_KEY` / atributo `owm.api.key` no es v�lida en OpenWeather; el merge posterior puede seguir con respaldo DGT. Ver `nifi/README_NIFI.md` (incidencias frecuentes).
+**NiFi — OpenWeather 401 (solo si usas Group API legacy):** si `InvokeHTTP` recibe **401**, la clave no es válida; el merge posterior puede seguir con respaldo DGT. Por defecto el flujo usa Open-Meteo sin clave. Ver `nifi/README_NIFI.md` (incidencias frecuentes).
 
 **NiFi ? merge DGT:** pruebas de regresi�n del script Groovy: `pytest tests/test_merge_dgt_nifi_groovy.py`.
 

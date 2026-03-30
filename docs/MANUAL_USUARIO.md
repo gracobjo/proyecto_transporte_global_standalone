@@ -244,6 +244,10 @@ Cómo usarla:
 
 **Resultado esperado**: estados por servicio (OK/❌), enlaces a consolas web si existen y un asistente de FAQ local para incidencias frecuentes.
 
+### Correo y Telegram (configuración en `.env`)
+
+Las **alertas por correo** (SMTP) y **Telegram** no se configuran desde la interfaz: usa variables `SIMLOG_SMTP_*` y `SIMLOG_TELEGRAM_*` en `.env` (ver `docs/NOTIFICACIONES_EMAIL_TELEGRAM.md`). Tras cambiar credenciales, reinicia Streamlit. Si SMTP o Telegram están bien definidos, el cuadro de mando y scripts relacionados pueden enviar avisos automáticos.
+
 Si NiFi está activo, el linaje de la ingesta enriquecida se puede revisar en la UI de NiFi:
 
 - abrir `Data Provenance`
