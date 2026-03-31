@@ -44,9 +44,10 @@ BASE = _project_base()
 def verificar_hdfs(**context):
     import subprocess
 
-    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True)
+    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True, text=True, timeout=20)
     if r.returncode != 0:
-        raise RuntimeError("HDFS no disponible")
+        msg = (r.stderr or r.stdout or "HDFS no disponible").strip()
+        raise RuntimeError(f"HDFS no disponible: {msg[:280]}")
     return "OK"
 
 
@@ -86,9 +87,8 @@ def ejecutar_ingesta(**context):
     if not venv_python.exists():
         venv_python = BASE / "venv" / "bin" / "python"
     python_bin = str(venv_python) if venv_python.exists() else "python3"
-    script = BASE / "ingesta_kdd.py"
     r = subprocess.run(
-        [python_bin, str(script)],
+        [python_bin, "-m", "ingesta.ingesta_kdd"],
         env={**os.environ},
         capture_output=True,
         text=True,

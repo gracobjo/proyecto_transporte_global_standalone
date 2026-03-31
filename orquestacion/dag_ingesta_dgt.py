@@ -42,9 +42,10 @@ def _socket_check(host: str, port: int, label: str) -> str:
 
 
 def verificar_hdfs(**context):
-    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True, text=True)
+    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True, text=True, timeout=20)
     if r.returncode != 0:
-        raise RuntimeError("HDFS no disponible")
+        msg = (r.stderr or r.stdout or "HDFS no disponible").strip()
+        raise RuntimeError(f"HDFS no disponible: {msg[:280]}")
     return "OK"
 
 

@@ -3,6 +3,7 @@ Pestaña Streamlit: comprobación visual del pipeline (ingesta → Kafka/HDFS �
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -15,11 +16,39 @@ from config import (
     KEYSPACE,
     TOPIC_RAW,
     TOPIC_TRANSPORTE,
+    SIMLOG_INGESTA_INTERVAL_MINUTES,
 )
 from servicios.pipeline_verificacion import (
     kafka_crear_topic_si_falta,
     obtener_snapshot_pipeline,
 )
+
+
+def _timestamp_payload_a_utc(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        s = str(ts).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
+    except (TypeError, ValueError):
+        return None
+
+
+def _ventana_dia_utc(dt: datetime, interval_minutes: int) -> tuple[int, int]:
+    """Índice de ventana 0..N-1 dentro del día UTC y N = ventanas por día."""
+    m = max(1, int(interval_minutes))
+    step_sec = m * 60
+    sec_desde_medianoche = dt.hour * 3600 + dt.minute * 60 + dt.second
+    n_slots = max(1, 86400 // step_sec)
+    idx = int(sec_desde_medianoche // step_sec)
+    if idx >= n_slots:
+        idx = n_slots - 1
+    return idx, n_slots
 
 
 def render_pipeline_resultados_tab() -> None:
@@ -31,7 +60,8 @@ def render_pipeline_resultados_tab() -> None:
     )
     with st.expander("Guía rápida: qué valida cada bloque", expanded=False):
         st.markdown(
-            "- **1–2 Ingesta**: existe un `ultimo_payload.json` coherente (clima/DGT/camiones) y marca si publicó a Kafka/HDFS.\n"
+            "- **1–2 Ingesta**: existe un `ultimo_payload.json` coherente (clima/DGT/camiones) y marca si publicó a Kafka/HDFS. "
+            "El **slot UTC** grande es el índice global de ventana; la **ventana del día UTC** aclara el tramo 0–95 (15 min).\n"
             "- **Kafka**: el topic existe y tiene particiones/offsets; confirma que hay “canal” para desacoplar ingesta ↔ consumidores.\n"
             "- **HDFS**: hay backups `.json` listados; esto es la base para re-procesar y para Spark en modo batch.\n"
             "- **Spark → Cassandra**: tras ejecutar Spark, las tablas operativas deben tener filas (`nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`).\n"
@@ -92,7 +122,31 @@ def render_pipeline_resultados_tab() -> None:
             if ing.get("timestamp"):
                 c1.metric("Timestamp payload", str(ing["timestamp"])[:19])
             if ing.get("paso_15min") is not None:
-                c2.metric("Paso 15 min", str(ing["paso_15min"]))
+                paso = int(ing["paso_15min"])
+                interval = max(1, int(SIMLOG_INGESTA_INTERVAL_MINUTES))
+                dt_pay = _timestamp_payload_a_utc(ing.get("timestamp"))
+                slot_dia: int | None = None
+                n_slots_dia = max(1, 86400 // (interval * 60))
+                if dt_pay is not None:
+                    slot_dia, n_slots_dia = _ventana_dia_utc(dt_pay, interval)
+                # Índice global (reloj automático sin PASO_15MIN) suele ser >> 10⁵; manual suele ser 0–96.
+                es_indice_global = paso >= 100_000
+                label_paso = (
+                    "Slot ingesta (índice UTC)"
+                    if es_indice_global
+                    else "Paso (PASO_15MIN manual)"
+                )
+                with c2:
+                    st.metric(label_paso, str(paso))
+                    if slot_dia is not None:
+                        st.caption(
+                            f"Ventana del **día UTC** (intervalo {interval} min): **{slot_dia}** de **0–{n_slots_dia - 1}** · "
+                            + (
+                                "Índice = ⌊época Unix (s) / (intervalo en s)⌋; no es la hora en minutos."
+                                if es_indice_global
+                                else "Valor fijado por entorno o UI; la ventana UTC se calcula del timestamp."
+                            )
+                        )
             c3.metric("Hubs con clima", str(ing.get("hubs_clima", "—")))
             c4.metric("Camiones simulados", str(ing.get("camiones", "—")))
             d1, d2, d3 = st.columns(3)

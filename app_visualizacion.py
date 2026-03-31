@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Dashboard Streamlit — SIMLOG España
-Organización por fases del ciclo KDD y ejecución alineada con el código real:
-  ingesta/ingesta_kdd.py  →  procesamiento/procesamiento_grafos.py
+Organización por fases del ciclo KDD. La ingesta y el procesamiento Spark pesados
+se orquestan con Airflow / NiFi / cron; este dashboard prioriza visualización.
 """
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from config import (
     PROJECT_DISPLAY_NAME,
     PROJECT_TAGLINE,
     PROJECT_DESCRIPTION,
-    SIMLOG_INGESTA_INTERVAL_MINUTES,
 )
 
 from servicios.estado_y_datos import (
@@ -46,11 +45,7 @@ from servicios.estado_y_datos import (
     cargar_alertas_activas_cassandra,
 )
 from servicios.kdd_fases import FaseKDD, etiqueta_proveedor_clima_ui, get_fases_kdd
-from servicios.ejecucion_pipeline import (
-    ejecutar_ingesta,
-    ejecutar_procesamiento,
-    ejecutar_fase_kdd,
-)
+from servicios.ejecucion_pipeline import ejecutar_fase_kdd
 from servicios.notificaciones_eventos import notificar_ejecucion_pipeline
 from servicios.cuadro_mando_ui import render_cuadro_mando_tab
 from servicios.ui_gestion_servicios import render_panel_gestion_servicios
@@ -68,7 +63,6 @@ from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
 from servicios.ui_faq_ia import render_faq_ia_panel
 from servicios.ui_pruebas_ingesta import render_pruebas_ingesta_tab
 from servicios.ui_nifi_flujo import render_nifi_flujo_tab
-from servicios.pruebas_ingesta import registrar_prueba_ingesta
 from servicios.pipeline_verificacion import leer_ultima_ingesta
 
 COLORES_ESTADO = {
@@ -511,8 +505,8 @@ def main() -> None:
     # --- session state ---
     if "paso_15min" not in st.session_state:
         st.session_state.paso_15min = 0
-    if "timeline" not in st.session_state:
-        st.session_state.timeline = []
+    if "simlog_simular_incidencias" not in st.session_state:
+        st.session_state.simlog_simular_incidencias = True
 
     h1, h2, h3 = st.columns([1, 4, 3])
     with h1:
@@ -630,166 +624,11 @@ def main() -> None:
         render_gemelo_digital_sidebar()
 
         st.divider()
-        st.subheader("Línea temporal (simulación 15 min)")
-        # Modo automático: se mantiene en session_state aunque se recargue la página.
-        st.checkbox(
-            "Paso automático (reloj, alineado con SIMLOG_INGESTA_INTERVAL_MINUTES)",
-            value=bool(st.session_state.get("ingesta_paso_automatico", True)),
-            help="Sin PASO_15MIN fijo: la simulación usa la ventana de tiempo actual (como cron/Airflow).",
-            key="ingesta_paso_automatico",
+        st.caption(
+            f"**Ingesta y Spark** no se lanzan desde este panel (evitan bloquear el navegador). "
+            f"Úsalo vía **Airflow** (`simlog_maestro`, DAGs KDD), **NiFi** o terminal. "
+            f"Puerto Airflow típico: `{PORT_AIRFLOW}`."
         )
-        if st.session_state.get("ingesta_paso_automatico", False):
-            st.caption(
-                "Modo automático activo: el pipeline está pensado para ejecutarse cada "
-                f"{SIMLOG_INGESTA_INTERVAL_MINUTES} minutos vía Airflow/cron/NiFi. "
-                "El dashboard siempre leerá la última ingesta disponible."
-            )
-        st.session_state.paso_15min = st.number_input(
-            "Paso actual (ventana)",
-            min_value=0,
-            max_value=96,
-            value=int(st.session_state.paso_15min),
-            step=1,
-            disabled=st.session_state.ingesta_paso_automatico,
-            help="Manual: se envía como PASO_15MIN. Desactivado si usas paso automático.",
-        )
-        st.checkbox(
-            "Simular incidencias de tráfico (nodos/aristas)",
-            value=bool(st.session_state.get("simlog_simular_incidencias", True)),
-            key="simlog_simular_incidencias",
-            help=(
-                "Si lo desmarcas, la ingesta generará estados operativos estables (todo OK) "
-                "para nodos y aristas."
-            ),
-        )
-
-        if st.button("Ejecutar ingesta (fases 1–2 KDD)", type="primary", width="stretch"):
-            with st.spinner("Ingesta: clima, incidentes, GPS, Kafka, HDFS…"):
-                if st.session_state.ingesta_paso_automatico:
-                    code, out, err = ejecutar_ingesta(
-                        None,
-                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
-                    )
-                else:
-                    code, out, err = ejecutar_ingesta(
-                        int(st.session_state.paso_15min),
-                        simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
-                    )
-            ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-            if code == 0:
-                if st.session_state.ingesta_paso_automatico:
-                    st.session_state.timeline.append(f"{ts} — Ingesta OK (paso automático)")
-                    detalle_prueba = "Ingesta ejecutada desde Streamlit con paso automático."
-                else:
-                    st.session_state.timeline.append(f"{ts} — Ingesta OK (paso {st.session_state.paso_15min})")
-                    detalle_prueba = f"Ingesta ejecutada desde Streamlit en el paso {st.session_state.paso_15min}."
-                registrar_prueba_ingesta(
-                    canal="Frontend Streamlit",
-                    ejecutor="Sidebar Streamlit",
-                    resultado="OK",
-                    detalle=detalle_prueba,
-                )
-                notificar_ejecucion_pipeline("Ingesta (fases 1–2) — sidebar", True, detalle_prueba)
-                st.success("Ingesta terminada.")
-            else:
-                err_tail = (err[-1200:] or out[-1200:] or "").strip()
-                registrar_prueba_ingesta(
-                    canal="Frontend Streamlit",
-                    ejecutor="Sidebar Streamlit",
-                    resultado="FAIL",
-                    detalle=f"Ingesta lanzada desde Streamlit terminó con código {code}.",
-                    observaciones=(err[-1000:] or out[-1000:]),
-                )
-                notificar_ejecucion_pipeline(
-                    "Ingesta (fases 1–2) — sidebar",
-                    False,
-                    f"código_salida={code}\n{err_tail}",
-                )
-                st.error(f"Código {code}")
-                st.code(err[-2000:] or out[-2000:])
-            st.session_state.last_ingesta_out = out
-            st.session_state.last_ingesta_err = err
-
-        if st.button("Ejecutar procesamiento Spark (fases 3–5 KDD)", width="stretch"):
-            with st.spinner("Spark: grafo, PageRank, Cassandra…"):
-                code, out, err = ejecutar_procesamiento()
-            ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-            if code == 0:
-                detalle_sp = "procesamiento_grafos ejecutado desde la barra lateral (fases 3–5 KDD)."
-                st.session_state.timeline.append(f"{ts} — Procesamiento OK")
-                registrar_prueba_ingesta(
-                    canal="Frontend Streamlit",
-                    ejecutor="Sidebar Streamlit — procesamiento Spark",
-                    resultado="OK",
-                    detalle=detalle_sp,
-                )
-                notificar_ejecucion_pipeline("Procesamiento Spark (fases 3–5) — sidebar", True, detalle_sp)
-                st.success("Procesamiento terminado.")
-            else:
-                err_tail = (err[-1200:] or out[-1200:] or "").strip()
-                registrar_prueba_ingesta(
-                    canal="Frontend Streamlit",
-                    ejecutor="Sidebar Streamlit — procesamiento Spark",
-                    resultado="FAIL",
-                    detalle=f"Procesamiento Spark terminó con código {code}.",
-                    observaciones=(err[-1000:] or out[-1000:]),
-                )
-                notificar_ejecucion_pipeline(
-                    "Procesamiento Spark (fases 3–5) — sidebar",
-                    False,
-                    f"código_salida={code}\n{err_tail}",
-                )
-                st.error(f"Código {code}")
-                st.code(err[-2000:] or out[-2000:])
-            st.session_state.last_proc_out = out
-            st.session_state.last_proc_err = err
-
-        if st.button("Avanzar paso + ingesta + procesamiento", width="stretch"):
-            p = int(st.session_state.paso_15min)
-            with st.spinner("Pipeline completo…"):
-                c1, o1, e1 = ejecutar_ingesta(
-                    p,
-                    simular_incidencias=bool(st.session_state.get("simlog_simular_incidencias", True)),
-                )
-                c2, o2, e2 = ejecutar_procesamiento()
-            ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-            if c1 == 0 and c2 == 0:
-                st.session_state.paso_15min = p + 1
-                st.session_state.timeline.append(f"{ts} — Pipeline completo (ingesta paso {p})")
-                detalle_pipe = (
-                    f"Pipeline completo desde Streamlit: ingesta paso {p} + procesamiento Spark (fases 3–5)."
-                )
-                registrar_prueba_ingesta(
-                    canal="Frontend Streamlit",
-                    ejecutor="Sidebar Streamlit",
-                    resultado="OK",
-                    detalle=detalle_pipe,
-                )
-                notificar_ejecucion_pipeline("Pipeline ingesta + Spark — sidebar", True, detalle_pipe)
-                st.success("Pipeline OK.")
-            else:
-                err_comb = ((e1 or o1) + "\n---\n" + (e2 or o2)).strip()
-                registrar_prueba_ingesta(
-                    canal="Frontend Streamlit",
-                    ejecutor="Sidebar Streamlit",
-                    resultado="FAIL",
-                    detalle=f"Pipeline completo desde Streamlit falló (ingesta {c1} | procesamiento {c2}).",
-                    observaciones=err_comb[-1500:],
-                )
-                notificar_ejecucion_pipeline(
-                    "Pipeline ingesta + Spark — sidebar",
-                    False,
-                    f"ingesta={c1} procesamiento={c2}\n{err_comb[-1200:]}",
-                )
-                st.error(f"Ingesta {c1} | Procesamiento {c2}")
-                st.code((e1 or o1) + "\n---\n" + (e2 or o2))
-            st.rerun()
-
-        if st.session_state.timeline:
-            st.divider()
-            st.caption("Últimos eventos")
-            for ev in reversed(st.session_state.timeline[-8:]):
-                st.caption(ev)
 
     pref_tab = st.session_state.get("quick_open_tab")
     if "active_tab" not in st.session_state:
@@ -818,9 +657,23 @@ def main() -> None:
         idx = _render_kdd_prev_next()
         fase_actual = get_fases_kdd()[idx]
 
+        with st.expander("Opciones para «Ejecutar fase» (paso e incidencias)", expanded=False):
+            st.number_input(
+                "Paso 15 min (PASO_15MIN)",
+                min_value=0,
+                max_value=96,
+                step=1,
+                key="paso_15min",
+                help="Solo aplica al pulsar «Ejecutar fase» aquí. La ingesta periódica va por Airflow/NiFi.",
+            )
+            st.checkbox(
+                "Simular incidencias de tráfico al ejecutar la fase",
+                key="simlog_simular_incidencias",
+            )
+
         paso = int(st.session_state.paso_15min)
         st.caption(
-            f"Paso temporal (sidebar): **{paso}** · Script: `{fase_actual.script or '—'}`"
+            f"Paso temporal (ejecución manual de fase): **{paso}** · Script: `{fase_actual.script or '—'}`"
         )
 
         if fase_actual.orden in (1, 2):
@@ -831,7 +684,7 @@ def main() -> None:
         elif fase_actual.orden in (3, 4):
             st.info(
                 "Fases **3** y **4** ejecutan solo la parte Spark indicada (`fase_kdd_spark`). "
-                "Para persistir en Cassandra y ver el mapa actualizado, usa la **fase 5** o el botón de procesamiento completo en la barra lateral."
+                "Para persistir en Cassandra y ver el mapa actualizado, usa la **fase 5** aquí o el procesamiento en **Airflow** (`simlog_maestro`)."
             )
         elif fase_actual.orden == 5:
             st.info(
@@ -866,9 +719,6 @@ def main() -> None:
                 ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
                 titulo_fase = f"Fase KDD {fase_actual.orden}: {fase_actual.titulo}"
                 if code == 0:
-                    st.session_state.timeline.append(
-                        f"{ts} — Fase {fase_actual.orden} ({fase_actual.codigo}) OK"
-                    )
                     detalle_ok = (
                         f"código={fase_actual.codigo} · paso_15min={paso} · script `{fase_actual.script or '—'}`"
                     )

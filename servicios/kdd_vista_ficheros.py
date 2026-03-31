@@ -243,8 +243,8 @@ def _render_panel_simulacion_ventana(st, base: Path, widget_scope: str) -> None:
     """Slider de paso, ingesta contextual y comparación antes/después (solo tarjeta principal)."""
     if widget_scope != "kdd_principal":
         st.caption(
-            "**Simulación:** el paso temporal, incidentes y GPS se controlan desde la tarjeta principal "
-            "de la fase seleccionada o desde el **sidebar** («Línea temporal»)."
+            "**Simulación:** el paso temporal e incidencias se controlan en la pestaña **Ciclo KDD**, "
+            "en **«Opciones para «Ejecutar fase» (paso e incidencias)»** (misma clave `paso_15min` que la ingesta)."
         )
         return
 
@@ -259,27 +259,23 @@ def _render_panel_simulacion_ventana(st, base: Path, widget_scope: str) -> None:
     )
 
     try:
-        _p0 = int(st.session_state.get("paso_15min", 0))
+        paso_val = int(st.session_state.get("paso_15min", 0))
     except (TypeError, ValueError):
-        _p0 = 0
-    if _p0 < 0 or _p0 > 96:
-        _p0 = max(0, min(96, _p0))
-        st.session_state.paso_15min = _p0
-    paso_ui = st.slider(
-        "Paso temporal (arrastra para provocar otra simulación)",
-        min_value=0,
-        max_value=96,
-        value=_p0,
-        step=1,
-        help="Se sincroniza con `paso_15min` del sidebar: este control lo sobrescribe al mover el slider.",
+        paso_val = 0
+    if paso_val < 0 or paso_val > 96:
+        st.warning(
+            f"Paso **{paso_val}** fuera de 0–96; corrígelo en el bloque **Opciones para Ejecutar fase** más arriba."
+        )
+        paso_val = max(0, min(96, paso_val))
+    st.caption(
+        f"Paso temporal **{paso_val}** — el control está arriba en **Opciones para Ejecutar fase (paso e incidencias)**."
     )
-    st.session_state.paso_15min = int(paso_ui)
 
     auto = bool(st.session_state.get("ingesta_paso_automatico"))
     if auto:
         st.info(
-            "Tienes **paso automático** (reloj) en el sidebar: la ingesta desde aquí usará la ventana UTC actual, "
-            "no el valor del slider. Desmarca el checkbox para fijar **PASO_15MIN** manualmente."
+            "Tienes **paso automático** (`ingesta_paso_automatico`): la ingesta desde aquí usará la ventana UTC actual, "
+            "no el valor de **PASO_15MIN**. Desactívalo para usar el paso fijado arriba."
         )
 
     c1, c2 = st.columns(2)
