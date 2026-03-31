@@ -497,6 +497,25 @@ Tras cambios en `nifi/groovy/MergeDgtDatex2IntoPayload.groovy`, volver a despleg
 
 En resumen, el **dashboard nunca programa el pipeline**: solo dispara acciones manuales y refleja lo que programen Airflow/NiFi/cron respetando `SIMLOG_INGESTA_INTERVAL_MINUTES`.
 
+## 6.e Kafka, Spark, PageRank y rutas alternativas (qué hace cada pieza)
+
+- **Kafka**:
+  - **Propósito**: desacoplar ingesta ↔ consumidores y permitir auditoría/replay (si la retención lo permite).
+  - **Entrada típica**: snapshot (JSON) publicado por la ingesta a `TOPIC_TRANSPORTE`.
+  - **Verificación**: `servicios/ui_pipeline_resultados.py` (describe/offsets) y `servicios/estado_y_datos.py`.
+
+- **Spark (`procesamiento/procesamiento_grafos.py`)**:
+  - **Grafo**: GraphFrames con vértices (nodos) y aristas (rutas).
+  - **Autosanación**: elimina *Bloqueadas* y penaliza *Congestionadas* para priorizar desvíos.
+  - **PageRank**: calcula criticidad para priorizar nodos en operación.
+  - **Persistencia**:
+    - Cassandra: `nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`.
+    - Hive: histórico/analítica si `SIMLOG_ENABLE_HIVE=1` y metastore/HS2 disponibles.
+
+- **Rutas alternativas (planificación)**:
+  - **UI**: `servicios/ui_rutas_hibridas.py`.
+  - **Lógica**: ruta principal por BFS en el catálogo + alternativas recalculadas simulando cortes por tramo o nodo intermedio.
+
 ### Catálogo de DAGs SIMLOG (referencia)
 
 Documento recomendado para operación y soporte:

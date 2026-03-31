@@ -129,6 +129,11 @@ flowchart LR
   ST --> SW
   ST --> FQ
   FQ --> KB
+
+  %% Vistas / conceptos derivados del modelo
+  C --> PR[PageRank (pagerank_nodos)]
+  C --> ES[Estado operativo (nodos_estado/aristas_estado)]
+  ST --> RH[Rutas híbridas (BFS + alternativas)]
 ```
 
 ---
