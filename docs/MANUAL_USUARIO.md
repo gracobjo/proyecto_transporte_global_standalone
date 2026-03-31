@@ -55,6 +55,8 @@ Controles:
 - Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado). Si OpenWeather responde, el clima sale con `source=openweather`; si no, el sistema usa información alternativa desde la DGT. Si la DGT DATEX2 responde, además se enriquece con incidencias reales; si falla, puede usar caché o continuar solo con simulación. Después se publica en Kafka y se guarda JSON en HDFS.
 - Tras Spark: se estructura y persiste el “estado operativo” en Cassandra, y (si está configurado) se actualiza histórico Hive.
 
+> Nota importante: el checkbox “Paso automático” solo indica que el **paso** se calcula por reloj cuando lanzas la ingesta desde la UI. Para ejecución realmente automática cada 15 minutos, usa Airflow con el DAG `simlog_maestro` (ver `docs/AIRFLOW_DAGS_SIMLOG.md`).
+
 ### 3.3 Enlace a “Gemelo digital — incidencias”
 
 La sidebar también incluye sliders/checkboxes para la pestaña **Gemelo digital** (atasco, clima, bloqueo de capital).
@@ -243,6 +245,21 @@ Cómo usarla:
 3. En la parte inferior encontrarás **FAQ IA** para resolver dudas rápidas sobre operación, informes, NiFi, Swagger o uso general del dashboard.
 
 **Resultado esperado**: estados por servicio (OK/❌), enlaces a consolas web si existen y un asistente de FAQ local para incidencias frecuentes.
+
+### 4.7.a Qué es automático y qué es manual
+
+- **Automático (backend)**:
+  - Si despliegas el DAG maestro `simlog_maestro` en Airflow, la **ingesta + procesamiento** se ejecutan **cada 15 minutos** (o el intervalo configurado en `SIMLOG_INGESTA_INTERVAL_MINUTES`).
+  - El dashboard **no programa por sí mismo** esas ejecuciones: solo muestra siempre los **últimos datos disponibles** en Cassandra/HDFS/Hive.
+- **Manual (desde la UI)**:
+  - En la **barra lateral** puedes lanzar:
+    - `Ejecutar ingesta (fases 1–2 KDD)`,
+    - `Ejecutar procesamiento Spark (fases 3–5 KDD)`,
+    - `Avanzar paso + ingesta + procesamiento`.
+  - En la pestaña **Ciclo KDD** puedes ejecutar cada fase manualmente.
+  - En **Servicios** solo arrancas/parás demonios (HDFS, Kafka, Cassandra, Hive, Airflow, API, FAQ IA, NiFi); no se programa el pipeline.
+
+Para un listado de DAGs y su propósito, ver: `docs/AIRFLOW_DAGS_SIMLOG.md`.
 
 ### Correo y Telegram (configuración en `.env`)
 

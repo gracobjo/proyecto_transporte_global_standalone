@@ -473,6 +473,36 @@ Documento de referencia: `docs/RECONFIGURACION_LOGISTICA_CRITICA.md`.
 
 Tras cambios en `nifi/groovy/MergeDgtDatex2IntoPayload.groovy`, volver a desplegar el script en el procesador `Merge_DGT_Into_Payload` del canvas (ver `nifi/README_NIFI.md`).
 
+
+
+## 6.d Ejecución automática vs manual del pipeline KDD
+
+- **Automático (Airflow / cron / NiFi)**:
+  - DAG maestro `orquestacion/dag_simlog_maestro.py` (`dag_id=simlog_maestro`):
+    - `schedule=timedelta(minutes=SIMLOG_INGESTA_INTERVAL_MINUTES)` (15 por defecto).
+    - Ejecuta **ingesta** (`ingesta_kdd.py`) + **Spark** (`procesamiento/procesamiento_grafos.py`, con `SIMLOG_ENABLE_HIVE=1`) en cada tick.
+    - Debe estar **symlinkado** o copiado bajo `$AIRFLOW_HOME/dags` para que Airflow lo detecte.
+  - Cadena KDD `simlog_kdd_00…99`: pensada para ejecución manual o por orquestador, `schedule=None` (se dispara a demanda).
+  - NiFi puede actuar como orquestador de ingesta (grupo `PG_SIMLOG_KDD`), pero no lanza Spark; ese rol recae en Airflow/cron/scripts.
+
+- **Manual (Streamlit / scripts)**:
+  - Barra lateral del dashboard:
+    - `Ejecutar ingesta (fases 1–2 KDD)` → `ejecucion_pipeline.ejecutar_ingesta`.
+    - `Ejecutar procesamiento Spark (fases 3–5 KDD)` → `ejecucion_pipeline.ejecutar_procesamiento`.
+    - `Avanzar paso + ingesta + procesamiento` incrementa manualmente el `PASO_15MIN` y encadena ambas.
+  - Pestaña **Ciclo KDD**:
+    - Botones por fase (`ejecutar_fase_kdd`) para trazabilidad didáctica.
+  - Scripts standalone:
+    - `scripts/ejecutar_ingesta_dgt.py`, `scripts/simlog_stack.py`, etc. se ejecutan fuera de Airflow/Streamlit.
+
+En resumen, el **dashboard nunca programa el pipeline**: solo dispara acciones manuales y refleja lo que programen Airflow/NiFi/cron respetando `SIMLOG_INGESTA_INTERVAL_MINUTES`.
+
+### Catálogo de DAGs SIMLOG (referencia)
+
+Documento recomendado para operación y soporte:
+
+- `docs/AIRFLOW_DAGS_SIMLOG.md` — qué hace cada `simlog_*`, qué es automático vs manual, scripts implicados y troubleshooting.
+
 ## 5. Requisitos para correr Graph AI (FastAPI) en tu entorno
 
 1. Instala dependencias del repo:

@@ -71,7 +71,8 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-07 — Airflow
 
 - **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
-- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`.
+- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`; utilidades `simlog_arranque_servicios`, `simlog_parar_servicios`, `simlog_comprobar_servicios`.
+- **Documentación:** `docs/AIRFLOW_DAGS_SIMLOG.md`.
 
 ### CU-19 — Cuadro de mando: flota y simulación en mapa
 

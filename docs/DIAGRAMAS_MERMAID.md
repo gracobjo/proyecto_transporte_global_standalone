@@ -133,6 +133,32 @@ flowchart LR
 
 ---
 
+## 6. Secuencia — orquestación `simlog_maestro` (cada 15 min)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant AF as Airflow (simlog_maestro)
+  participant I as ingesta/ingesta_kdd.py
+  participant K as Kafka
+  participant H as HDFS
+  participant SP as Spark (procesamiento_grafos.py)
+  participant CA as Cassandra
+  participant HV as Hive (opcional)
+
+  Note over AF: Cada SIMLOG_INGESTA_INTERVAL_MINUTES (15 min por defecto)
+  AF->>I: Ejecutar ingesta (snapshot)
+  I->>K: Publicar raw/filtered
+  I->>H: Guardar backup JSON
+  AF->>SP: Ejecutar Spark (fases 3–5)
+  SP->>CA: Persistir estado operativo
+  opt SIMLOG_ENABLE_HIVE=true
+    SP->>HV: Persistir histórico/analítica
+  end
+```
+
+---
+
 ## 3. Secuencia — ciclo KDD ~15 min
 
 ```mermaid

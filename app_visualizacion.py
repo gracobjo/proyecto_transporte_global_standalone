@@ -29,6 +29,7 @@ from config import (
     PROJECT_DISPLAY_NAME,
     PROJECT_TAGLINE,
     PROJECT_DESCRIPTION,
+    SIMLOG_INGESTA_INTERVAL_MINUTES,
 )
 
 from servicios.estado_y_datos import (
@@ -630,11 +631,19 @@ def main() -> None:
 
         st.divider()
         st.subheader("Línea temporal (simulación 15 min)")
+        # Modo automático: se mantiene en session_state aunque se recargue la página.
         st.checkbox(
             "Paso automático (reloj, alineado con SIMLOG_INGESTA_INTERVAL_MINUTES)",
+            value=bool(st.session_state.get("ingesta_paso_automatico", True)),
             help="Sin PASO_15MIN fijo: la simulación usa la ventana de tiempo actual (como cron/Airflow).",
             key="ingesta_paso_automatico",
         )
+        if st.session_state.get("ingesta_paso_automatico", False):
+            st.caption(
+                "Modo automático activo: el pipeline está pensado para ejecutarse cada "
+                f"{SIMLOG_INGESTA_INTERVAL_MINUTES} minutos vía Airflow/cron/NiFi. "
+                "El dashboard siempre leerá la última ingesta disponible."
+            )
         st.session_state.paso_15min = st.number_input(
             "Paso actual (ventana)",
             min_value=0,

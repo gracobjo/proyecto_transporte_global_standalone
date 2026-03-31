@@ -12,6 +12,7 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | **Procesamiento (Spark)** | Sí | Spark 3.5 + GraphFrames, limpieza previa a persistencia, opción Hive enriquecimiento. |
 | **Persistencia (HDFS, Cassandra, Hive)** | Sí | HDFS backup raw, Cassandra operativo, Hive histórico. |
 | **Orquestación (Airflow)** | Sí | DAGs por fases KDD, maestro 15 min, gestión servicios; Airflow 3.x con api-server + scheduler; configurar `[api] base_url` al puerto real (p. ej. 8088). |
+| **Convención DAGs SIMLOG** | Sí | Los DAGs operativos del proyecto siguen prefijo `simlog_` y están documentados (`docs/AIRFLOW_DAGS_SIMLOG.md`). |
 | **YARN** | Parcial | Soportado (`SPARK_MASTER=yarn`); despliegue habitual `local[*]`. |
 | **Documentación** | Sí | Requisitos, diseño, casos de uso, diagramas Mermaid/PlantUML, Airflow, flujo de datos, **DASHBOARD_KDD_UI**. |
 | **Operación stack** | Sí | `scripts/simlog_stack.py` (`start` / `status` / `stop`) y `servicios/gestion_servicios.py`. |
