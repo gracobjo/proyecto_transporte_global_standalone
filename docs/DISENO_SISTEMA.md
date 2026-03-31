@@ -83,7 +83,10 @@ Este perfil levanta Hadoop+Spark+Kafka+Jupyter con límites de recursos conserva
 
 1. Arrancar stack: `python -u scripts/simlog_stack.py start` (o DAG de arranque en Airflow).
 2. Comprobar: `… status` o panel de servicios.
-3. Ejecutar pipeline: DAG maestro cada 15 min y/o cadena `simlog_kdd_01_seleccion` … (si servicios ya están arriba).
+3. Ejecutar pipeline:
+   - Automático: `simlog_maestro` cada 15 min (o `SIMLOG_INGESTA_INTERVAL_MINUTES`).
+   - Manual: cadena `simlog_kdd_01_seleccion` … `simlog_kdd_05_interpretacion`.
+   - Catálogo completo: `docs/AIRFLOW_DAGS_SIMLOG.md`.
 4. Si OpenWeather no responde, validar que el payload entra con `source=dgt` y `fallback_activo=true` en `clima_hubs`.
 5. Parar demo: `… stop`.
 

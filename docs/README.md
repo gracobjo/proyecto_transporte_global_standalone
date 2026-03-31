@@ -16,6 +16,7 @@
 | [FLUJO_DATOS_Y_REQUISITOS.md](FLUJO_DATOS_Y_REQUISITOS.md) | Flujo de datos, JSON, Hive/Cassandra, **RF/RNF dashboard KDD** (§7–8) |
 | [REQUIREMENTS_CHECKLIST.md](REQUIREMENTS_CHECKLIST.md) | Checklist frente al PDF del enunciado |
 | [AIRFLOW.md](AIRFLOW.md) | Airflow sin Streamlit, DAGs, troubleshooting (colas, `base_url`) |
+| [AIRFLOW_DAGS_SIMLOG.md](AIRFLOW_DAGS_SIMLOG.md) | Referencia operativa: qué hace cada DAG `simlog_*` (maestro, fases KDD y utilidades) |
 | [YARN_Y_SPARK.md](YARN_Y_SPARK.md) | YARN vs Spark local |
 | [CODESPACES_CLUSTER.md](CODESPACES_CLUSTER.md) | Perfil separado para montar clúster Big Data en Codespaces sin mezclar con el stack principal |
 | [DIAGRAMAS_MERMAID.md](DIAGRAMAS_MERMAID.md) | **Diagramas UML en Mermaid** (casos de uso, componentes, secuencia, despliegue) |
