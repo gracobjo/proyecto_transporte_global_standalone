@@ -67,6 +67,10 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-06 — Rutas híbridas
 
 - **UI:** vistas de planificación / mapa híbrido en el proyecto.
+- **Detalle (cómo se obtienen alternativas):**
+  - Se calcula una **ruta principal** por mínimo número de saltos (BFS) sobre el catálogo `datos/rutas_red_simlog.yaml`.
+  - Se simulan cortes por **tramo** o **nodo intermedio** (clima severo/obras/bloqueos) y se recomputa un camino distinto como **ruta alternativa**.
+  - La salida se visualiza en la pestaña **Rutas híbridas** y en **Mapa y métricas → Planificación**.
 
 ### CU-07 — Airflow
 

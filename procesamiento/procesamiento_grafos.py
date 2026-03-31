@@ -22,7 +22,6 @@ from graphframes import GraphFrame
 from config_nodos import get_nodos, get_aristas
 from config import (
     JAR_GRAPHFRAMES,
-    JAR_CASSANDRA,
     JAR_KAFKA,
     CASSANDRA_HOST,
     KEYSPACE,
@@ -85,6 +84,13 @@ def crear_spark():
     os.environ.setdefault("SIMLOG_HIVE_CONF_DIR", HIVE_CONF_DIR)
     os.environ.setdefault("HIVE_METASTORE_URIS", HIVE_METASTORE_URIS)
     master = os.environ.get("SPARK_MASTER", "local")
+    # GraphFrames: JAR local. Cassandra: vía Maven (`spark.jars.packages`) para traer
+    # dependencias transitivas; un solo .jar en `spark.jars` provoca NoClassDefFoundError
+    # (p.ej. com.datastax.spark.connector.util.Logging) en runtime al hacer .save().
+    cassandra_pkg = os.environ.get(
+        "SIMLOG_SPARK_CASSANDRA_PACKAGE",
+        "com.datastax.spark:spark-cassandra-connector_2.12:3.5.0",
+    ).strip()
     base_builder = (
         SparkSession.builder
         .appName("SIMLOG_TransporteEspaña")
@@ -99,8 +105,8 @@ def crear_spark():
         .config("spark.cassandra.connection.host", CASSANDRA_HOST)
         .config("spark.cassandra.connection.timeoutMS", "30000")
         .config("spark.cassandra.connection.keepAliveMS", "30000")
-        .config("spark.jars", f"{JAR_GRAPHFRAMES},{JAR_CASSANDRA}")
-        .config("spark.jars.packages", "com.datastax.spark:spark-cassandra-connector_2.12:3.5.0")
+        .config("spark.jars", JAR_GRAPHFRAMES)
+        .config("spark.jars.packages", cassandra_pkg)
         .config("spark.eventLog.enabled", "false")
         .config("spark.hadoop.dfs.client.use.datanode.hostname", "false")
         .config("spark.sql.catalogImplementation", "hive")
@@ -368,9 +374,11 @@ def _persistir_historico_nodos_hive_compatible(spark, df_nodos):
             "motivo_retraso",
             coalesce(col("motivo_retraso"), lit("")),
         )
-        .withColumn("clima_actual", col("clima_desc"))
-        .withColumn("temperatura", col("temp"))
-        .withColumn("viento_velocidad", col("viento"))
+        # Compatibilidad: antiguas versiones de la ingesta usaban `clima_desc`, `temp`, `viento`.
+        # La ingesta actual expone `clima_actual`, `temperatura`, `viento_velocidad`.
+        .withColumn("clima_actual", coalesce(col("clima_actual"), col("clima_desc")))
+        .withColumn("temperatura", coalesce(col("temperatura"), col("temp")))
+        .withColumn("viento_velocidad", coalesce(col("viento_velocidad"), col("viento")))
         .select(
             "id_nodo",
             "lat",

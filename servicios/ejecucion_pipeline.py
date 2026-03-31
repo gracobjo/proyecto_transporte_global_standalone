@@ -11,7 +11,8 @@ BASE = Path(__file__).resolve().parent.parent
 
 # Spark en primer arranque puede superar fácilmente 2–10 minutos (JVM, GraphFrames…).
 def _timeout_ingesta() -> int:
-    return int(os.environ.get("SIMLOG_INGESTA_TIMEOUT_SEC", "300"))
+    # DGT DATEX2 + Open-Meteo (fallback individual) pueden llevar varios minutos.
+    return int(os.environ.get("SIMLOG_INGESTA_TIMEOUT_SEC", "900"))
 
 
 def _timeout_spark() -> int:

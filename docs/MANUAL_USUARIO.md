@@ -118,6 +118,15 @@ Secciones:
 
 **Resultado esperado**: una “foto” diagnóstica con OK/⚠️ para cada capa.
 
+### 4.2.a Interpretación rápida (Kafka, Spark, PageRank, alternativas)
+
+- **Kafka**: confirma el “canal” de mensajes del snapshot. Si el topic no existe o no se describe, la ingesta puede haberse ejecutado pero el desacople y auditoría quedan incompletos.
+- **HDFS**: confirma que hay backup `.json`. Aunque Kafka falle o haya latencia, Spark puede procesar en batch si hay ficheros.
+- **Spark → Cassandra**:
+  - si `nodos_estado` / `tracking_camiones` tienen filas, el estado operativo está materializado,
+  - si `pagerank_nodos` tiene filas, la criticidad (PageRank) está lista para métricas y consultas.
+- **Rutas alternativas**: se exploran en **Rutas híbridas** (planificación) y se visualizan también en **Mapa y métricas → Planificación**.
+
 ---
 
 ## 4.3 Pestaña “Cuadro de mando”

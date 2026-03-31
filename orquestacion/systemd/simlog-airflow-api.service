@@ -1,0 +1,19 @@
+[Unit]
+Description=SIMLOG - Airflow API Server (port 8088)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/proyecto_transporte_global
+Environment=AIRFLOW_HOME=%h/airflow
+Environment=AIRFLOW__API__BASE_URL=http://127.0.0.1:8088
+Environment=AIRFLOW__API__PORT=8088
+ExecStart=%h/proyecto_transporte_global/venv_transporte/bin/airflow api-server --host 0.0.0.0 --port 8088
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
+

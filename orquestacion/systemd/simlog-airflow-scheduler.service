@@ -1,0 +1,19 @@
+[Unit]
+Description=SIMLOG - Airflow Scheduler
+After=network.target simlog-airflow-api.service
+Wants=network.target simlog-airflow-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/proyecto_transporte_global
+Environment=AIRFLOW_HOME=%h/airflow
+Environment=AIRFLOW__API__BASE_URL=http://127.0.0.1:8088
+Environment=AIRFLOW__API__PORT=8088
+ExecStart=%h/proyecto_transporte_global/venv_transporte/bin/airflow scheduler
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
+

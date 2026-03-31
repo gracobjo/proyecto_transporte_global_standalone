@@ -42,6 +42,7 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
             out["origen"] = out["meta"].get("origen")
             out["canal_ingesta"] = out["meta"].get("canal_ingesta")
             out["ejecutor_ingesta"] = out["meta"].get("ejecutor_ingesta")
+            out["paso_15min_modo"] = out["meta"].get("paso_15min_modo")
             out["disponible"] = True
         except Exception as e:
             out["error_meta"] = str(e)
@@ -51,6 +52,7 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
             out["origen_payload"] = blob.get("origen")
             out["timestamp"] = blob.get("timestamp")
             out["paso_15min"] = blob.get("paso_15min")
+            out["paso_15min_modo"] = blob.get("paso_15min_modo") or out.get("paso_15min_modo")
             out["hubs_clima"] = len(blob.get("clima_hubs") or {})
             out["camiones"] = len(blob.get("camiones") or [])
             out["nodos_en_payload"] = len(blob.get("nodos_estado") or {})
@@ -74,7 +76,7 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
     if not out.get("disponible"):
         out["mensaje"] = (
             "Aún no hay `ultimo_payload.json` en esta máquina. "
-            "Ejecuta **ingesta** desde el sidebar o la pestaña Ciclo KDD."
+            "Ejecuta **ingesta** desde Airflow, NiFi, la pestaña Ciclo KDD o terminal."
         )
     return out
 

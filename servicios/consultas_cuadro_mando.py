@@ -184,7 +184,7 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
         "titulo": "Gestor — nodos más críticos según PageRank (top 20)",
         "cql": (
             "SELECT id_nodo, pagerank, peso_pagerank, estado, source, ultima_actualizacion "
-            "FROM pagerank_nodos ORDER BY pagerank DESC LIMIT 20"
+            "FROM pagerank_nodos LIMIT 500"
         ),
     },
     "gestor_tracking_ruta_completa": {
@@ -323,7 +323,14 @@ def ejecutar_cassandra_consulta(codigo: str) -> Tuple[bool, str, List[Dict[str, 
         session = cluster.connect(KEYSPACE)
         rows = list(session.execute(cql))
         cluster.shutdown()
-        return True, "", [_row_to_dict(r) for r in rows]
+        out = [_row_to_dict(r) for r in rows]
+
+        # Cassandra no soporta ORDER BY global (sin partición restringida).
+        # Para "top N" por PageRank, ordenamos en cliente sobre el resultado limitado.
+        if codigo in {"gestor_pagerank_nodos_criticos", "gestor_nodo_critico_pagerank"}:
+            out = sorted(out, key=lambda d: float(d.get("pagerank") or 0.0), reverse=True)[:20]
+
+        return True, "", out
     except Exception as e:
         return False, str(e), []
 

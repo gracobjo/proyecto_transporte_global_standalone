@@ -10,6 +10,7 @@ para reutilizar las heurísticas de `clima_retrasos.py`.
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -226,9 +227,26 @@ def fetch_openmeteo_bulk_slim(nodos: List[Tuple[str, float, float]]) -> Dict[str
         return {nid: openmeteo_full_to_ingesta_slim(fetch_openmeteo_current(nid, la, lo))}
 
     def _individual() -> Dict[str, Dict[str, Any]]:
+        """
+        Fallback: una petición por nodo. Antes era secuencial (p. ej. 25 nodos × 12 s ≈ 5 min)
+        y Streamlit parecía «colgado». Se paraleliza con un pool acotado.
+        """
         out: Dict[str, Dict[str, Any]] = {}
-        for nid, la, lo in nodos:
-            out[nid] = openmeteo_full_to_ingesta_slim(fetch_openmeteo_current(nid, la, lo))
+        try:
+            workers = int(os.environ.get("OPEN_METEO_INDIVIDUAL_MAX_WORKERS", "8"))
+        except Exception:
+            workers = 8
+        workers = max(1, min(workers, len(nodos)))
+
+        def _one(item: Tuple[str, float, float]) -> Tuple[str, Dict[str, Any]]:
+            nid, la, lo = item
+            return nid, openmeteo_full_to_ingesta_slim(fetch_openmeteo_current(nid, la, lo))
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_one, t) for t in nodos]
+            for fut in as_completed(futs):
+                nid, slim = fut.result()
+                out[nid] = slim
         return out
 
     try:

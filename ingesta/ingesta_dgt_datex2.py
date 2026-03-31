@@ -9,8 +9,10 @@ simulacion existente.
 
 from __future__ import annotations
 
+import io
 import json
 import math
+import os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -205,7 +207,9 @@ def _extract_weather(record: ET.Element) -> Dict[str, object]:
 
 
 def descargar_xml_datex2(url: str = DGT_DATEX2_URL, timeout: int = 30) -> str:
-    response = requests.get(url, timeout=timeout)
+    # (connect, read): evita bloqueos largos en handshake DNS/TCP
+    to = (5, timeout) if isinstance(timeout, int) and timeout > 0 else timeout
+    response = requests.get(url, timeout=to)
     response.raise_for_status()
     return response.text
 
@@ -298,12 +302,26 @@ def _parse_incident(record: ET.Element) -> Dict:
 
 
 def parsear_xml_datex2(xml_text: str) -> List[Dict]:
-    root = ET.fromstring(xml_text)
+    """
+    Extrae `situationRecord` sin recorrer todo el árbol con `.iter()` (feeds DATEX2 muy
+    grandes → minutos de CPU y la UI parece colgada). Usa iterparse + límite opcional.
+    """
+    try:
+        max_inc = int(os.environ.get("SIMLOG_DGT_MAX_INCIDENTS_PARSE", "8000"))
+    except Exception:
+        max_inc = 8000
+    max_inc = max(100, min(max_inc, 100_000))
+
     incidents: List[Dict] = []
-    for elem in root.iter():
+    # Bytes para iterparse (streaming); no cargamos un árbol gigante entero para iterar.
+    src = io.BytesIO(xml_text.encode("utf-8", errors="replace"))
+    for _event, elem in ET.iterparse(src, events=("end",)):
         local = _local_name(elem.tag)
         if local == "situationRecord" or local.endswith("SituationRecord"):
             incidents.append(_parse_incident(elem))
+            elem.clear()
+            if len(incidents) >= max_inc:
+                break
     return incidents
 
 

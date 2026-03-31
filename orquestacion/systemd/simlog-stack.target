@@ -1,0 +1,8 @@
+[Unit]
+Description=SIMLOG - Stack (YARN + Airflow API + Airflow Scheduler)
+Wants=simlog-yarn.service simlog-airflow-api.service simlog-airflow-scheduler.service
+After=simlog-yarn.service simlog-airflow-api.service simlog-airflow-scheduler.service
+
+[Install]
+WantedBy=multi-user.target
+

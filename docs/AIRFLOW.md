@@ -28,6 +28,44 @@ URL: `http://localhost:8088`
 
 En `~/airflow/airflow.cfg`, la seccion `[api]` debe tener `base_url` y `port` alineados con el api-server (8088). Si `base_url` queda vacio, Airflow 3 usa `http://localhost:8080/execution/` para el LocalExecutor; si en 8080 hay otro servicio (p. ej. Spark UI), las tareas se quedan en **cola** sin ejecutarse.
 
+---
+
+## Arranque persistente con systemd (recomendado)
+
+Para evitar que `simlog_maestro` se quede en **queued** o haga reintentos por caídas del scheduler/api-server, se incluyen unit files listos para copiar:
+
+- `orquestacion/systemd/simlog-yarn.service`
+- `orquestacion/systemd/simlog-airflow-api.service`
+- `orquestacion/systemd/simlog-airflow-scheduler.service`
+- `orquestacion/systemd/simlog-stack.target`
+
+### Instalación
+
+```bash
+sudo cp -v orquestacion/systemd/simlog-*.service /etc/systemd/system/
+sudo cp -v orquestacion/systemd/simlog-stack.target /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now simlog-stack.target
+```
+
+### Comprobación rápida
+
+```bash
+systemctl status simlog-yarn.service
+systemctl status simlog-airflow-api.service
+systemctl status simlog-airflow-scheduler.service
+curl -fsS http://127.0.0.1:8088/ >/dev/null && echo "Airflow OK"
+```
+
+### Nota sobre el conflicto de puertos (YARN vs Airflow)
+
+Si el **ResourceManager** intenta usar la UI web en **8088** (por defecto de YARN) y Airflow está en 8088, YARN puede no arrancar bien.
+
+- Solución recomendada: mover la web del ResourceManager a otro puerto (ej. **18088**) en `yarn-site.xml`:
+  - `yarn.resourcemanager.webapp.address=0.0.0.0:18088`
+
+Más detalle: `docs/MANUAL_DESARROLLADOR.md` y la sección de YARN en la documentación.
+
 ## DAGs operativos (pipeline backend)
 
 Los DAGs de operacion viven bajo `~/airflow/dags/` en **subcarpetas** (Airflow 3 **DAG bundles**), para que en la UI queden agrupados por proyecto sin depender solo del nombre del DAG:

@@ -29,10 +29,11 @@ from config import (
     TOPIC_RAW,
     TOPIC_TRANSPORTE,
     HDFS_BACKUP_PATH,
+    HDFS_NAMENODE,
     usar_clima_todos_los_nodos,
 )
 from ingesta.ingesta_dgt_datex2 import fusionar_estados, obtener_incidencias_dgt
-from ingesta.trigger_paso import resolver_paso_ingesta, semilla_simulacion
+from ingesta.trigger_paso import resolver_paso_ingesta_detalle, semilla_simulacion
 
 # Estados posibles
 ESTADOS = ["OK", "Congestionado", "Bloqueado"]
@@ -404,12 +405,21 @@ def publicar_kafka(payload: dict) -> bool:
     """Enviar JSON del snapshot a topics raw/filtered y, si aplica, al raw DGT."""
     try:
         from kafka import KafkaProducer
+
+        # Importante: sin timeouts explícitos, `flush()` puede bloquear indefinidamente
+        # si el broker no responde (y Streamlit/Airflow "parecen colgados").
         producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BOOTSTRAP.split(","),
+            bootstrap_servers=[s.strip() for s in KAFKA_BOOTSTRAP.split(",") if s.strip()],
             value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
+            request_timeout_ms=10_000,
+            api_version_auto_timeout_ms=10_000,
+            max_block_ms=10_000,
+            retries=0,
+            acks=1,
         )
-        producer.send(TOPIC_RAW, value=payload)
-        producer.send(TOPIC_TRANSPORTE, value=payload)
+
+        producer.send(TOPIC_RAW, value=payload).get(timeout=10)
+        producer.send(TOPIC_TRANSPORTE, value=payload).get(timeout=10)
         if payload.get("incidencias_dgt"):
             producer.send(
                 TOPIC_DGT_RAW,
@@ -418,9 +428,10 @@ def publicar_kafka(payload: dict) -> bool:
                     "origen_dgt": payload.get("resumen_dgt", {}).get("source_mode"),
                     "incidencias_dgt": payload.get("incidencias_dgt", []),
                 },
-            )
-        producer.flush()
-        producer.close()
+            ).get(timeout=10)
+
+        producer.flush(timeout=10)
+        producer.close(timeout=5)
         return True
     except Exception as e:
         print(f"[KAFKA] Error: {e}")
@@ -437,6 +448,68 @@ def _hdfs_cmd():
     return "hdfs"
 
 
+def _webhdfs_base_url() -> str:
+    """
+    Base URL de WebHDFS para el NameNode.
+    - Por defecto: http://<host>:9870 (Hadoop 3)
+    - Override: SIMLOG_WEBHDFS_URL (p.ej. http://namenode:9870)
+    """
+    override = (os.environ.get("SIMLOG_WEBHDFS_URL", "") or "").strip()
+    if override:
+        return override.rstrip("/")
+    # HDFS_NAMENODE suele venir como host:9000 (RPC). Reutilizamos host y asumimos 9870 (WebHDFS).
+    host = str(HDFS_NAMENODE or "127.0.0.1:9000").split(":", 1)[0].strip() or "127.0.0.1"
+    port = int(os.environ.get("SIMLOG_WEBHDFS_PORT", "9870"))
+    return f"http://{host}:{port}"
+
+
+def _guardar_hdfs_via_webhdfs(payload: dict, path_hdfs: str) -> bool:
+    """
+    Fallback para entornos donde `hdfs dfs` se queda colgado por PATH/HADOOP_CONF_DIR.
+    Usa WebHDFS (HTTP) contra el NameNode. Requiere que el NameNode exponga WebHDFS.
+    """
+    try:
+        base_url = _webhdfs_base_url()
+        user = (os.environ.get("HADOOP_USER_NAME") or os.environ.get("USER") or "hadoop").strip() or "hadoop"
+        timeout = float(os.environ.get("SIMLOG_WEBHDFS_TIMEOUT_SEC", "20"))
+        # `requests` respeta proxies del entorno; en setups locales puede colgarse intentando proxy.
+        # Para WebHDFS en localhost/namenode interno, desactivamos proxies explícitamente.
+        no_proxies = {"http": "", "https": ""}
+
+        # MKDIRS del directorio destino
+        dir_path = "/".join(path_hdfs.split("/")[:-1]) or "/"
+        r1 = requests.put(
+            f"{base_url}/webhdfs/v1{dir_path}",
+            params={"op": "MKDIRS", "user.name": user},
+            proxies=no_proxies,
+            timeout=(5, timeout),
+        )
+        if r1.status_code not in (200, 201):
+            msg = (r1.text or "").strip()
+            print(f"[HDFS] WebHDFS MKDIRS HTTP {r1.status_code}: {msg[:280]}")
+            return False
+
+        data = json.dumps(payload, ensure_ascii=False, default=str, indent=2).encode("utf-8")
+        # CREATE con redirects (NameNode responde 307 a DataNode).
+        r2 = requests.put(
+            f"{base_url}/webhdfs/v1{path_hdfs}",
+            params={"op": "CREATE", "overwrite": "true", "user.name": user},
+            data=data,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            allow_redirects=True,
+            proxies=no_proxies,
+            timeout=(5, max(timeout, 30.0)),
+        )
+        if r2.status_code not in (200, 201):
+            msg = (r2.text or "").strip()
+            print(f"[HDFS] WebHDFS CREATE HTTP {r2.status_code}: {msg[:280]}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[HDFS] WebHDFS Error: {e}")
+        return False
+
+
 def guardar_hdfs(payload: dict) -> bool:
     """Guardar backup en HDFS."""
     try:
@@ -447,15 +520,51 @@ def guardar_hdfs(payload: dict) -> bool:
         with open(archivo, "w") as f:
             json.dump(payload, f, default=str, indent=2)
         path_hdfs = f"{HDFS_BACKUP_PATH}/transporte_{ts}.json"
-        subprocess.run(
+        r1 = subprocess.run(
             [hdfs_bin, "dfs", "-mkdir", "-p", HDFS_BACKUP_PATH],
             capture_output=True,
+            text=True,
+            timeout=20,
         )
-        subprocess.run([hdfs_bin, "dfs", "-put", "-f", archivo, path_hdfs], capture_output=True)
+        if r1.returncode != 0:
+            err = (r1.stderr or r1.stdout or "").strip()
+            print(f"[HDFS] Error mkdir: {err[:280]}")
+            try:
+                os.remove(archivo)
+            except OSError:
+                pass
+            # Fallback WebHDFS (si está habilitado)
+            if _env_flag("SIMLOG_WEBHDFS_FALLBACK", True):
+                return _guardar_hdfs_via_webhdfs(payload, path_hdfs)
+            return False
+        r2 = subprocess.run(
+            [hdfs_bin, "dfs", "-put", "-f", archivo, path_hdfs],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r2.returncode != 0:
+            err = (r2.stderr or r2.stdout or "").strip()
+            print(f"[HDFS] Error put: {err[:280]}")
+            try:
+                os.remove(archivo)
+            except OSError:
+                pass
+            if _env_flag("SIMLOG_WEBHDFS_FALLBACK", True):
+                return _guardar_hdfs_via_webhdfs(payload, path_hdfs)
+            return False
         os.remove(archivo)
         return True
     except Exception as e:
+        # Timeout/errores del CLI: intentar WebHDFS si procede.
         print(f"[HDFS] Error: {e}")
+        try:
+            if _env_flag("SIMLOG_WEBHDFS_FALLBACK", True):
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                path_hdfs = f"{HDFS_BACKUP_PATH}/transporte_{ts}.json"
+                return _guardar_hdfs_via_webhdfs(payload, path_hdfs)
+        except Exception:
+            pass
         return False
 
 
@@ -478,8 +587,19 @@ def evaluar_alerta_bloqueos(estados_nodos: dict) -> dict:
     }
 
 
-def main(paso_15min=0):
+def _resolver_paso_15min_modo(paso_15min: int, paso_15min_modo: str | None) -> str:
+    """Si no viene explícito, infiere desde PASO_15MIN en el entorno (subprocesos Streamlit/Airflow)."""
+    if paso_15min_modo is not None:
+        return paso_15min_modo
+    em = os.environ.get("PASO_15MIN")
+    if em is not None and str(em).strip() != "":
+        return "manual"
+    return "auto"
+
+
+def main(paso_15min=0, paso_15min_modo: str | None = None):
     # Misma ventana temporal → misma semilla (reproducible); ventana distinta → incidentes/rutas distintos
+    paso_15min_modo = _resolver_paso_15min_modo(paso_15min, paso_15min_modo)
     random.seed(semilla_simulacion(paso_15min))
     canal_ingesta = os.environ.get("SIMLOG_INGESTA_CANAL", "script_python").strip() or "script_python"
     origen_ingesta = os.environ.get("SIMLOG_INGESTA_ORIGEN", "cli_script").strip() or "cli_script"
@@ -520,6 +640,7 @@ def main(paso_15min=0):
         "ejecutor_ingesta": ejecutor_ingesta,
         "timestamp": timestamp,
         "paso_15min": paso_15min,
+        "paso_15min_modo": paso_15min_modo,
         "simulacion_incidencias": sim_incid,
         "dgt_habilitado": use_dgt,
         "clima_hubs": clima,
@@ -586,6 +707,7 @@ def main(paso_15min=0):
             "ejecutor_ingesta": ejecutor_ingesta,
             "timestamp": payload["timestamp"],
             "paso_15min": paso_15min,
+            "paso_15min_modo": paso_15min_modo,
             "dgt_source_mode": payload["resumen_dgt"]["source_mode"],
             "dgt_incidencias_totales": payload["resumen_dgt"]["incidencias_totales"],
             "dgt_nodos_afectados": payload["resumen_dgt"]["nodos_afectados"],
@@ -605,4 +727,5 @@ def main(paso_15min=0):
 
 if __name__ == "__main__":
     # Sin PASO_15MIN en el entorno → índice automático según reloj e intervalo (ver trigger_paso.py)
-    main(resolver_paso_ingesta())
+    _paso, _modo = resolver_paso_ingesta_detalle()
+    main(paso_15min=_paso, paso_15min_modo=_modo)

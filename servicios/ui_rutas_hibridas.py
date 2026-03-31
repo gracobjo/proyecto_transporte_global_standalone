@@ -19,6 +19,14 @@ def render_rutas_hibridas_tab() -> None:
         "Elige **origen** y **destino**; el sistema calcula el camino con **menor número de saltos** (BFS) "
         "y, si aplicas incidencias (clima, obras), **rutas alternativas** en otro color en el mapa."
     )
+    with st.expander("¿Qué significa “ruta alternativa” aquí?", expanded=False):
+        st.markdown(
+            "- **Ruta principal**: el camino con **menos saltos** entre origen y destino en el catálogo.\n"
+            "- **Alternativas**: se generan simulando un corte (caída) en un **tramo** o un **nodo intermedio** "
+            "de la ruta principal y recalculando un nuevo camino distinto.\n"
+            "- **Objetivo**: dar un plan B rápido para operación cuando hay incidencias (clima severo, obras, bloqueos).\n"
+            "- **Visual**: principal en **azul**; alternativas en **naranja** (discontinuo)."
+        )
 
     # --- Catálogo completo de conexiones ---
     filas, msg_origen = listar_conexiones_catalogo()

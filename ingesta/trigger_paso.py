@@ -33,15 +33,24 @@ def paso_desde_reloj_utc(now_ts: float | None = None) -> int:
     return int(ts // intervalo_segundos())
 
 
+def resolver_paso_ingesta_detalle() -> tuple[int, str]:
+    """
+    Devuelve (paso, modo):
+    - modo `manual` si `PASO_15MIN` está definido (UI, Airflow, pruebas).
+    - modo `auto` si no (cron/NiFi sin variable → índice global de ventana UTC).
+    """
+    manual = os.environ.get("PASO_15MIN")
+    if manual is not None and str(manual).strip() != "":
+        return int(manual), "manual"
+    return paso_desde_reloj_utc(), "auto"
+
+
 def resolver_paso_ingesta() -> int:
     """
     - `PASO_15MIN` en el entorno → valor entero (control manual del dashboard o Airflow).
     - Si no existe → `paso_desde_reloj_utc()` (cron/trigger sin variable).
     """
-    manual = os.environ.get("PASO_15MIN")
-    if manual is not None and str(manual).strip() != "":
-        return int(manual)
-    return paso_desde_reloj_utc()
+    return resolver_paso_ingesta_detalle()[0]
 
 
 def semilla_simulacion(paso: int) -> int:
