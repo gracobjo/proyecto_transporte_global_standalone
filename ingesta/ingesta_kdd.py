@@ -33,7 +33,7 @@ from config import (
     usar_clima_todos_los_nodos,
 )
 from ingesta.ingesta_dgt_datex2 import fusionar_estados, obtener_incidencias_dgt
-from ingesta.trigger_paso import resolver_paso_ingesta, semilla_simulacion
+from ingesta.trigger_paso import resolver_paso_ingesta_detalle, semilla_simulacion
 
 # Estados posibles
 ESTADOS = ["OK", "Congestionado", "Bloqueado"]
@@ -587,8 +587,19 @@ def evaluar_alerta_bloqueos(estados_nodos: dict) -> dict:
     }
 
 
-def main(paso_15min=0):
+def _resolver_paso_15min_modo(paso_15min: int, paso_15min_modo: str | None) -> str:
+    """Si no viene explícito, infiere desde PASO_15MIN en el entorno (subprocesos Streamlit/Airflow)."""
+    if paso_15min_modo is not None:
+        return paso_15min_modo
+    em = os.environ.get("PASO_15MIN")
+    if em is not None and str(em).strip() != "":
+        return "manual"
+    return "auto"
+
+
+def main(paso_15min=0, paso_15min_modo: str | None = None):
     # Misma ventana temporal → misma semilla (reproducible); ventana distinta → incidentes/rutas distintos
+    paso_15min_modo = _resolver_paso_15min_modo(paso_15min, paso_15min_modo)
     random.seed(semilla_simulacion(paso_15min))
     canal_ingesta = os.environ.get("SIMLOG_INGESTA_CANAL", "script_python").strip() or "script_python"
     origen_ingesta = os.environ.get("SIMLOG_INGESTA_ORIGEN", "cli_script").strip() or "cli_script"
@@ -629,6 +640,7 @@ def main(paso_15min=0):
         "ejecutor_ingesta": ejecutor_ingesta,
         "timestamp": timestamp,
         "paso_15min": paso_15min,
+        "paso_15min_modo": paso_15min_modo,
         "simulacion_incidencias": sim_incid,
         "dgt_habilitado": use_dgt,
         "clima_hubs": clima,
@@ -695,6 +707,7 @@ def main(paso_15min=0):
             "ejecutor_ingesta": ejecutor_ingesta,
             "timestamp": payload["timestamp"],
             "paso_15min": paso_15min,
+            "paso_15min_modo": paso_15min_modo,
             "dgt_source_mode": payload["resumen_dgt"]["source_mode"],
             "dgt_incidencias_totales": payload["resumen_dgt"]["incidencias_totales"],
             "dgt_nodos_afectados": payload["resumen_dgt"]["nodos_afectados"],
@@ -714,4 +727,5 @@ def main(paso_15min=0):
 
 if __name__ == "__main__":
     # Sin PASO_15MIN en el entorno → índice automático según reloj e intervalo (ver trigger_paso.py)
-    main(resolver_paso_ingesta())
+    _paso, _modo = resolver_paso_ingesta_detalle()
+    main(paso_15min=_paso, paso_15min_modo=_modo)

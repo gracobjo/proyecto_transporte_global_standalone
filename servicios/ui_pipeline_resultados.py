@@ -19,6 +19,7 @@ from config import (
     SIMLOG_INGESTA_INTERVAL_MINUTES,
 )
 from servicios.pipeline_verificacion import (
+    hive_resumen,
     kafka_crear_topic_si_falta,
     obtener_snapshot_pipeline,
 )
@@ -65,10 +66,11 @@ def render_pipeline_resultados_tab() -> None:
             "- **Kafka**: el topic existe y tiene particiones/offsets; confirma que hay “canal” para desacoplar ingesta ↔ consumidores.\n"
             "- **HDFS**: hay backups `.json` listados; esto es la base para re-procesar y para Spark en modo batch.\n"
             "- **Spark → Cassandra**: tras ejecutar Spark, las tablas operativas deben tener filas (`nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`).\n"
+            "- **Hive**: histórico analítico vía HiveServer2; en refresco rápido se omite salvo que marques **Incluir Hive** o uses **Consultar Hive ahora**.\n"
             "- **PageRank y rutas**: PageRank se persiste en `pagerank_nodos`; las rutas alternativas se derivan de estado de red/incidencias y se visualizan en la pestaña de planificación."
         )
 
-    c_btn, c_topics = st.columns([1, 2])
+    c_btn, c_topics, c_hive = st.columns([1, 2, 1])
     with c_btn:
         refresh = st.button("🔄 Actualizar comprobaciones", type="primary", key="btn_refresh_pipeline")
     with c_topics:
@@ -76,6 +78,13 @@ def render_pipeline_resultados_tab() -> None:
             "Crear temas Kafka (raw + filtered) si faltan",
             key="btn_kafka_create_topics",
             help="Ejecuta kafka-topics --create (usa KAFKA_HOME si está definido).",
+        )
+    with c_hive:
+        st.checkbox(
+            "Incluir Hive",
+            value=False,
+            key="pipeline_chk_incluir_hive",
+            help="Si está marcado, la próxima pulsación en «Actualizar» consulta HiveServer2 (PyHive; puede tardar).",
         )
 
     if crear_topics:
@@ -89,7 +98,11 @@ def render_pipeline_resultados_tab() -> None:
                 st.error(f"{label}: {r.get('mensaje', 'error')}")
 
     if refresh:
-        with st.spinner("Consultando servicios y ficheros…"):
+        incluir_hive = bool(st.session_state.get("pipeline_chk_incluir_hive", False))
+        with st.spinner(
+            "Consultando servicios y ficheros…"
+            + (" (incluye Hive)" if incluir_hive else "")
+        ):
             st.session_state["pipeline_snapshot_kdd"] = obtener_snapshot_pipeline(
                 hdfs_path=HDFS_BACKUP_PATH,
                 kafka_bootstrap=KAFKA_BOOTSTRAP,
@@ -97,7 +110,7 @@ def render_pipeline_resultados_tab() -> None:
                 cassandra_host=CASSANDRA_HOST,
                 keyspace=KEYSPACE,
                 cassandra_modo="rapido",
-                incluir_hive=False,
+                incluir_hive=incluir_hive,
                 kafka_modo="rapido",
                 hdfs_max_items=3,
                 hdfs_timeout=28,
@@ -129,13 +142,20 @@ def render_pipeline_resultados_tab() -> None:
                 n_slots_dia = max(1, 86400 // (interval * 60))
                 if dt_pay is not None:
                     slot_dia, n_slots_dia = _ventana_dia_utc(dt_pay, interval)
-                # Índice global (reloj automático sin PASO_15MIN) suele ser >> 10⁵; manual suele ser 0–96.
-                es_indice_global = paso >= 100_000
-                label_paso = (
-                    "Slot ingesta (índice UTC)"
-                    if es_indice_global
-                    else "Paso (PASO_15MIN manual)"
-                )
+                modo = ing.get("paso_15min_modo")
+                if modo == "auto":
+                    label_paso = "Slot ingesta (índice UTC)"
+                    es_indice_global = True
+                elif modo == "manual":
+                    label_paso = "Paso (PASO_15MIN manual)"
+                    es_indice_global = False
+                else:
+                    es_indice_global = paso >= 100_000
+                    label_paso = (
+                        "Slot ingesta (índice UTC)"
+                        if es_indice_global
+                        else "Paso (PASO_15MIN manual)"
+                    )
                 with c2:
                     st.metric(label_paso, str(paso))
                     if slot_dia is not None:
@@ -256,9 +276,66 @@ def render_pipeline_resultados_tab() -> None:
 
     # --- Hive histórico ---
     st.divider()
+    _render_panel_hive_historico(snap)
+
+
+def _render_panel_hive_historico(snap: dict) -> None:
+    """Muestra estado Hive; si el snapshot se generó sin Hive, permite consulta puntual."""
     st.markdown(
-        "**Flujo de referencia:** `ingesta` → Kafka + HDFS → Spark lee HDFS → "
-        "Cassandra (tiempo casi real) + Hive (histórico si el metastore responde)."
+        "**Flujo de referencia:** `ingesta` → Kafka + HDFS → Spark → "
+        "**Cassandra** (operativo) + **Hive** (histórico analítico)."
     )
+    with st.expander("**6 · Hive (histórico)** — HiveServer2 / PyHive", expanded=True):
+        st.caption(
+            "Tablas y conteos en la BD analítica (histórico). Requiere **HiveServer2** accesible "
+            "(mismo criterio que el cuadro de mando: `HIVE_JDBC_URL`, puerto 10000 típico)."
+        )
+        h = snap.get("hive") or {}
+        if h.get("omitido_modo_rapido"):
+            st.info(
+                (h.get("error_tablas") or "").strip()
+                or h.get("hint")
+                or "Hive no se consultó en el último refresco (modo rápido)."
+            )
+            st.caption(
+                "Marca **Incluir Hive** y pulsa «Actualizar comprobaciones», o usa el botón inferior "
+                "para consultar solo Hive sin repetir el resto."
+            )
+            if st.button("Consultar Hive ahora", type="secondary", key="btn_pipeline_hive_solo"):
+                with st.spinner("Consultando HiveServer2…"):
+                    snap_mut = st.session_state.get("pipeline_snapshot_kdd")
+                    if snap_mut is not None:
+                        snap_mut["hive"] = hive_resumen()
+                        st.session_state["pipeline_snapshot_kdd"] = snap_mut
+                st.rerun()
+            return
+
+        if h.get("hint"):
+            st.info(h["hint"])
+        if h.get("hint_impersonacion"):
+            st.warning(h["hint_impersonacion"])
+        if h.get("hint_alias_hive"):
+            st.caption(h["hint_alias_hive"])
+
+        if h.get("show_tables_ok"):
+            st.success("SHOW TABLES / listado de tablas OK.")
+        elif h.get("error_tablas"):
+            st.error(str(h.get("error_tablas"))[:800])
+
+        if h.get("tablas"):
+            st.text_area("Tablas (muestra)", str(h.get("tablas"))[:6000], height=160, disabled=True, key="hive_tablas_txt")
+
+        conteos = h.get("conteos") or {}
+        if conteos:
+            rows = []
+            for codigo, info in conteos.items():
+                rows.append(
+                    {
+                        "consulta": codigo,
+                        "ok": "✅" if info.get("ok") else "❌",
+                        "detalle": (info.get("error") or info.get("salida", ""))[:200],
+                    }
+                )
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 

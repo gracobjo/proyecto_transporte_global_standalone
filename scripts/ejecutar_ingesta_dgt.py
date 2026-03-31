@@ -17,7 +17,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 from ingesta.ingesta_kdd import main as ejecutar_ingesta_kdd  # noqa: E402
-from ingesta.trigger_paso import resolver_paso_ingesta  # noqa: E402
+from ingesta.trigger_paso import resolver_paso_ingesta_detalle  # noqa: E402
 
 
 def _python_proyecto() -> str:
@@ -35,7 +35,10 @@ def main() -> int:
     parser.add_argument("--skip-processing", action="store_true", help="Ejecutar solo la ingesta")
     args = parser.parse_args()
 
-    paso = args.paso if args.paso is not None else resolver_paso_ingesta()
+    if args.paso is not None:
+        paso, modo = args.paso, "manual"
+    else:
+        paso, modo = resolver_paso_ingesta_detalle()
     env = os.environ.copy()
     env["SIMLOG_INGESTA_CANAL"] = env.get("SIMLOG_INGESTA_CANAL", "script_python")
     env["SIMLOG_INGESTA_ORIGEN"] = env.get("SIMLOG_INGESTA_ORIGEN", "script_dgt_datex2")
@@ -44,7 +47,7 @@ def main() -> int:
     env["SIMLOG_DGT_ONLY_CACHE"] = "1" if args.cache_only else "0"
     os.environ.update(env)
 
-    payload = ejecutar_ingesta_kdd(paso)
+    payload = ejecutar_ingesta_kdd(paso, paso_15min_modo=modo)
     resumen = {
         "timestamp": payload.get("timestamp"),
         "paso_15min": paso,

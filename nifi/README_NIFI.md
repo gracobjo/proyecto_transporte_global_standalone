@@ -144,6 +144,8 @@ El script debe lanzar:
 
 Así, **después de Kafka/HDFS**, Spark escribe en **Cassandra** y **Hive** como ya define el proyecto.
 
+**Logs y NiFi:** `nifi/scripts/spark_submit_yarn.sh` escribe **toda** la salida de `spark-submit` en `reports/nifi_spark/spark_submit_<fecha>_<pid>.log` (o en `SIMLOG_NIFI_SPARK_LOG_DIR` si lo defines). Así **stderr** del proceso solo muestra algo si el job **falla** (mensaje corto + últimas líneas del log), y la UI de NiFi deja de marcar líneas `INFO` de Spark como *warnings*.
+
 ### 6. Cassandra
 
 | Opción | Descripción |

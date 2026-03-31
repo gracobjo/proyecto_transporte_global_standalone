@@ -62,6 +62,8 @@ def test_main_generates_payload_and_meta(monkeypatch, tmp_path):
     assert meta["ok_kafka"] is True
     assert meta["ok_hdfs"] is True
     assert meta["canal_ingesta"] == "script_python"
+    assert meta.get("paso_15min_modo") == "auto"
+    assert saved_payload.get("paso_15min_modo") == "auto"
     assert saved_payload["origen"] == "pytest_cli"
 
 
