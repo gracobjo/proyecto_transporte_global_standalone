@@ -921,6 +921,50 @@ def main() -> None:
         render_panel_gestion_servicios()
         st.divider()
         render_faq_ia_panel()
+        st.divider()
+        st.subheader("Qué hace cada componente (detalle)")
+        with st.expander("Kafka — desacople, auditoría y replay", expanded=False):
+            st.markdown(
+                "- **Rol**: canal de intercambio entre ingesta y consumidores. Evita acoplar tiempos de ejecución.\n"
+                "- **Qué entra**: el snapshot JSON (clima + DGT + GPS simulado), típicamente en `TOPIC_TRANSPORTE`.\n"
+                "- **Qué aporta**:\n"
+                "  - **Desacople**: ingesta publica aunque Spark vaya lento.\n"
+                "  - **Auditoría**: puedes inspeccionar el último mensaje y validar campos.\n"
+                "  - **Replay** (si se conserva): re-procesar un tramo temporal sin repetir llamadas externas.\n"
+                "- **Dónde se ve**: pestaña **Resultados pipeline** y verificación técnica (topic + conectividad)."
+            )
+
+        with st.expander("Spark — grafo, autosanación, PageRank y persistencia", expanded=False):
+            st.markdown(
+                "- **Rol**: transforma el snapshot en un **modelo operativo** basado en grafo.\n"
+                "- **Qué calcula** (`procesamiento/procesamiento_grafos.py`):\n"
+                "  - **Autosanación**: elimina rutas *Bloqueadas* y penaliza *Congestionadas*.\n"
+                "  - **Métricas**: **PageRank** (criticidad) y derivados.\n"
+                "  - **Rutas dinámicas**: caminos sobre el grafo (y estado de red) para apoyar planificación.\n"
+                "- **Qué persiste**:\n"
+                "  - **Cassandra**: `nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`.\n"
+                "  - **Hive (opcional)**: histórico/analítica si `SIMLOG_ENABLE_HIVE=1`."
+            )
+
+        with st.expander("PageRank — qué significa y cómo se usa en SIMLOG", expanded=False):
+            st.markdown(
+                "- **Qué es**: una métrica de **criticidad** sobre el grafo (nodo “importante” por conectividad).\n"
+                "- **En SIMLOG**: se usa para priorizar hubs/nodos a vigilar cuando hay incidencias.\n"
+                "- **Dónde se muestra**:\n"
+                "  - pestaña **Mapa y métricas** (columna derecha: *PageRank (muestra)*),\n"
+                "  - pestaña **Cuadro de mando → Consultas supervisadas (📊 PageRank)**.\n"
+                "- **Dato fuente**: tabla Cassandra `pagerank_nodos` (se rellena al ejecutar Spark)."
+            )
+
+        with st.expander("Rutas alternativas — cómo se calculan", expanded=False):
+            st.markdown(
+                "- **Rol**: ofrecer planes B cuando un nodo/tramo cae por clima/obras/incidencia.\n"
+                "- **Cálculo en UI**: pestaña **Rutas híbridas** (`servicios/ui_rutas_hibridas.py`).\n"
+                "- **Idea**:\n"
+                "  - se calcula una **ruta principal** (mínimo saltos, BFS) sobre el catálogo,\n"
+                "  - luego se simulan cortes por **arista** o **nodo intermedio** y se buscan caminos alternativos.\n"
+                "- **Dónde se visualiza**: mapa de planificación (principal en azul, alternativas en naranja)."
+            )
 
     if active_tab == "Mapa y métricas":
         modo_mapa = st.radio(
@@ -1003,6 +1047,10 @@ def main() -> None:
         with col_m2:
             if modo_mapa == "operativo":
                 st.subheader("PageRank (muestra)")
+                st.caption(
+                    "PageRank es una **métrica de criticidad** sobre el grafo: valores más altos suelen indicar "
+                    "nodos más influyentes/conectados. Se calcula en Spark y se persiste en `pagerank_nodos`."
+                )
                 pr = cargar_pagerank_cassandra()
                 alertas_rt = cargar_alertas_activas_cassandra()
                 nodos_rt = cargar_estado_nodos_reconfiguracion()

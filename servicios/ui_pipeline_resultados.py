@@ -29,6 +29,14 @@ def render_pipeline_resultados_tab() -> None:
         "que **Kafka** tiene el topic activo, que **Spark** ha dejado estado en **Cassandra** "
         "y que el **histórico Hive** está accesible (si HiveServer2 está en marcha; la UI usa PyHive al puerto 10000)."
     )
+    with st.expander("Guía rápida: qué valida cada bloque", expanded=False):
+        st.markdown(
+            "- **1–2 Ingesta**: existe un `ultimo_payload.json` coherente (clima/DGT/camiones) y marca si publicó a Kafka/HDFS.\n"
+            "- **Kafka**: el topic existe y tiene particiones/offsets; confirma que hay “canal” para desacoplar ingesta ↔ consumidores.\n"
+            "- **HDFS**: hay backups `.json` listados; esto es la base para re-procesar y para Spark en modo batch.\n"
+            "- **Spark → Cassandra**: tras ejecutar Spark, las tablas operativas deben tener filas (`nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`).\n"
+            "- **PageRank y rutas**: PageRank se persiste en `pagerank_nodos`; las rutas alternativas se derivan de estado de red/incidencias y se visualizan en la pestaña de planificación."
+        )
 
     c_btn, c_topics = st.columns([1, 2])
     with c_btn:
@@ -120,6 +128,10 @@ def render_pipeline_resultados_tab() -> None:
 
     # --- Kafka + HDFS (ingesta escribe ambos) ---
     with st.expander("**Kafka + HDFS** (mensajes y backup JSON)", expanded=True):
+        st.caption(
+            "**Kafka** se usa como canal de mensajes (desacople) y **HDFS** como copia/auditoría. "
+            "Si Kafka va lento o cae, el backup en HDFS permite que Spark procese igual en batch."
+        )
         k = snap["kafka"]
         st.markdown(f"**Bootstrap:** `{k['bootstrap']}` · **Topic:** `{k['topic']}`")
         if k.get("kafka_topics_bin"):
@@ -164,6 +176,12 @@ def render_pipeline_resultados_tab() -> None:
             "Tras **procesamiento Spark** (`procesamiento_grafos`), las tablas operativas se rellenan en "
             f"`{KEYSPACE}`."
         )
+        with st.expander("Qué hace Spark aquí (resumen)", expanded=False):
+            st.markdown(
+                "- Construye un **grafo** (nodos/aristas) y aplica **autosanación** (bloqueos fuera, congestión penaliza).\n"
+                "- Calcula **PageRank** para priorizar criticidad.\n"
+                "- Persiste el resultado operativo en Cassandra para lectura rápida desde el dashboard."
+            )
         cas = snap["cassandra"]
         if cas.get("ok"):
             rows = []
@@ -175,6 +193,10 @@ def render_pipeline_resultados_tab() -> None:
             if rows:
                 st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
             st.success("Lectura Cassandra OK.")
+            st.caption(
+                "Pista: si `pagerank_nodos` está vacío pero `nodos_estado` tiene filas, revisa la etapa de "
+                "cálculo/guardado de PageRank en Spark (o si Cassandra se reinició entre pasos)."
+            )
         else:
             st.error(cas.get("error", "No se pudo conectar a Cassandra."))
 
