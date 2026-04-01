@@ -24,6 +24,7 @@
 | [MANUAL_USUARIO_GRAFICO.md](MANUAL_USUARIO_GRAFICO.md) | Guía visual rápida: buscador semántico, servicios, informes PDF y flujo operativo |
 | [MANUAL_DESARROLLADOR.md](MANUAL_DESARROLLADOR.md) | Extensión técnica, módulos, endpoints, seguridad SQL/CQL y UML |
 | [NOTIFICACIONES_EMAIL_TELEGRAM.md](NOTIFICACIONES_EMAIL_TELEGRAM.md) | Correo SMTP (`SIMLOG_SMTP_*`) y Telegram (`SIMLOG_TELEGRAM_*`): variables, módulos y prueba manual |
+| [ESTUDIO_CAMBIOS_UI_PIPELINE_2026_04.md](ESTUDIO_CAMBIOS_UI_PIPELINE_2026_04.md) | Estudio técnico de cambios recientes (UI, ingesta, Spark, NiFi, Hive/Airflow) con checklist de validación |
 
 ## Diagramas
 
