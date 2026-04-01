@@ -604,7 +604,9 @@ def iniciar_hive() -> str:
     log_path = Path(os.environ.get("SIMLOG_HIVE_LOG", "/tmp/hadoop/hiveserver2-daemon.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pid_path = hh / "conf" / "hiveserver2.pid" if hh.exists() else Path("/tmp/hiveserver2.pid")
+    # Hive usa `HIVE_CONF_DIR/hiveserver2.pid` (ver `bin/ext/hiveserver2.sh`).
+    # Si limpiamos otro fichero, el launcher puede seguir creyendo que hay una instancia viva.
+    pid_path = (conf_dir / "hiveserver2.pid") if conf_dir else (hh / "conf" / "hiveserver2.pid")
     if pid_path.exists():
         try:
             old_pid = int(pid_path.read_text(encoding="utf-8").strip())

@@ -386,3 +386,10 @@ Muestra:
 2. Verifica HiveServer2 (pestaña **Resultados pipeline** o **Verificación técnica**).
 3. Si Hive no responde, el núcleo del proyecto igual valida con Cassandra (tiempo casi real).
 
+**Si HiveServer2 (JDBC 10000) no arranca y el log dice “Stop it first”**: puede quedar un PID stale que bloquea el arranque. Arreglo rápido:
+
+```bash
+rm -f ~/proyecto_transporte_global/hive/conf/hiveserver2.pid
+python ~/proyecto_transporte_global/scripts/simlog_stack.py start
+```
+

@@ -128,4 +128,11 @@ airflow dags trigger dag_arranque_servicios_smart_grid
 - Si no ves DAGs nuevos: ejecuta `airflow dags reserialize` y refresca la UI.
 - Si un DAG falla por rutas/entorno: verifica `AIRFLOW_HOME`, `HADOOP_HOME`, `KAFKA_HOME`, `SPARK_HOME`, `HIVE_HOME`, `NIFI_HOME`.
 - Si `dag_comprobar_servicios_simlog` falla: revisa puertos (`9870`, `9092`, `9042`, `7077`, `10000`, `8088`, `8443`/`8080`) y levanta con el DAG de arranque.
-- **Hive (10000) no arranca**: el script usa `HADOOP_CLASSPATH` vacío y escribe en `/tmp/hadoop/hiveserver2-daemon.log`. Si el log habla de Derby bloqueada, cierra procesos Hive viejos y revisa locks en el directorio del metastore (según `hive-site.xml`). Opcional: `SIMLOG_HIVE_MAX_WAIT_SEC`, `SIMLOG_HIVE_CONF_DIR`, `SIMLOG_HIVE_LOG`.
+- **Hive (10000) no arranca**: el script usa `HADOOP_CLASSPATH` vacío y escribe en `/tmp/hadoop/hiveserver2-daemon.log`.
+  - Si el log dice `HiveServer2 running as process <pid>. Stop it first.` pero el puerto **10000** sigue inactivo, suele ser un **PID stale** en `HIVE_CONF_DIR/hiveserver2.pid` (en este repo: `~/proyecto_transporte_global/hive/conf/hiveserver2.pid`). Arreglo rápido:
+    ```bash
+    rm -f ~/proyecto_transporte_global/hive/conf/hiveserver2.pid
+    python ~/proyecto_transporte_global/scripts/simlog_stack.py start
+    ```
+  - Si el log habla de **Derby bloqueada** (`db.lck`, `Another instance of Derby`), cierra procesos Hive viejos y revisa locks en el directorio del metastore (según `hive-site.xml`).
+  - Opcional: `SIMLOG_HIVE_MAX_WAIT_SEC`, `SIMLOG_HIVE_CONF_DIR`, `SIMLOG_HIVE_LOG`.
