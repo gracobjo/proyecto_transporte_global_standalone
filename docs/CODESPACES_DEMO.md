@@ -23,7 +23,8 @@ Este script hace:
 - crea `.env` desde `.env.example` si no existe
 - arranca servicios Docker de demo (`cassandra kafka` por defecto, configurable)
 - intenta inicializar esquema Cassandra (`cassandra/esquema_logistica.cql`)
-- ejecuta una ingesta inicial (si no la desactivas)
+- ejecuta una ingesta inicial (si no la desactivas). En Codespaces, por defecto la ejecuta **dentro del contenedor `app`**
+  para que Kafka/WebHDFS resuelvan hostnames del compose (`kafka`, `namenode`, `datanode`).
 - arranca Streamlit en `0.0.0.0:8501`
 
 ## 3) Abrir la app
@@ -49,6 +50,13 @@ SIMLOG_DEMO_DOCKER_SERVICES="namenode datanode cassandra kafka" bash scripts/dem
 
 ```bash
 SIMLOG_DEMO_SKIP_INGESTA=1 bash scripts/demo_codespaces.sh
+```
+
+- Para forzar que la ingesta inicial se ejecute en el **host** (no recomendado en Codespaces por `advertised.listeners` de Kafka
+  y redirects WebHDFS), desactiva el modo contenedor:
+
+```bash
+SIMLOG_DEMO_INGESTA_EN_CONTENEDOR=0 bash scripts/demo_codespaces.sh
 ```
 
 - Para usar otro puerto:

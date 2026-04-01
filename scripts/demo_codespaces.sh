@@ -40,6 +40,7 @@ PORT="${PORT:-8501}"
 DEMO_DOCKER="${SIMLOG_DEMO_DOCKER:-1}"
 DEMO_DOCKER_SERVICES="${SIMLOG_DEMO_DOCKER_SERVICES:-cassandra kafka}"
 DEMO_INIT_CASSANDRA="${SIMLOG_DEMO_INIT_CASSANDRA:-1}"
+DEMO_INGESTA_EN_CONTENEDOR="${SIMLOG_DEMO_INGESTA_EN_CONTENEDOR:-1}"
 
 if [[ ! -d "$VENV_DIR" ]]; then
   log "Creando entorno virtual en $VENV_DIR"
@@ -73,6 +74,17 @@ if [[ "$DEMO_DOCKER" == "1" ]]; then
     if ! docker compose up -d ${DEMO_DOCKER_SERVICES}; then
       warn "No se pudieron arrancar los servicios Docker (${DEMO_DOCKER_SERVICES}). Continuo en modo solo-UI."
     else
+      # En Codespaces, el proceso Python corre en el host del workspace (no dentro de la red Docker).
+      # Por eso, los hostnames de contenedores (p. ej. kafka/namenode) no siempre resuelven.
+      # Ajustamos defaults para que ingesta/verificación usen puertos publicados en localhost.
+      if [[ "$DEMO_DOCKER_SERVICES" == *"kafka"* ]]; then
+        export KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-localhost:9092}"
+      fi
+      if [[ "$DEMO_DOCKER_SERVICES" == *"namenode"* ]]; then
+        export HDFS_NAMENODE="${HDFS_NAMENODE:-localhost:9000}"
+        # Forzamos WebHDFS al NameNode expuesto (evita redirects a datanode no resoluble desde el host).
+        export SIMLOG_WEBHDFS_URL="${SIMLOG_WEBHDFS_URL:-http://localhost:9870}"
+      fi
       if [[ "$DEMO_INIT_CASSANDRA" == "1" ]] && [[ "$DEMO_DOCKER_SERVICES" == *"cassandra"* ]]; then
         if [[ -f "cassandra/esquema_logistica.cql" ]]; then
           log "Inicializando esquema Cassandra (idempotente si ya existe)."
@@ -95,8 +107,24 @@ fi
 
 if [[ "${SIMLOG_DEMO_SKIP_INGESTA:-0}" != "1" ]]; then
   log "Generando snapshot de ingesta (python -m ingesta.ingesta_kdd)"
-  if ! python -m ingesta.ingesta_kdd; then
-    warn "La ingesta fallo. Continuo con Streamlit para demo de UI."
+  if [[ "$DEMO_DOCKER" == "1" ]] && have_cmd docker && [[ "$DEMO_INGESTA_EN_CONTENEDOR" == "1" ]]; then
+    # Importante en Codespaces: Kafka se anuncia como `kafka:9092` (advertised listeners) y WebHDFS redirige a `datanode:*`.
+    # Desde el host del workspace, esos hostnames no resuelven → timeouts. Ejecutar la ingesta dentro del compose lo evita.
+    if docker compose config --services 2>/dev/null | grep -qx "app"; then
+      log "Ingesta dentro de Docker (servicio app) para resolver kafka/namenode/datanode."
+      if ! docker compose run --rm --no-deps app python -m ingesta.ingesta_kdd; then
+        warn "La ingesta (en contenedor) fallo. Continuo con Streamlit para demo de UI."
+      fi
+    else
+      warn "No existe el servicio 'app' en docker compose; ejecuto ingesta en el host (puede fallar en Codespaces)."
+      if ! python -m ingesta.ingesta_kdd; then
+        warn "La ingesta fallo. Continuo con Streamlit para demo de UI."
+      fi
+    fi
+  else
+    if ! python -m ingesta.ingesta_kdd; then
+      warn "La ingesta fallo. Continuo con Streamlit para demo de UI."
+    fi
   fi
 else
   log "SIMLOG_DEMO_SKIP_INGESTA=1 -> se omite la ingesta inicial."
