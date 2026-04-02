@@ -19,6 +19,10 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW_HOME: /opt/airflow
+      # Repo montado en ./ → rutas de ingesta/procesamiento en los DAGs
+      SIMLOG_PROJECT_ROOT: /opt/proyecto_transporte_global
+      # Este compose no levanta NameNode; sin esto la tarea verificar_hdfs falla
+      SIMLOG_SKIP_HDFS_CHECK: "1"
     volumes:
       # Metadatos y logs de Airflow en el host
       - ./docker/airflow/airflow_home:/opt/airflow

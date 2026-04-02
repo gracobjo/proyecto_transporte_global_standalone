@@ -15,6 +15,25 @@ BASE = Path(__file__).resolve().parent.parent
 WORK_KDD = BASE / "reports" / "kdd" / "work"
 
 
+def pipeline_hdfs_ls_timeout_sec() -> int:
+    """
+    Segundos para `hdfs dfs -ls` en la pestaña de resultados del pipeline (Streamlit).
+
+    El cliente HDFS arranca JVM y puede bloquearse si el NameNode va lento o hay muchos
+    ficheros; 20–30 s suele ser insuficiente. Por defecto 60 s; máximo 600 s.
+
+    Variable: ``SIMLOG_PIPELINE_HDFS_TIMEOUT_SEC``.
+    """
+    raw = (os.environ.get("SIMLOG_PIPELINE_HDFS_TIMEOUT_SEC") or "").strip()
+    if not raw:
+        return 60
+    try:
+        v = int(raw)
+    except ValueError:
+        return 60
+    return max(10, min(v, 600))
+
+
 def _run(cmd: List[str], timeout: int = 25) -> Tuple[int, str, str]:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -81,9 +100,14 @@ def leer_ultima_ingesta() -> Dict[str, Any]:
     return out
 
 
-def hdfs_listado_json(ruta: str, max_items: int = 8, timeout: int = 20) -> Dict[str, Any]:
+def hdfs_listado_json(
+    ruta: str,
+    max_items: int = 8,
+    timeout: Optional[int] = None,
+) -> Dict[str, Any]:
     """Lista JSON en HDFS (backup ingesta) con nombre y tamaño aproximado."""
-    code, stdout, stderr = _run(["hdfs", "dfs", "-ls", ruta], timeout=timeout)
+    t = timeout if timeout is not None else pipeline_hdfs_ls_timeout_sec()
+    code, stdout, stderr = _run(["hdfs", "dfs", "-ls", ruta], timeout=t)
     if code != 0:
         return {
             "ok": False,
@@ -477,16 +501,21 @@ def obtener_snapshot_pipeline(
     incluir_hive: bool = True,
     kafka_modo: str = "completo",
     hdfs_max_items: int = 8,
-    hdfs_timeout: int = 20,
+    hdfs_timeout: Optional[int] = None,
     kafka_timeout_describe: int = 20,
     kafka_timeout_list: int = 15,
 ) -> Dict[str, Any]:
     """
     Un solo dict con todo lo necesario para la pestaña de resultados.
+
+    ``hdfs_timeout``: segundos para ``hdfs dfs -ls``; si es ``None``, usa
+    :func:`pipeline_hdfs_ls_timeout_sec` (por defecto 60 s, configurable con
+    ``SIMLOG_PIPELINE_HDFS_TIMEOUT_SEC``).
     """
+    ht = hdfs_timeout if hdfs_timeout is not None else pipeline_hdfs_ls_timeout_sec()
     return {
         "ingesta_local": leer_ultima_ingesta(),
-        "hdfs_backup": hdfs_listado_json(hdfs_path, max_items=hdfs_max_items, timeout=hdfs_timeout),
+        "hdfs_backup": hdfs_listado_json(hdfs_path, max_items=hdfs_max_items, timeout=ht),
         "kafka": kafka_resumen_topic(
             kafka_bootstrap,
             topic,

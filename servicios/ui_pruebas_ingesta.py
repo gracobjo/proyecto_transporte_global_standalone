@@ -4,10 +4,16 @@ Pestaña Streamlit: trazabilidad y registro de pruebas de ingesta.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from servicios.kdd_informes_lectura import (
+    catalogo_fases_kdd,
+    informes_por_run_id,
+    listar_run_ids_con_informes,
+)
 from servicios.pruebas_ingesta import (
     REGISTRO_PATH,
     capturar_snapshot_pruebas,
@@ -45,7 +51,7 @@ def render_pruebas_ingesta_tab() -> None:
     st.subheader("Pruebas de ingesta y trazabilidad")
     st.caption(
         "El **JSON** solo se rellena solo con **botones del sidebar** (Streamlit) o al **registrar** manualmente. "
-        "Las corridas **Airflow** dejan informes en `reports/kdd/`; abajo se **detectan** automáticamente "
+        "Las ejecuciones **Airflow** dejan informes en `reports/kdd/`; abajo se **detectan** automáticamente "
         "(fase 99 = cadena completa) y puedes **añadirlas al historial** sin repetir el trabajo."
     )
 
@@ -71,7 +77,7 @@ def render_pruebas_ingesta_tab() -> None:
         help="Número de informes informe_99*.md encontrados bajo reports/kdd/ (cada uno = una cadena llegó a fase 99).",
     )
 
-    st.markdown("#### Corridas Airflow — cadenas KDD completas (informe fase 99)")
+    st.markdown("#### Ejecuciones Airflow — cadenas KDD completas (informe fase 99)")
     st.info(
         "Si ejecutaste **simlog_kdd_00 → … → 99** en Airflow, cada fase escribe su carpeta bajo `reports/kdd/`. "
         "Cuando existe **`informe_99_*` (consulta final)** se considera que **esa cadena terminó**. "
@@ -82,15 +88,15 @@ def render_pruebas_ingesta_tab() -> None:
         st.dataframe(pd.DataFrame(air_rows), width="stretch", hide_index=True)
         opciones = {f"{r['modificado_utc']} — {r['carpeta_run_id'][:56]}": r for r in air_rows}
         clave = st.selectbox(
-            "Elegir corrida para añadir al registro JSON",
+            "Elegir ejecución para añadir al registro JSON",
             options=list(opciones.keys()),
             key="sel_airflow_cadena",
         )
-        if st.button("Registrar corrida seleccionada en el historial", key="btn_reg_airflow"):
+        if st.button("Registrar ejecución seleccionada en el historial", key="btn_reg_airflow"):
             ruta = opciones[clave]["ruta"]
             reg = leer_registro_pruebas()
             if any(ruta in (x.get("detalle") or "") for x in reg):
-                st.warning("Esta corrida ya consta en el registro (misma ruta de informe).")
+                st.warning("Esta ejecución ya consta en el registro (misma ruta de informe).")
             else:
                 registrar_prueba_airflow_cadena_kdd_completa(ruta_informe_f99=ruta)
                 st.session_state["snapshot_pruebas_ingesta"] = capturar_snapshot_pruebas()
@@ -101,6 +107,68 @@ def render_pruebas_ingesta_tab() -> None:
             "No se encontró ningún `informe_99*.md` bajo `reports/kdd/` (excl. `work`). "
             "Ejecuta la cadena hasta `simlog_kdd_99_consulta_final` o comprueba la ruta del proyecto."
         )
+
+    st.markdown("#### Informes KDD por ejecución (HTML / Markdown)")
+    st.caption(
+        "Cada DAG `simlog_kdd_*` escribe `informe_<fase>_<timestamp>.html` y `.md` bajo "
+        "`reports/kdd/<run_id>/`. Documentación: `docs/KDD_INFORMES_Y_FASES.md`."
+    )
+    runs_inf = listar_run_ids_con_informes()
+    if not runs_inf:
+        st.info("Aún no hay carpetas con informes en `reports/kdd/` (salvo vacío o solo `work`).")
+    else:
+        run_sel = st.selectbox(
+            "Run (carpeta Airflow / manual)",
+            options=runs_inf,
+            index=0,
+            key="kdd_informes_run_id",
+            help="Orden: más reciente primero.",
+        )
+        blob = informes_por_run_id(run_sel)
+        if blob.get("ok"):
+            st.caption(f"**Directorio:** `{blob['base_dir']}`")
+            rows_link = []
+            for i, h in enumerate(blob.get("html") or []):
+                p = Path(h["ruta"])
+                uri = p.as_uri() if p.is_file() else ""
+                rows_link.append(
+                    {
+                        "tipo": "HTML",
+                        "archivo": h["nombre"],
+                        "ruta": h["ruta"],
+                        "uri": uri,
+                    }
+                )
+                if uri:
+                    st.link_button(
+                        f"Abrir en navegador · {h['nombre']}",
+                        uri,
+                        key=f"kdd_open_html_{run_sel}_{i}",
+                        help="Si el navegador bloquea file://, copia la ruta o abre el fichero desde el IDE.",
+                    )
+            for j, m in enumerate(blob.get("markdown") or []):
+                p = Path(m["ruta"])
+                rows_link.append({"tipo": "Markdown", "archivo": m["nombre"], "ruta": m["ruta"], "uri": ""})
+                try:
+                    txt = p.read_text(encoding="utf-8")
+                    st.download_button(
+                        f"Descargar {m['nombre']}",
+                        data=txt,
+                        file_name=m["nombre"],
+                        mime="text/markdown",
+                        key=f"kdd_dl_md_{run_sel}_{j}",
+                    )
+                except OSError:
+                    st.caption(f"No se pudo leer: `{m['ruta']}`")
+            if rows_link:
+                df_links = pd.DataFrame([{k: v for k, v in r.items() if k != "uri"} for r in rows_link])
+                with st.expander("Tabla de rutas (copiar)", expanded=False):
+                    st.dataframe(df_links, width="stretch", hide_index=True)
+        else:
+            st.warning(blob.get("error", "Error al listar informes."))
+
+    with st.expander("Catálogo de fases KDD (criterios y artefactos work/)", expanded=False):
+        st.dataframe(pd.DataFrame(catalogo_fases_kdd()), width="stretch", hide_index=True)
 
     st.markdown("#### Pipeline ejecutado desde este front (Streamlit)")
     st.info(

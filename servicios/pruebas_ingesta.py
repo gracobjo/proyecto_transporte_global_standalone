@@ -167,7 +167,7 @@ def tipos_prueba_kdd_resumen() -> List[Dict[str, str]]:
             "tipo": "Airflow (maestro o KDD)",
             "objetivo": "Ingesta/Spark programados o cadena manual de fases",
             "desde_esta_web": "Disparo en UI Airflow; aquí se **listan** cadenas con informe fase 99 y puedes **añadir al JSON**",
-            "resultado_esperado": "DAG en verde; tabla «Corridas Airflow» con `informe_99_*.md` en `reports/kdd/`",
+            "resultado_esperado": "DAG en verde; tabla «Ejecuciones Airflow» con `informe_99_*.md` en `reports/kdd/`",
         },
     ]
 
@@ -194,7 +194,7 @@ def resumen_ejecutivo_registro() -> Dict[str, Any]:
 
 def listar_cadenas_kdd_airflow_recientes(limit: int = 20) -> List[Dict[str, Any]]:
     """
-    Lista corridas Airflow que completaron la fase 99 (informe `informe_99_*` en `reports/kdd/`).
+    Lista ejecuciones Airflow que completaron la fase 99 (informe `informe_99_*` en `reports/kdd/`).
     Cada DAG `simlog_kdd_*` escribe su carpeta `manual__...`; la fase 99 confirma que la cadena llegó al final.
     """
     if not REPORTS_KDD.is_dir():

@@ -382,6 +382,9 @@ def comprobar_hive() -> Dict[str, Any]:
         "id": "hive",
         "nombre": "HiveServer2",
         "activo": ok_hs2 and ok_meta,
+        "activo_jdbc": ok_hs2,
+        "activo_metastore": ok_meta,
+        "necesita_solo_hiveserver2": ok_meta and not ok_hs2,
         "detalle": (
             f"JDBC {PORT_HIVE}: {'activo' if ok_hs2 else 'inactivo'} · "
             f"Metastore {PORT_HIVE_METASTORE}: {'activo' if ok_meta else 'inactivo'}"
@@ -667,6 +670,19 @@ def iniciar_hive() -> str:
         "HiveServer2 se lanzó pero no abrió el puerto JDBC a tiempo. "
         f"Revisa {log_path}.{extra} Últimas líneas del log:\n---\n{tail}\n---"
     )
+
+
+def ensure_hiveserver2() -> str:
+    """
+    Asegura HiveServer2 (puerto JDBC) y el metastore. Idempotente: si ya responden, no hace nada.
+
+    Caso habitual tras reinicios o Spark/Airflow: **metastore (9083) arriba** y **HiveServer2 (10000) abajo**.
+    Equivale a «Iniciar Hive» en la UI pero con nombre explícito para scripts y cron.
+
+    Para dejar HS2 **persistente** tras reboot, instala la unidad systemd
+    `orquestacion/systemd/simlog-hiveserver2.service` (ver comentarios en el fichero).
+    """
+    return iniciar_hive()
 
 
 def iniciar_hive_metastore() -> str:

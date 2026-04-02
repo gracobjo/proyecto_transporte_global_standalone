@@ -1,0 +1,31 @@
+# Apache HiveServer2 — arranque persistente tras reboot (usuario hadoop).
+#
+# Instalación (ajusta rutas):
+#   chmod +x /home/hadoop/proyecto_transporte_global/scripts/hiveserver2_systemd_exec.sh
+#   mkdir -p ~/.config/systemd/user
+#   cp orquestacion/systemd/simlog-hiveserver2.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now simlog-hiveserver2.service
+#
+# Requiere que el metastore (9083) esté disponible; si usas solo Derby embebido,
+# arranca antes el metastore (p. ej. otro servicio o el mismo stack).
+#
+# Logs: SIMLOG_HIVE_LOG (por defecto /tmp/hadoop/hiveserver2-daemon.log)
+
+[Unit]
+Description=SIMLOG HiveServer2 (JDBC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/hadoop/proyecto_transporte_global
+Environment=HIVE_CONF_DIR=/home/hadoop/proyecto_transporte_global/hive/conf
+Environment=HIVE_HOME=/home/hadoop/apache-hive-4.2.0-bin
+Environment=HIVE_METASTORE_URIS=thrift://127.0.0.1:9083
+ExecStart=/home/hadoop/proyecto_transporte_global/scripts/hiveserver2_systemd_exec.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

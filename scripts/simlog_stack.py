@@ -19,6 +19,7 @@ from servicios.gestion_servicios import (  # noqa: E402
     ejecutar_iniciar,
     esperar_cassandra,
     esperar_hiveserver2,
+    ensure_hiveserver2,
     parar_todos_servicios,
 )
 
@@ -30,6 +31,10 @@ def main() -> int:
     sub.add_parser("start", help="Arranca servicios uno tras otro (orden definido en gestion_servicios)")
     sub.add_parser("status", help="Lista estado de cada servicio")
     sub.add_parser("stop", help="Para servicios uno tras otro (orden inverso)")
+    sub.add_parser(
+        "ensure-hive",
+        help="Asegura HiveServer2 (JDBC) y metastore; útil si 9083 está arriba y 10000 no",
+    )
 
     args = p.parse_args()
 
@@ -81,6 +86,12 @@ def main() -> int:
             ok = "OK" if r.get("activo") else "no"
             print(f"{r['id']}: {ok} — {r.get('detalle', '')}")
         return 0
+
+    if args.cmd == "ensure-hive":
+        print(ensure_hiveserver2(), flush=True)
+        ok_h, msg_h = esperar_hiveserver2(60)
+        print(f"comprobación: {msg_h}", flush=True)
+        return 0 if ok_h else 1
 
     if args.cmd == "stop":
         print("Parada secuencial del stack…", flush=True)

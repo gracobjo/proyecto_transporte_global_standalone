@@ -21,7 +21,31 @@ import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-PROJECT_BASE = os.path.dirname(os.path.dirname(__file__))
+from pathlib import Path
+
+
+def _project_base() -> Path:
+    here = Path(__file__).resolve()
+    if here.parent.name == "orquestacion":
+        return here.parent.parent
+    env_root = os.environ.get("SIMLOG_PROJECT_ROOT", "").strip()
+    if env_root:
+        return Path(env_root)
+    docker_mount = Path("/opt/proyecto_transporte_global")
+    if docker_mount.exists():
+        return docker_mount
+    # Fallback: asumir layout clásico `.../AIRFLOW_HOME/dags/<este_fichero>`
+    # y que el repo está junto a AIRFLOW_HOME (solo si existe).
+    guess = here.parent.parent
+    if (guess / "config.py").exists():
+        return guess
+    raise RuntimeError(
+        "No se pudo determinar la raíz del proyecto para importar `config.py`. "
+        "Define SIMLOG_PROJECT_ROOT o monta el repo en /opt/proyecto_transporte_global."
+    )
+
+
+PROJECT_BASE = str(_project_base())
 if PROJECT_BASE not in sys.path:
     sys.path.insert(0, PROJECT_BASE)
 
