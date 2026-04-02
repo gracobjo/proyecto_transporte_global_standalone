@@ -50,8 +50,23 @@ from servicios.notificaciones_eventos import notificar_ejecucion_pipeline
 from servicios.cuadro_mando_ui import render_cuadro_mando_tab
 from servicios.ui_gestion_servicios import render_panel_gestion_servicios
 from servicios.ui_servicios_web import render_sidebar_enlaces_ui
-from servicios.gestion_servicios import arrancar_stack_basico, arrancar_todos_servicios
-from servicios.gestion_servicios import ORDEN_SERVICIOS, PORT_AIRFLOW, PORT_API, PORT_CASSANDRA, PORT_FAQ_IA, PORT_HDFS, PORT_HIVE, PORT_KAFKA, PORT_NIFI_HTTP, PORT_NIFI_HTTPS, PORT_SPARK_MASTER
+from servicios.gestion_servicios import (
+    ORDEN_SERVICIOS,
+    PORT_AIRFLOW,
+    PORT_API,
+    PORT_CASSANDRA,
+    PORT_FAQ_IA,
+    PORT_HDFS,
+    PORT_HIVE,
+    PORT_KAFKA,
+    PORT_NIFI_HTTP,
+    PORT_NIFI_HTTPS,
+    PORT_SPARK_MASTER,
+    arrancar_stack_basico,
+    arrancar_todos_servicios,
+    comprobar_hive,
+    ensure_hiveserver2,
+)
 from servicios.ui_rutas_hibridas import render_rutas_hibridas_tab
 from servicios.ui_pipeline_resultados import render_pipeline_resultados_tab
 from servicios.ui_asistente_flota import render_asistente_flota_tab
@@ -548,6 +563,33 @@ def main() -> None:
         estado_stack = estado_servicios()
         for nombre, etiqueta in estado_stack.items():
             st.markdown(f"{etiqueta} **{nombre}**")
+
+        _hive_ensure_out = st.session_state.pop("last_ensure_hive_msg", None)
+        if _hive_ensure_out:
+            txt = str(_hive_ensure_out)[:4000]
+            if any(
+                s in txt
+                for s in ("escuchando", "ya parece activo", "ya estaba activo", "HiveServer2 activo")
+            ):
+                st.success(txt)
+            else:
+                st.warning(txt)
+
+        hive_chk = comprobar_hive()
+        if not hive_chk.get("activo") and hive_chk.get("necesita_solo_hiveserver2"):
+            st.warning(
+                "Metastore (9083) **sí** responde, pero HiveServer2 (JDBC **10000**) **no**. "
+                "Sin HS2 el histórico Hive del dashboard no consulta."
+            )
+            if st.button(
+                "▶ Reparar: levantar HiveServer2",
+                help="Llama a ensure_hiveserver2() — mismo efecto que «Iniciar» en Servicios → Hive.",
+                type="primary",
+                key="btn_ensure_hiveserver2_sidebar",
+            ):
+                with st.spinner("Arrancando HiveServer2 (puede tardar varios minutos la primera vez)…"):
+                    st.session_state["last_ensure_hive_msg"] = ensure_hiveserver2()
+                st.rerun()
 
         todos_ok = all(
             v.startswith("✅") or "Activo" in v for v in estado_stack.values()

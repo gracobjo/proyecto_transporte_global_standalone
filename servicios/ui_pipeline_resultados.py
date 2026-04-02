@@ -22,6 +22,7 @@ from servicios.pipeline_verificacion import (
     hive_resumen,
     kafka_crear_topic_si_falta,
     obtener_snapshot_pipeline,
+    pipeline_hdfs_ls_timeout_sec,
 )
 
 
@@ -113,7 +114,6 @@ def render_pipeline_resultados_tab() -> None:
                 incluir_hive=incluir_hive,
                 kafka_modo="rapido",
                 hdfs_max_items=3,
-                hdfs_timeout=28,
                 kafka_timeout_describe=25,
                 kafka_timeout_list=22,
             )
@@ -227,6 +227,10 @@ def render_pipeline_resultados_tab() -> None:
         st.divider()
         h = snap["hdfs_backup"]
         st.markdown(f"**Ruta HDFS ingesta:** `{HDFS_BACKUP_PATH}`")
+        st.caption(
+            f"Timeout listado HDFS: **{pipeline_hdfs_ls_timeout_sec()} s** "
+            "(variable `SIMLOG_PIPELINE_HDFS_TIMEOUT_SEC`; por defecto 60)."
+        )
         if h.get("ok"):
             st.success(f"HDFS accesible — JSON listados: **{h.get('total_json_listados', 0)}**")
             ult = h.get("ultimos") or []
@@ -240,8 +244,9 @@ def render_pipeline_resultados_tab() -> None:
             st.error(det)
             if "timeout" in str(det).lower():
                 st.info(
-                    "Si HDFS responde lento, sube el tiempo de espera en código "
-                    "(`hdfs_timeout` en `obtener_snapshot_pipeline`) o revisa el NameNode."
+                    "Si HDFS responde lento: exporta `SIMLOG_PIPELINE_HDFS_TIMEOUT_SEC` "
+                    "(p. ej. `120`), reinicia Streamlit, y pulsa de nuevo «Actualizar». "
+                    "También revisa carga del NameNode, DNS y que `hdfs dfs -ls` responda en terminal."
                 )
 
     # --- Spark → Cassandra ---

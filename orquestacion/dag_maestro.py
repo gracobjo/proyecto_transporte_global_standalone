@@ -18,16 +18,36 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 
-BASE = Path(__file__).resolve().parent.parent
+def _project_base() -> Path:
+    """
+    Devuelve la raíz del repositorio para ejecutar scripts del proyecto.
+
+    Nota: cuando Airflow carga este fichero desde `AIRFLOW_HOME/dags`, `__file__` ya no está en
+    `.../orquestacion/` y `parent.parent` apuntaría a `/opt/airflow` (rompiendo rutas relativas).
+    """
+    here = Path(__file__).resolve()
+    if here.parent.name == "orquestacion":
+        return here.parent.parent
+    env_root = os.environ.get("SIMLOG_PROJECT_ROOT", "").strip()
+    if env_root:
+        return Path(env_root)
+    docker_mount = Path("/opt/proyecto_transporte_global")
+    if docker_mount.exists():
+        return docker_mount
+    raise RuntimeError(
+        "No se pudo determinar la raíz del proyecto. "
+        "Define SIMLOG_PROJECT_ROOT (ruta al repo) o monta el repo en /opt/proyecto_transporte_global."
+    )
+
+
+BASE = _project_base()
+
+_orq = Path(__file__).resolve().parent
+if str(_orq) not in sys.path:
+    sys.path.insert(0, str(_orq))
+from hdfs_check_airflow import verificar_hdfs_airflow as verificar_hdfs  # noqa: E402
 
 # Verificación de servicios
-def verificar_hdfs(**context):
-    import subprocess
-    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True)
-    if r.returncode != 0:
-        raise RuntimeError("HDFS no disponible")
-    return "OK"
-
 def verificar_kafka(**context):
     import socket
     for srv in ["localhost:9092", "127.0.0.1:9092"]:

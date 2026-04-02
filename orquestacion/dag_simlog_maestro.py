@@ -8,16 +8,35 @@ cuando quieres. Este DAG está **programado** por defecto **cada 15 minutos**: e
 ingesta y luego procesamiento (incluye Hive si el cluster responde). Sirve para demo/operación continua
 sin encadenar fases.
 
+**No solapar con `simlog_kdd_05_interpretacion`:** la tarea ``ejecutar_procesamiento`` llama a
+``procesamiento_grafos.main()``, igual que la fase KDD 5 (``fase_kdd_spark interpretacion``). Si ambos
+corren a la vez, compiten por Spark, Hive/Metastore y Cassandra y parece que «se quedan colgados».
+El repo aplica un **flock** compartido (``orquestacion/procesamiento_singleton.py``) para serializar
+ese paso en el mismo host. Aun así, conviene **pausar** uno de los dos DAGs si no necesitas ambos.
+
 **Despliegue Airflow** (symlink recomendado):
 
   ln -sf /ruta/al/proyecto/orquestacion/dag_simlog_maestro.py \\
          "$AIRFLOW_HOME/dags/simlog/dag_simlog_maestro.py"
 
 Si el .py se copia fuera de `orquestacion/`, definir `SIMLOG_PROJECT_ROOT`.
+
+Modo **local sin Docker** (solo ingesta, sin HDFS/Kafka/Cassandra/Spark):
+
+  export SIMLOG_AIRFLOW_LOCAL=1
+
+Equivale a omitir comprobaciones de servicios y la tarea Spark. Alternativa granular:
+`SIMLOG_SKIP_HDFS_CHECK`, `SIMLOG_SKIP_KAFKA_CHECK`, `SIMLOG_SKIP_CASSANDRA_CHECK`,
+`SIMLOG_AIRFLOW_SKIP_PROCESAMIENTO`.
+
+Timeout de la tarea Spark: `SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC` (segundos; por defecto **3600**,
+mínimo 300). Si ves `TimeoutExpired` tras 900 s en despliegues antiguos, sube la variable o
+actualiza este DAG.
 """
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -32,26 +51,41 @@ def _project_base() -> Path:
     env_root = os.environ.get("SIMLOG_PROJECT_ROOT", "").strip()
     if env_root:
         return Path(env_root)
+    docker_mount = Path("/opt/proyecto_transporte_global")
+    if docker_mount.exists():
+        return docker_mount
+    for p in here.parents:
+        if (p / "ingesta").is_dir() and (p / "config.py").is_file():
+            return p
     raise RuntimeError(
-        "Este DAG debe vivir en proyecto/.../orquestacion/ (symlink desde Airflow) "
-        "o definir la variable de entorno SIMLOG_PROJECT_ROOT con la raíz del repositorio."
+        "No se pudo determinar la raíz del repositorio. "
+        "Usa un symlink desde orquestacion/dag_simlog_maestro.py, define SIMLOG_PROJECT_ROOT "
+        "o monta el repo en /opt/proyecto_transporte_global."
     )
 
 
 BASE = _project_base()
 
+_orq = Path(__file__).resolve().parent
+if str(_orq) not in sys.path:
+    sys.path.insert(0, str(_orq))
+from hdfs_check_airflow import verificar_hdfs_airflow as verificar_hdfs  # noqa: E402
+from procesamiento_singleton import lock_procesamiento_grafos  # noqa: E402
 
-def verificar_hdfs(**context):
-    import subprocess
 
-    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True, text=True, timeout=20)
-    if r.returncode != 0:
-        msg = (r.stderr or r.stdout or "HDFS no disponible").strip()
-        raise RuntimeError(f"HDFS no disponible: {msg[:280]}")
-    return "OK"
+def _env_yes(name: str) -> bool:
+    v = (os.environ.get(name) or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _airflow_local_mode() -> bool:
+    return _env_yes("SIMLOG_AIRFLOW_LOCAL")
 
 
 def verificar_kafka(**context):
+    if _airflow_local_mode() or _env_yes("SIMLOG_SKIP_KAFKA_CHECK"):
+        return "SKIP (Kafka no requerido en modo local o por SIMLOG_SKIP_KAFKA_CHECK)"
+
     import socket
 
     for srv in ["localhost:9092", "127.0.0.1:9092"]:
@@ -68,6 +102,9 @@ def verificar_kafka(**context):
 
 
 def verificar_cassandra(**context):
+    if _airflow_local_mode() or _env_yes("SIMLOG_SKIP_CASSANDRA_CHECK"):
+        return "SKIP (Cassandra no requerida en modo local)"
+
     import socket
 
     try:
@@ -87,19 +124,29 @@ def ejecutar_ingesta(**context):
     if not venv_python.exists():
         venv_python = BASE / "venv" / "bin" / "python"
     python_bin = str(venv_python) if venv_python.exists() else "python3"
+    timeout_sec = int(
+        os.environ.get(
+            "SIMLOG_AIRFLOW_INGESTA_TIMEOUT_SEC",
+            os.environ.get("SIMLOG_INGESTA_TIMEOUT_SEC", "180"),
+        )
+    )
+    timeout_sec = max(30, timeout_sec)
     r = subprocess.run(
         [python_bin, "-m", "ingesta.ingesta_kdd"],
         env={**os.environ},
         capture_output=True,
         text=True,
         cwd=str(BASE),
-        timeout=90,
+        timeout=timeout_sec,
     )
     if r.returncode != 0:
         raise RuntimeError(f"Ingesta falló: {r.stderr or r.stdout}")
 
 
 def ejecutar_procesamiento(**context):
+    if _airflow_local_mode() or _env_yes("SIMLOG_AIRFLOW_SKIP_PROCESAMIENTO"):
+        return "SKIP (Spark/procesamiento omitido en modo local o por SIMLOG_AIRFLOW_SKIP_PROCESAMIENTO)"
+
     import subprocess
 
     venv_python = BASE / "venv_transporte" / "bin" / "python"
@@ -107,14 +154,21 @@ def ejecutar_procesamiento(**context):
         venv_python = BASE / "venv" / "bin" / "python"
     python_bin = str(venv_python) if venv_python.exists() else "python3"
     script = BASE / "procesamiento" / "procesamiento_grafos.py"
-    r = subprocess.run(
-        [python_bin, str(script)],
-        env={**os.environ, "SIMLOG_ENABLE_HIVE": "1"},
-        capture_output=True,
-        text=True,
-        cwd=str(BASE),
-        timeout=int(os.environ.get("SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC", "900")),
-    )
+    # Mismo orden de magnitud que la cadena KDD: Spark+Hive en frío suele superar 15 min.
+    try:
+        timeout_spark = int(os.environ.get("SIMLOG_AIRFLOW_SPARK_TIMEOUT_SEC", "3600"))
+    except ValueError:
+        timeout_spark = 3600
+    timeout_spark = max(300, timeout_spark)
+    with lock_procesamiento_grafos():
+        r = subprocess.run(
+            [python_bin, str(script)],
+            env={**os.environ, "SIMLOG_ENABLE_HIVE": "1"},
+            capture_output=True,
+            text=True,
+            cwd=str(BASE),
+            timeout=timeout_spark,
+        )
     if r.returncode != 0:
         raise RuntimeError(f"Procesamiento falló: {r.stderr or r.stdout}")
 
@@ -123,7 +177,7 @@ default_args = {
     "owner": "simlog",
     "depends_on_past": False,
     "email_on_failure": False,
-    "email_on_retries": False,
+    "email_on_retry": False,
     "retries": 1,
     "retry_delay": timedelta(minutes=2),
 }

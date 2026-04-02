@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
+# default-jre-headless crea el symlink default-java (hdfs dfs lo exige)
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+RUN test -x "${JAVA_HOME}/bin/java"
+
 # Cliente Hadoop (solo binarios para hdfs dfs)
 ENV HADOOP_VER=3.3.6
 RUN curl -sL "https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VER}/hadoop-${HADOOP_VER}.tar.gz" | tar xz -C /opt \
@@ -26,7 +30,8 @@ RUN curl -sL "https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VER}
 ENV HADOOP_HOME=/opt/hadoop \
     HADOOP_CONF_DIR=/opt/hadoop/conf \
     PATH="/opt/hadoop/bin:$PATH"
-RUN mkdir -p "$HADOOP_CONF_DIR"
+RUN mkdir -p "$HADOOP_CONF_DIR" \
+    && cp "$HADOOP_HOME/etc/hadoop/log4j.properties" "$HADOOP_CONF_DIR/" 2>/dev/null || true
 
 # Copiar dependencias Python
 COPY requirements.txt ./

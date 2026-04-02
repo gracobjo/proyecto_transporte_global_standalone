@@ -153,6 +153,7 @@ with DAG(
     description=(
         "SIMLOG KDD Fase 5: Spark interpretación — fase_kdd_spark interpretacion → "
         "procesamiento_grafos.main() (lee JSON en HDFS, Cassandra, Hive con SIMLOG_ENABLE_HIVE). "
+        "No ejecutar en paralelo con simlog_maestro (mismo main(); ver procesamiento_singleton). "
         "Un solo task Airflow; no hay sub-tareas separadas HDFS/Hive en el grafo."
     ),
     schedule=None,

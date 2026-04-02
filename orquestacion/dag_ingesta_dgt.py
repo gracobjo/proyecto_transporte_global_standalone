@@ -19,7 +19,28 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 
-BASE = Path(__file__).resolve().parent.parent
+def _project_base() -> Path:
+    here = Path(__file__).resolve()
+    if here.parent.name == "orquestacion":
+        return here.parent.parent
+    env_root = os.environ.get("SIMLOG_PROJECT_ROOT", "").strip()
+    if env_root:
+        return Path(env_root)
+    docker_mount = Path("/opt/proyecto_transporte_global")
+    if docker_mount.exists():
+        return docker_mount
+    raise RuntimeError(
+        "Este DAG debe vivir en el repo (.../orquestacion/) o definir SIMLOG_PROJECT_ROOT "
+        "con la raíz del proyecto (o montar el repo en /opt/proyecto_transporte_global)."
+    )
+
+
+BASE = _project_base()
+
+_orq = Path(__file__).resolve().parent
+if str(_orq) not in sys.path:
+    sys.path.insert(0, str(_orq))
+from hdfs_check_airflow import verificar_hdfs_airflow as verificar_hdfs  # noqa: E402
 
 
 def _python_proyecto() -> str:
@@ -38,14 +59,6 @@ def _socket_check(host: str, port: int, label: str) -> str:
         raise RuntimeError(f"{label} no disponible: {exc}") from exc
     finally:
         sock.close()
-    return "OK"
-
-
-def verificar_hdfs(**context):
-    r = subprocess.run(["hdfs", "dfs", "-ls", "/"], capture_output=True, text=True, timeout=20)
-    if r.returncode != 0:
-        msg = (r.stderr or r.stdout or "HDFS no disponible").strip()
-        raise RuntimeError(f"HDFS no disponible: {msg[:280]}")
     return "OK"
 
 

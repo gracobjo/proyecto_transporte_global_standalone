@@ -8,7 +8,18 @@ Pestaña **Servicios** en `app_visualizacion.py`: **Iniciar**, **Comprobar** y *
 | Kafka | 9092 | `kafka-server-start.sh` + config | `kafka-server-stop.sh` o pkill |
 | Cassandra | 9042 | `cassandra/bin/cassandra` (proyecto) | `nodetool stopdaemon` / pkill |
 | Spark | 7077 (master) | `sbin/start-master.sh` | `stop-master.sh` / workers |
-| Hive | 10000 (HiveServer2) | `hive --service hiveserver2` | kill puerto |
+| Hive | 10000 (HiveServer2) + 9083 (metastore) | `hive --service hiveserver2` | kill puerto |
+
+### Hive: metastore vs HiveServer2
+
+El panel marca **Hive** como activo solo si **ambos** puertos responden: JDBC **10000** (HiveServer2) y **9083** (metastore). Es habitual que el metastore siga arriba y HS2 se caiga (reinicio, Spark, etc.).
+
+- **Reparación rápida (UI):** en la barra lateral aparece **«Reparar: levantar HiveServer2»** cuando 9083 está bien y 10000 no.
+- **CLI:** `python scripts/simlog_stack.py ensure-hive` o `python scripts/ensure_hiveserver2.py`.
+- **Persistente tras reboot:** unidad systemd `orquestacion/systemd/simlog-hiveserver2.service` + `scripts/hiveserver2_systemd_exec.sh` (instrucciones en el `.service`).
+- **Cron (opcional):** cada 10 min `venv_transporte/bin/python scripts/ensure_hiveserver2.py` (sale en segundos si ya está bien).
+
+Función Python: `servicios.gestion_servicios.ensure_hiveserver2()` (idempotente; equivale a **Iniciar** en Hive).
 | Airflow | 8080 (api-server) | `airflow api-server` | kill puerto + scheduler |
 | NiFi | 8443 / 8080 | `nifi.sh start` | `nifi.sh stop` |
 

@@ -218,32 +218,49 @@ def ejecutar_fase_spark(subfase: str, **context) -> Dict[str, Any]:
     if subfase == "interpretacion":
         env_extra["SIMLOG_ENABLE_HIVE"] = "1"
         detener_hive = True
-        # En modo local, HiveServer2 usa metastore Derby embebido. Si Spark intenta
-        # habilitar Hive al mismo tiempo, falla con ERROR XSDB6 (lock de Derby).
-        # Por eso, se para HS2 antes de ejecutar Spark y se reinicia al final.
-        try:
-            from servicios.gestion_servicios import parar_hive
 
-            parar_hive()
-        except Exception:
-            # Si no se puede parar, Spark volverá a fallar con el lock; lo dejamos
-            # continuar para que el error sea visible en los logs del task.
-            pass
-    r = subprocess.run(
-        [sys.executable, str(script), "--fase", subfase],
-        cwd=str(BASE),
-        capture_output=True,
-        text=True,
-        timeout=timeout_sec,
-        env={**os.environ, "PASO_15MIN": str(paso), **env_extra},
-    )
-    if detener_hive:
-        try:
-            from servicios.gestion_servicios import iniciar_hive
+    cmd = [sys.executable, str(script), "--fase", subfase]
+    env_proc = {**os.environ, "PASO_15MIN": str(paso), **env_extra}
 
-            iniciar_hive()
-        except Exception:
-            pass
+    if subfase == "interpretacion":
+        # Mismo trabajo que simlog_maestro.ejecutar_procesamiento (procesamiento_grafos.main).
+        # Serializar con flock evita dos Spark+HIVE en paralelo y bloqueos Derby/HS2.
+        from procesamiento_singleton import lock_procesamiento_grafos
+
+        with lock_procesamiento_grafos():
+            # En modo local, HiveServer2 usa metastore Derby embebido. Si Spark intenta
+            # habilitar Hive al mismo tiempo, falla con ERROR XSDB6 (lock de Derby).
+            # Por eso, se para HS2 antes de ejecutar Spark y se reinicia al final.
+            try:
+                from servicios.gestion_servicios import parar_hive
+
+                parar_hive()
+            except Exception:
+                pass
+            r = subprocess.run(
+                cmd,
+                cwd=str(BASE),
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                env=env_proc,
+            )
+            if detener_hive:
+                try:
+                    from servicios.gestion_servicios import iniciar_hive
+
+                    iniciar_hive()
+                except Exception:
+                    pass
+    else:
+        r = subprocess.run(
+            cmd,
+            cwd=str(BASE),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            env=env_proc,
+        )
     inicio = {"subfase": subfase, "paso_15min": paso}
     resultado: Dict[str, Any] = {
         "returncode": r.returncode,
