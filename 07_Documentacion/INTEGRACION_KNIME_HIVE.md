@@ -14,7 +14,9 @@ Guía práctica para conectar **KNIME Analytics Platform** al **HiveServer2** de
 | **NiFi, Spark, Airflow** | Ingesta y procesamiento | **No** para solo entrenar en KNIME |
 | **KNIME** | Cliente analítico | **No** en el servidor: instálalo en **PC del analista** (típ. 8–16 GB RAM para workflows medianos) |
 
-**Modo mínimo recomendado (equipo con poca RAM en el cluster):** levantar solo **HDFS + Metastore + HiveServer2** cuando vayas a extraer datos; el resto del stack puede permanecer parado. La pestaña **KNIME / IA avanzada** del dashboard documenta este checklist.
+**Modo mínimo recomendado (equipo con poca RAM en el cluster):** levantar solo **HDFS + Metastore + HiveServer2** cuando vayas a extraer datos; el resto del stack puede permanecer parado.
+
+En el dashboard Streamlit, pestaña **KNIME / IA avanzada**, puedes usar **«Arrancar stack mínimo (HDFS + Hive)»** y **«Parar Hive + HDFS»**, que llaman a `arrancar_stack_minimo_knime()` / `parar_stack_minimo_knime()` en `servicios/gestion_servicios.py` (misma lógica que la pestaña Servicios).
 
 ---
 

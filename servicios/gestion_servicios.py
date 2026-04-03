@@ -951,6 +951,29 @@ def arrancar_stack_basico() -> List[str]:
     return out
 
 
+def arrancar_stack_minimo_knime() -> List[str]:
+    """
+    **Solo HDFS + Hive** (metastore + HiveServer2 vía :func:`iniciar_hive`).
+    Pensado para analítica externa (p. ej. KNIME por JDBC) sin Kafka, Cassandra, Spark ni Airflow.
+    """
+    out: List[str] = []
+    out.append(f"HDFS: {iniciar_hdfs()}")
+    time.sleep(2)
+    out.append(f"Hive: {iniciar_hive()}")
+    return out
+
+
+def parar_stack_minimo_knime() -> List[str]:
+    """
+    Detiene **Hive** (metastore + HS2) y luego **HDFS** (orden seguro para JDBC/metastore).
+    """
+    out: List[str] = []
+    out.append(f"Hive: {parar_hive()}")
+    time.sleep(1)
+    out.append(f"HDFS: {parar_hdfs()}")
+    return out
+
+
 def arrancar_todos_servicios(*, verbose: bool = False) -> List[str]:
     """
     Intenta iniciar **todos** los servicios (orden: HDFS → Cassandra → Kafka → …).

@@ -11,6 +11,15 @@ from pathlib import Path
 import streamlit as st
 
 from config import HIVE_DB, HIVE_JDBC_URL, HIVE_SERVER, HIVE_TABLE_TRANSPORTE_HIST
+from servicios.gestion_servicios import (
+    PORT_HDFS,
+    PORT_HIVE,
+    PORT_HIVE_METASTORE,
+    arrancar_stack_minimo_knime,
+    comprobar_hdfs,
+    comprobar_hive,
+    parar_stack_minimo_knime,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_KNIME = ROOT / "docs" / "INTEGRACION_KNIME_HIVE.md"
@@ -31,6 +40,67 @@ def render_knime_tab() -> None:
         "**HDFS** (si el warehouse está en HDFS) + **Metastore** + **HiveServer2**. "
         "No son necesarios NiFi, Spark ni Airflow solo para consultar Hive desde KNIME."
     )
+
+    st.subheader("Arranque / parada del stack mínimo en este servidor")
+    st.caption(
+        "Usa los mismos scripts que la pestaña **Servicios** (`servicios/gestion_servicios.py`). "
+        "El arranque de Hive puede tardar **varios minutos** en máquinas lentas."
+    )
+
+    hchk = comprobar_hdfs()
+    vchk = comprobar_hive()
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric(
+            "HDFS (NameNode)",
+            "activo" if hchk.get("activo") else "inactivo",
+            help=f"Puerto {PORT_HDFS}",
+        )
+    with m2:
+        st.metric(
+            "Hive Metastore",
+            "activo" if vchk.get("activo_metastore") else "inactivo",
+            help=f"Puerto {PORT_HIVE_METASTORE}",
+        )
+    with m3:
+        st.metric(
+            "HiveServer2 (JDBC)",
+            "activo" if vchk.get("activo_jdbc") else "inactivo",
+            help=f"Puerto {PORT_HIVE} — necesario para KNIME",
+        )
+
+    b1, b2, b3 = st.columns([2, 2, 1])
+    with b1:
+        if st.button(
+            "▶ Arrancar stack mínimo (HDFS + Hive)",
+            key="knime_btn_arrancar_min",
+            type="primary",
+            width="stretch",
+        ):
+            with st.spinner("Arrancando HDFS y Hive (puede tardar)…"):
+                lineas = arrancar_stack_minimo_knime()
+            for ln in lineas:
+                st.text(ln)
+            st.success("Secuencia completada. Comprueba métricas y JDBC desde KNIME.")
+            st.rerun()
+    with b2:
+        if st.button(
+            "⏹ Parar Hive + HDFS",
+            key="knime_btn_parar_min",
+            type="secondary",
+            width="stretch",
+        ):
+            with st.spinner("Deteniendo Hive y HDFS…"):
+                lineas = parar_stack_minimo_knime()
+            for ln in lineas:
+                st.text(ln)
+            st.warning("Parada enviada. Los puertos pueden tardar unos segundos en cerrarse.")
+            st.rerun()
+    with b3:
+        if st.button("🔄 Actualizar estado", key="knime_btn_refresh"):
+            st.rerun()
+
+    st.divider()
 
     c1, c2 = st.columns(2)
     with c1:
