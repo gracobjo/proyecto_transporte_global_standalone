@@ -1,0 +1,7 @@
+# Plantilla JDBC Hive para KNIME (NO commitear credenciales reales)
+# Copiar a jdbc_connection_local.properties y ajustar.
+
+hive.jdbc.url=jdbc:hive2://127.0.0.1:10000/logistica_espana
+hive.jdbc.user=hadoop
+hive.jdbc.password=
+# Driver: registrar en KNIME el JAR hive-jdbc-standalone del mismo mayor Hive que el servidor

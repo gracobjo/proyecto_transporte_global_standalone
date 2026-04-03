@@ -35,6 +35,7 @@ flowchart TB
     UC18[CU-18 Reconfig. logística]
     UC19[CU-19 Flota cuadro + simulación mapa]
     UC20[CU-20 Análisis histórico Hive]
+    UC21[CU-21 KNIME ML Hive JDBC]
   end
   OP --> UC1
   OP --> UC2
@@ -68,6 +69,7 @@ flowchart TB
   OP --> UC19
   AN --> UC20
   OP --> UC20
+  AN --> UC21
 ```
 
 ---

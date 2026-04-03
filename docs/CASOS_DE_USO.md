@@ -35,6 +35,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-18 | Reconfigurar la red logística ante fallo crítico | Operador / Analista | Nodos/rutas desactivados, rutas alternativas recalculadas y alertas activas |
 | CU-19 | Asignar rutas en cuadro de mando y simular movimiento en mapa | Analista / Operador | Filas en `asignaciones_ruta_cuadro`, `tracking_camiones` actualizado, mapa en vivo cada *N* s, alerta/correo al finalizar ruta |
 | CU-20 | Analizar histórico Hive con estadísticas y predicción heurística | Analista | Paquete de consultas aprobadas (`agg_ultima_semana`, `eventos_evolucion_dia`, `gestor_incidencias_resumen`), `describe`, gráficos de serie y extrapolación lineal simple (sin API de IA externa) |
+| CU-21 | Entrenar modelos ML en KNIME contra Hive (modo ligero) | Analista | JDBC a HiveServer2; dataset `sql/hive_dataset_entrenamiento_knime.hql`; KNIME en PC; cluster solo con Hive+HDFS mínimos; guía `docs/INTEGRACION_KNIME_HIVE.md` y pestaña **KNIME / IA avanzada** |
 
 ## Detalle breve
 
@@ -78,6 +79,12 @@ Documento funcional para la plataforma en modo standalone.
 - **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
 - **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`; utilidades `simlog_arranque_servicios`, `simlog_parar_servicios`, `simlog_comprobar_servicios`.
 - **Documentación:** `docs/AIRFLOW_DAGS_SIMLOG.md`.
+
+### CU-21 — KNIME y analítica avanzada (Hive JDBC)
+
+- **Precondiciones:** HiveServer2 accesible; tablas con datos; **KNIME Analytics Platform** instalado en el equipo del analista (no en el nodo con poca RAM).
+- **Flujo:** pestaña **KNIME / IA avanzada** → copiar JDBC → en KNIME *Database Connector* + *DB Reader* con la consulta del fichero `sql/hive_dataset_entrenamiento_knime.hql` (añadir `LIMIT` si hace falta) → pipeline de nodos descrito en `docs/INTEGRACION_KNIME_HIVE.md`.
+- **Postcondiciones:** modelo evaluado (Scorer); exportación PMML o vía Python para integración futura con FastAPI.
 
 ### CU-20 — Análisis asistido (histórico Hive)
 

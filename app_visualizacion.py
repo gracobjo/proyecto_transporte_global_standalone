@@ -78,6 +78,7 @@ from servicios.kdd_vista_ficheros import render_vista_previa_ficheros_fase
 from servicios.ui_faq_ia import render_faq_ia_panel
 from servicios.ui_pruebas_ingesta import render_pruebas_ingesta_tab
 from servicios.ui_nifi_flujo import render_nifi_flujo_tab
+from servicios.ui_knime_integracion import render_knime_tab
 from servicios.pipeline_verificacion import leer_ultima_ingesta
 
 COLORES_ESTADO = {
@@ -100,6 +101,7 @@ TAB_LABELS = [
     "Resultados pipeline",
     "Pruebas",
     "Flujo NiFi",
+    "KNIME / IA avanzada",
     "Cuadro de mando",
     "Asistente flota",
     "Rutas híbridas",
@@ -185,6 +187,7 @@ def _buscar_semantico_ui(query: str) -> List[Dict[str, str]]:
         return []
     catalogo = [
         {"tab": "Servicios", "titulo": "Levantar/parar stack y Swagger", "keywords": "servicios iniciar parar swagger api faq ia airflow nifi kafka hive cassandra spark hdfs"},
+        {"tab": "KNIME / IA avanzada", "titulo": "KNIME JDBC Hive ML PMML", "keywords": "knime hive jdbc machine learning pmml analitica ia avanzada entrenamiento"},
         {"tab": "Cuadro de mando", "titulo": "Consultas supervisadas Cassandra/Hive", "keywords": "consulta sql cql hive cassandra dashboard cuadro mando"},
         {"tab": "Cuadro de mando", "titulo": "Informes a medida + PDF", "keywords": "informe pdf plantilla campos select tabla where order"},
         {"tab": "Asistente flota", "titulo": "Preguntas en lenguaje natural", "keywords": "asistente flota lenguaje natural camion rutas"},
@@ -796,6 +799,9 @@ def main() -> None:
 
     if active_tab == "Flujo NiFi":
         render_nifi_flujo_tab()
+
+    if active_tab == "KNIME / IA avanzada":
+        render_knime_tab()
 
     if active_tab == "Cuadro de mando":
         render_cuadro_mando_tab()
