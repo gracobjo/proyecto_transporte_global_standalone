@@ -20,6 +20,10 @@ Resumen de cambios funcionales reflejados en manuales, diseño, requisitos y dia
 
 - `pandas>=2.0.0` añadido explícitamente en `requirements.txt` para el módulo de análisis del cuadro de mando.
 
+## KNIME ↔ Hive
+
+- **`docs/INTEGRACION_KNIME_HIVE.md`**: tabla de política de versión (Analytics Platform no versionada en el repo; JDBC; recomendación de homogeneizar versión entre analistas; criterio release estable y extensiones).
+
 ## Documentos actualizados en esta entrega
 
 | Documento | Ajuste principal |

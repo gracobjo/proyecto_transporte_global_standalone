@@ -2,6 +2,16 @@
 
 Guía práctica para conectar **KNIME Analytics Platform** al **HiveServer2** del proyecto, construir un dataset de entrenamiento y desplegar modelos con impacto mínimo en RAM del servidor (KNIME corre **fuera** del nodo Hadoop por defecto).
 
+### Versión de KNIME (política del proyecto)
+
+| Pregunta | Respuesta |
+|----------|-----------|
+| ¿Qué versión instala este repo? | **Ninguna.** KNIME no es dependencia Python ni artefacto del cluster; no aparece en `requirements.txt` ni se despliega en el nodo Hadoop. |
+| ¿Qué producto usar? | **KNIME Analytics Platform** (cliente de escritorio) en el **PC del analista**. |
+| ¿Por qué no fijamos un número en el código? | La integración es **JDBC genérico** a HiveServer2 (`jdbc:hive2://…`). Cualquier Analytics Platform reciente con nodos *Database Connector* / *DB Reader* sirve; lo crítico es alinear el **driver Hive JDBC** con la versión de Hive del servidor (véase §2.1). |
+| ¿Cómo homogeneizar el equipo? | Acordar **una misma versión** de Analytics Platform entre analistas (mismos nodos, mismas extensiones, workflows reproducibles). Comprobar en *Help → About KNIME Analytics Platform*. Documentar internamente la versión acordada (wiki o README de equipo). |
+| Criterio práctico | Elegir la **última release estable** soportada por el SO del puesto; si usáis extensiones (p. ej. Python, PMML), verificar compatibilidad en la documentación de KNIME antes de fijar versión. |
+
 ---
 
 ## 1. Contexto y principio de bajo consumo
