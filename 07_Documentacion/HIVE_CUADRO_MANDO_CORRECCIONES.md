@@ -25,7 +25,7 @@ Documento de referencia para los cambios aplicados a consultas supervisadas, con
 - **Tracking**: `_T_TRACKING = HIVE_TABLE_TRACKING_HIST`.
 - **Gemelo digital**: Entradas `gemelo_red_nodos` y `gemelo_red_aristas` (columnas alineadas con el DDL de la red gemelo). Consumidas por `cargar_red_gemelo()` en `servicios/gemelo_digital_datos.py`.
 - **Columna temporal**: Uso de `` `timestamp` `` (`_HIVE_TS`) donde el identificador es palabra reservada en Hive 3+.
-- **Particiones / ventanas**: Fragmentos `_PM`, `_P7`, `_F24`, `_F7D` para poda por `anio_part`/`mes_part` y filtros por `anio`/`mes`/`dia` sin comparar `timestamp` STRING con funciones de fecha de forma frágil.
+- **Particiones / ventanas**: Fragmentos `_PM`, `_P7`, **`_P24H`**, `_F24`, `_F7D` para poda por `anio_part`/`mes_part` y filtros por `anio`/`mes`/`dia` sin comparar `timestamp` STRING con funciones de fecha de forma frágil. **Regla**: las consultas con ventana calendario **hoy/ayer** (`_F24`) deben usar **`_P24H`** (mes de hoy ∪ mes de ayer), no **`_P7`**, para no incluir el mes de `date_sub(current_date(), 6)` (en días 1–6 del mes eso abría **todo el mes anterior** y provocaba timeouts en `GROUP BY`).
 - **Sesión PyHive**: SET por defecto (p. ej. `hive.auto.convert.join=false`) para reducir errores tipo `MapredLocalTask` en JOINs; caché SQL con TTL renovable (`SIMLOG_HIVE_CACHE_*`).
 
 ---
@@ -73,4 +73,20 @@ Documento de referencia para los cambios aplicados a consultas supervisadas, con
 
 ---
 
-*Última actualización: coherente con la rama que integra estos cambios en `main`.*
+## 8. Poda `_P24H` (ventana 24h, 2026-04)
+
+Consultas afectadas (sustituyen `_P7`+`_F24` por `_P24H`+`_F24`): entre otras, `gestor_eventos_por_hub`, `gestor_incidencias_resumen`, `eventos_nodos_24h`, `eventos_bloqueos_24h`, `clima_estado_carretera`, `tracking_ultima_posicion`, subconsultas de `gestor_clima_afecta_transporte`.
+
+Las consultas con ventana de **7 días** (`_F7D`) **siguen** usando `_P7` donde corresponda.
+
+---
+
+## 9. Cassandra — plantillas que requieren post-procesado en cliente
+
+- **Clima adverso (varios `LIKE`)**: CQL no admite `OR` entre varios `LIKE` en columnas no clave; se lee un subconjunto de filas y se filtra en `ejecutar_cassandra_consulta()`.
+- **Incidencias por provincia**: `GROUP BY` debe respetar la PK de Cassandra; el agregado `COUNT` por `(provincia, estado, motivo_retraso)` se calcula en cliente.
+- **Tracking**: la tabla no tiene `temperatura`; no incluir en `SELECT`.
+
+---
+
+*Última actualización: abril 2026 — `_P24H`, modelo de datos en UI, análisis Hive asistido.*

@@ -252,6 +252,14 @@ def listar_categorias_hive() -> List[str]:
 - Cada consulta solo puede estar en **una categor?a**.
 - Valida siempre que las columnas de la consulta coincidan con el esquema real (`cassandra/esquema_logistica.cql` o `persistencia_hive.py`).
 
+#### Cuadro de mando — modelo de datos, análisis y Hive (2026-04)
+
+- **`servicios/cuadro_mando_modelo_datos.py`**: textos de negocio y columnas de referencia por tabla; `markdown_contexto_cassandra()` / `markdown_contexto_hive()`.
+- **`servicios/cuadro_mando_analisis_hive.py`**: `ejecutar_paquete_analisis_hive()` — solo plantillas whitelist; requiere `pandas` (ver `requirements.txt`).
+- **Mapeo tabla ↔ consulta**: `CASSANDRA_CONSULTA_TABLAS`, `cassandra_tablas_de_consulta()`; `HIVE_CONSULTA_DEP_TABLAS`, `hive_tablas_de_consulta()` en `consultas_cuadro_mando.py`. Al añadir una consulta Hive nueva, actualizar `_hive_consulta_dep_tablas()` para que «Verificar tablas» en la UI sea coherente.
+- **Ventana 24h en Hive**: usar el fragmento **`_P24H`** junto a **`_F24`** en consultas «últimas 24h». No combinar `_F24` con **`_P7`** (mes de `date_sub(..., 6)`): en los primeros días del mes dispara escaneo del mes entero anterior y timeouts en agregaciones. Las consultas de **7 días** siguen con `_P7` + `_F7D`.
+- **Cassandra y CQL**: no usar `OR` entre varios `LIKE` en columnas no clave; no usar `GROUP BY` sobre columnas que no sean prefijo de la PK. Ver comentarios en `ejecutar_cassandra_consulta()` para post-procesado en cliente.
+
 ## 3.b Integraci?n DATEX2 DGT
 
 ### Qu? hace

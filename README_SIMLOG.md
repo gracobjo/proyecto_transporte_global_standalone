@@ -111,13 +111,13 @@ La interfaz está organizada en **tres pestañas** alineadas con el ciclo KDD:
 | **Ciclo KDD** | Las 5 fases (selección → interpretación) con actividades, entradas/salidas y scripts. |
 | **Mapa y métricas** | Folium (nodos, aristas, camiones) y PageRank desde Cassandra. |
 | **Verificación técnica** | Comprobaciones HDFS, Kafka y Cassandra (`config.py`: rutas y topic). |
-| **Cuadro de mando** | Operaciones por fase KDD, consultas supervisadas a **Cassandra** (operativo) y **Hive** (histórico vía `beeline`), y **slides** de anticipación de retrasos (OpenWeather + nodos en Cassandra). |
+| **Cuadro de mando** | Operaciones por fase KDD, consultas supervisadas a **Cassandra** y **Hive** (histórico vía **PyHive** / HiveServer2), **contexto de modelo de datos** por consulta, **análisis asistido** del histórico (estadísticas y tendencia heurística), y **slides** de anticipación de retrasos. |
 | **Rutas híbridas** | Formulario origen/destino (hub o secundario), camino mínimo en **saltos** (BFS), retrasos y coste desde Cassandra + OpenWeather, vehículos afectados y **rutas alternativas** si cae un nodo/arista (clima/obras). |
 | **Servicios** | Botones **Iniciar**, **Comprobar** y **Parar** (con confirmación) para HDFS, Kafka, Cassandra, Spark (master opcional), HiveServer2, Airflow (api-server) y NiFi. Puertos configurables con `SIMLOG_PORT_*`. |
 
 En la **barra lateral**: estado de servicios, `paso_15min` (simulación), botones para ejecutar solo ingesta, solo Spark o **pipeline completo** (ingesta con el paso actual + procesamiento; al terminar bien, incrementa el paso). `st.session_state` guarda la línea temporal de ejecuciones.
 
-**Cuadro de mando:** pestaña dedicada con tareas de supervisión por fase, botones de ingesta/Spark, selector de consultas CQL/Hive (solo plantillas aprobadas) y un carrusel de **slides** por hub que estima márgenes de retraso por clima (tormenta, nieve, niebla, lluvia, viento, visibilidad) y por estado de nodos (atascos, obras, bloqueos). Hive requiere HiveServer2; configurar `HIVE_JDBC_URL` y `HIVE_BEELINE_BIN` si tu instalación no es la estándar.
+**Cuadro de mando:** pestaña dedicada con tareas de supervisión por fase, botones de ingesta/Spark, selector de consultas CQL/Hive (solo plantillas aprobadas), **descripción del modelo** por tabla, **análisis asistido** sobre datos Hive (pandas + consultas whitelist), y carrusel de **slides** por hub (clima + estado de nodos). Hive requiere HiveServer2; timeout `HIVE_QUERY_TIMEOUT_SEC`. Documentación: `docs/MANUAL_USUARIO.md` §4.3, `docs/HIVE_CUADRO_MANDO_CORRECCIONES.md`, `docs/CHANGELOG_DOCUMENTACION_2026_04.md`.
 
 **Servicios / UIs:** en la pestaña **Servicios**, cada bloque incluye **Interfaz web** (URL, puerto, usuario y contraseña desde variables `SIMLOG_UI_*`). En la barra lateral, expander **Interfaces web del stack**. Plantilla: `simlog_ui.env.example`.
 

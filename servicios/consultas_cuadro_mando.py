@@ -155,21 +155,17 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
         ),
     },
     "gestor_incidencias_por_provincia": {
-        "titulo": "Gestor — incidencias agrupadas por provincia",
+        "titulo": "Gestor — incidencias agrupadas por provincia (agregación en cliente)",
         "cql": (
-            "SELECT provincia, COUNT(*) AS total_incidencias, estado, motivo_retraso "
-            "FROM nodos_estado WHERE provincia IS NOT NULL "
-            "GROUP BY provincia, estado, motivo_retraso LIMIT 100 ALLOW FILTERING"
+            "SELECT provincia, estado, motivo_retraso, id_nodo FROM nodos_estado "
+            "WHERE provincia IS NOT NULL LIMIT 500 ALLOW FILTERING"
         ),
     },
     "gestor_nodos_clima_adverso": {
-        "titulo": "Gestor — nodos con clima adverso (nieve, lluvia, niebla)",
+        "titulo": "Gestor — nodos con clima adverso (nieve, lluvia, niebla; filtro en cliente)",
         "cql": (
             "SELECT id_nodo, tipo, clima_actual, temperatura, humedad, viento_velocidad, "
-            "estado, motivo_retraso FROM nodos_estado "
-            "WHERE clima_actual LIKE '%nieve%' OR clima_actual LIKE '%lluvia%' "
-            "OR clima_actual LIKE '%niebla%' OR clima_actual LIKE '%hielo%' "
-            "LIMIT 100 ALLOW FILTERING"
+            "estado, motivo_retraso FROM nodos_estado LIMIT 500 ALLOW FILTERING"
         ),
     },
     "gestor_nodos_severidad_alta": {
@@ -191,11 +187,40 @@ CASSANDRA_CONSULTAS: Dict[str, Dict[str, str]] = {
         "titulo": "Gestor — tracking completo con coordenadas",
         "cql": (
             "SELECT id_camion, lat, lon, ruta_origen, ruta_destino, estado_ruta, "
-            "motivo_retraso, temperatura AS temp_aprox, ultima_posicion FROM tracking_camiones "
-            "LIMIT 200"
+            "motivo_retraso, ultima_posicion FROM tracking_camiones LIMIT 200"
         ),
     },
 }
+
+# Tablas principales tocadas por cada consulta supervisada (contexto de modelo en UI).
+CASSANDRA_CONSULTA_TABLAS: Dict[str, Tuple[str, ...]] = {
+    "nodos_estado_resumen": ("nodos_estado",),
+    "nodos_hub_congestion": ("nodos_estado",),
+    "aristas_estado": ("aristas_estado",),
+    "tracking_camiones": ("tracking_camiones",),
+    "tracking_camiones_gemelo": ("tracking_camiones",),
+    "pagerank_top": ("pagerank_nodos",),
+    "eventos_recientes": ("eventos_historico",),
+    "gestor_camiones_mapa": ("tracking_camiones",),
+    "gestor_ciudades_trafico": ("nodos_estado",),
+    "gestor_nodo_critico_pagerank": ("pagerank_nodos",),
+    "gestor_nodos_con_incidencias": ("nodos_estado",),
+    "gestor_nodos_madrid_barcelona": ("nodos_estado",),
+    "gestor_aristas_bloqueadas": ("aristas_estado",),
+    "gestor_aristas_congestionadas": ("aristas_estado",),
+    "gestor_camiones_en_ruta": ("tracking_camiones",),
+    "gestor_camiones_bloqueados": ("tracking_camiones",),
+    "gestor_eventos_cambios_estado": ("eventos_historico",),
+    "gestor_incidencias_por_provincia": ("nodos_estado",),
+    "gestor_nodos_clima_adverso": ("nodos_estado",),
+    "gestor_nodos_severidad_alta": ("nodos_estado",),
+    "gestor_pagerank_nodos_criticos": ("pagerank_nodos",),
+    "gestor_tracking_ruta_completa": ("tracking_camiones",),
+}
+
+
+def cassandra_tablas_de_consulta(codigo: str) -> Tuple[str, ...]:
+    return CASSANDRA_CONSULTA_TABLAS.get(codigo, ())
 
 
 # ============================================================================
@@ -311,6 +336,37 @@ def _row_to_dict(row: Any) -> Dict[str, Any]:
         return {str(i): row[i] for i in range(len(row))}
 
 
+# CQL no admite OR entre varios LIKE en columnas no clave; el GROUP BY exige prefijo de PK.
+_CLIMA_ADVERSO_SUBCADENAS = ("nieve", "lluvia", "niebla", "hielo")
+
+
+def _clima_adverso_en_texto(clima: Any) -> bool:
+    if clima is None:
+        return False
+    s = str(clima).lower()
+    return any(x in s for x in _CLIMA_ADVERSO_SUBCADENAS)
+
+
+def _agregar_incidencias_por_provincia(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Replica COUNT(*) … GROUP BY provincia, estado, motivo_retraso en cliente."""
+    grupos: Dict[Tuple[Any, Any, Any], int] = {}
+    for d in rows:
+        key = (d.get("provincia"), d.get("estado"), d.get("motivo_retraso"))
+        grupos[key] = grupos.get(key, 0) + 1
+    ordenados = sorted(grupos.items(), key=lambda kv: (-kv[1], str(kv[0][0] or "")))
+    out: List[Dict[str, Any]] = []
+    for (prov, est, mot), n in ordenados[:100]:
+        out.append(
+            {
+                "provincia": prov,
+                "estado": est,
+                "motivo_retraso": mot,
+                "total_incidencias": n,
+            }
+        )
+    return out
+
+
 def ejecutar_cassandra_consulta(codigo: str) -> Tuple[bool, str, List[Dict[str, Any]]]:
     """Ejecuta solo si `codigo` está en CASSANDRA_CONSULTAS."""
     if codigo not in CASSANDRA_CONSULTAS:
@@ -324,6 +380,11 @@ def ejecutar_cassandra_consulta(codigo: str) -> Tuple[bool, str, List[Dict[str, 
         rows = list(session.execute(cql))
         cluster.shutdown()
         out = [_row_to_dict(r) for r in rows]
+
+        if codigo == "gestor_nodos_clima_adverso":
+            out = [d for d in out if _clima_adverso_en_texto(d.get("clima_actual"))][:100]
+        elif codigo == "gestor_incidencias_por_provincia":
+            out = _agregar_incidencias_por_provincia(out)
 
         # Cassandra no soporta ORDER BY global (sin partición restringida).
         # Para "top N" por PageRank, ordenamos en cliente sobre el resultado limitado.
@@ -478,6 +539,55 @@ _T_AGG = "agg_estadisticas_diarias"
 _HIVE_TS = "`timestamp`"
 
 
+def _hive_consulta_dep_tablas() -> Dict[str, frozenset[str]]:
+    """Tablas físicas necesarias por código de consulta Hive (verificación en UI)."""
+    ev = "eventos_historico"
+    cli = "clima_historico"
+    rut = "rutas_alternativas_historico"
+    agg = "agg_estadisticas_diarias"
+    t_tr = HIVE_TABLE_TRANSPORTE_HIST
+    t_track = HIVE_TABLE_TRACKING_HIST
+    return {
+        "diag_smoke_hive": frozenset(),
+        "tablas_bd": frozenset(),
+        "historico_nodos_muestra": frozenset({HIVE_TABLE_HISTORICO_NODOS}),
+        "historico_nodos_conteo": frozenset({HIVE_TABLE_HISTORICO_NODOS}),
+        "nodos_maestro_muestra": frozenset({HIVE_TABLE_NODOS_MAESTRO}),
+        "nodos_maestro_conteo": frozenset({HIVE_TABLE_NODOS_MAESTRO}),
+        "gemelo_red_nodos": frozenset({HIVE_TABLE_RED_GEMELO_NODOS}),
+        "gemelo_red_aristas": frozenset({HIVE_TABLE_RED_GEMELO_ARISTAS}),
+        "eventos_historico_muestra": frozenset({ev}),
+        "eventos_nodos_24h": frozenset({ev}),
+        "eventos_bloqueos_24h": frozenset({ev}),
+        "eventos_evolucion_dia": frozenset({ev}),
+        "clima_historico_muestra": frozenset({cli}),
+        "clima_historico_hoy": frozenset({cli}),
+        "clima_estado_carretera": frozenset({cli}),
+        "tracking_historico_muestra": frozenset({t_track}),
+        "tracking_camion_especifico": frozenset({t_track}),
+        "tracking_ultima_posicion": frozenset({t_track}),
+        "transporte_ingesta_real_muestra": frozenset({t_tr}),
+        "transporte_ingesta_hoy": frozenset({t_tr}),
+        "transporte_retrasos_hoy": frozenset({t_tr}),
+        "gestor_historial_rutas_camion": frozenset({t_tr}),
+        "rutas_alternativas_muestra": frozenset({rut}),
+        "rutas_alternativas_bloqueos": frozenset({rut}),
+        "agg_estadisticas_diarias": frozenset({agg}),
+        "agg_ultima_semana": frozenset({agg}),
+        "gestor_eventos_por_hub": frozenset({ev}),
+        "gestor_clima_afecta_transporte": frozenset({cli, t_tr}),
+        "gestor_incidencias_resumen": frozenset({ev}),
+        "gestor_pagerank_historico": frozenset({ev}),
+    }
+
+
+HIVE_CONSULTA_DEP_TABLAS: Dict[str, frozenset[str]] = _hive_consulta_dep_tablas()
+
+
+def hive_tablas_de_consulta(codigo: str) -> frozenset[str]:
+    return HIVE_CONSULTA_DEP_TABLAS.get(codigo, frozenset())
+
+
 def _hive_txt_norm(col: str) -> str:
     """
     Expresión HiveQL: trim, minúsculas y sin tildes típicas (á→a, ó→o) para comparar estados
@@ -498,7 +608,7 @@ def _hive_prune_mes() -> str:
 
 
 def _hive_prune_7d() -> str:
-    """Poda por hasta 2 particiones (mes actual y mes de hace ~6 días). Útil para ventanas 24h/7d."""
+    """Poda por hasta 2 particiones (mes actual y mes de hace ~6 días). Útil para ventanas 7d con _F7D."""
     if os.environ.get("SIMLOG_HIVE_PARTITION_PRUNING", "1").strip() == "0":
         return ""
     return (
@@ -507,9 +617,28 @@ def _hive_prune_7d() -> str:
     )
 
 
+def _hive_prune_hoy_ayer_partitions() -> str:
+    """
+    Particiones (anio_part, mes_part) del **mes de hoy** y del **mes de ayer** solamente.
+
+    Para ventanas «últimas 24h» (_F24), usar esto en lugar de _P7: _P7 añade el mes de
+    ``date_sub(..., 6)``, y en los primeros días del mes eso incluye **todo el mes anterior**
+    aunque _F24 solo pida hoy/ayer — escaneo masivo y timeouts en GROUP BY.
+    """
+    if os.environ.get("SIMLOG_HIVE_PARTITION_PRUNING", "1").strip() == "0":
+        return ""
+    return (
+        " AND ("
+        "(anio_part = year(current_date()) AND mes_part = month(current_date())) OR "
+        "(anio_part = year(date_sub(current_date(), 1)) AND mes_part = month(date_sub(current_date(), 1)))"
+        ")"
+    )
+
+
 # Fragmentos evaluados al import (cambiar SIMLOG_HIVE_PARTITION_PRUNING requiere reiniciar el proceso).
 _PM = _hive_prune_mes()
 _P7 = _hive_prune_7d()
+_P24H = _hive_prune_hoy_ayer_partitions()
 
 
 def _hive_filter_24h_dia() -> str:
@@ -626,7 +755,7 @@ LIMIT 100
 SELECT {_HIVE_TS}, id_elemento, estado, motivo, hub_asociado, pagerank
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
 WHERE {_hive_txt_norm("tipo_evento")} = 'nodo'
-  AND 1=1{_P7}{_F24}
+  AND 1=1{_P24H}{_F24}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
@@ -637,7 +766,7 @@ LIMIT 200
 SELECT {_HIVE_TS}, id_elemento, estado, motivo, hub_asociado
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
 WHERE {_hive_txt_norm("estado")} = 'bloqueado'
-  AND 1=1{_P7}{_F24}
+  AND 1=1{_P24H}{_F24}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 100
         """.strip(),
@@ -679,7 +808,7 @@ LIMIT 50
         "sql": f"""
 SELECT estado_carretera, descripcion, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_CLIMA}
-WHERE 1=1{_P7}{_F24}
+WHERE 1=1{_P24H}{_F24}
 GROUP BY estado_carretera, descripcion
 ORDER BY total DESC
 LIMIT 50
@@ -711,7 +840,7 @@ LIMIT 200
         "sql": f"""
 SELECT id_camion, origen, destino, nodo_actual, lat_actual, lon_actual, progreso_pct, {_HIVE_TS}
 FROM {HIVE_DB_NAME}.{_T_TRACKING}
-WHERE 1=1{_P7}{_F24}
+WHERE 1=1{_P24H}{_F24}
 ORDER BY {_HIVE_TS} DESC
 LIMIT 200
         """.strip(),
@@ -812,7 +941,7 @@ LIMIT 200
         "sql": f"""
 SELECT hub_asociado, estado, COUNT(*) as total
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE 1=1{_P7}{_F24}
+WHERE 1=1{_P24H}{_F24}
 GROUP BY hub_asociado, estado
 ORDER BY total DESC
 LIMIT 100
@@ -829,14 +958,14 @@ SELECT c.{_HIVE_TS}, c.ciudad, c.estado_carretera, c.descripcion,
 FROM (
   SELECT {_HIVE_TS}, ciudad, estado_carretera, descripcion, anio, mes, dia
   FROM {HIVE_DB_NAME}.{_T_CLIMA}
-  WHERE 1=1{_P7}{_F24}
+  WHERE 1=1{_P24H}{_F24}
     AND length(trim(coalesce(cast(estado_carretera as string), ''))) > 0
     AND {_hive_txt_norm("estado_carretera")} NOT IN ('optimo', 'optimal', 'ok')
 ) c
 LEFT JOIN (
   SELECT estado_ruta, motivo_retraso, hub_actual, anio, mes, dia
   FROM {HIVE_DB_NAME}.{_T_TRANSPORTE}
-  WHERE 1=1{_P7}{_F24}
+  WHERE 1=1{_P24H}{_F24}
 ) t
   ON c.ciudad = t.hub_actual
  AND c.anio = t.anio AND c.mes = t.mes AND c.dia = t.dia
@@ -850,7 +979,7 @@ LIMIT 100
         "sql": f"""
 SELECT estado, COUNT(*) as total, AVG(pagerank) as pagerank_promedio
 FROM {HIVE_DB_NAME}.{_T_EVENTOS}
-WHERE 1=1{_P7}{_F24}
+WHERE 1=1{_P24H}{_F24}
 GROUP BY estado
 ORDER BY total DESC
 LIMIT 20

@@ -28,6 +28,8 @@ streamlit-folium>=0.15.0
 folium>=0.14.0
 networkx>=3.0
 reportlab>=4.0.0
+# Cuadro de mando: análisis sobre TSV Hive (ejecutar_paquete_analisis_hive); Streamlit suele traer pandas, se fija explícitamente
+pandas>=2.0.0
 
 # Airflow (si se instala en el mismo entorno)
 apache-airflow>=2.6.0

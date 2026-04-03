@@ -55,6 +55,8 @@ Controles:
 - Tras ingesta: se genera un snapshot (clima + incidentes + GPS simulado). Si OpenWeather responde, el clima sale con `source=openweather`; si no, el sistema usa información alternativa desde la DGT. Si la DGT DATEX2 responde, además se enriquece con incidencias reales; si falla, puede usar caché o continuar solo con simulación. Después se publica en Kafka y se guarda JSON en HDFS.
 - Tras Spark: se estructura y persiste el “estado operativo” en Cassandra, y (si está configurado) se actualiza histórico Hive.
 
+> Nota importante: el checkbox “Paso automático” solo indica que el **paso** se calcula por reloj cuando lanzas la ingesta desde la UI. Para ejecución realmente automática cada 15 minutos, usa Airflow con el DAG `simlog_maestro` (ver `docs/AIRFLOW_DAGS_SIMLOG.md`).
+
 ### 3.3 Enlace a “Gemelo digital — incidencias”
 
 La sidebar también incluye sliders/checkboxes para la pestaña **Gemelo digital** (atasco, clima, bloqueo de capital).
@@ -116,6 +118,15 @@ Secciones:
 
 **Resultado esperado**: una “foto” diagnóstica con OK/⚠️ para cada capa.
 
+### 4.2.a Interpretación rápida (Kafka, Spark, PageRank, alternativas)
+
+- **Kafka**: confirma el “canal” de mensajes del snapshot. Si el topic no existe o no se describe, la ingesta puede haberse ejecutado pero el desacople y auditoría quedan incompletos.
+- **HDFS**: confirma que hay backup `.json`. Aunque Kafka falle o haya latencia, Spark puede procesar en batch si hay ficheros.
+- **Spark → Cassandra**:
+  - si `nodos_estado` / `tracking_camiones` tienen filas, el estado operativo está materializado,
+  - si `pagerank_nodos` tiene filas, la criticidad (PageRank) está lista para métricas y consultas.
+- **Rutas alternativas**: se exploran en **Rutas híbridas** (planificación) y se visualizan también en **Mapa y métricas → Planificación**.
+
 ---
 
 ## 4.3 Pestaña “Cuadro de mando”
@@ -133,16 +144,19 @@ Qué incluye:
 4. **Consultas supervisadas — Cassandra**:
    - Las consultas están organizadas por **categorías** (📍 Estado de Nodos, 🟤 Estado de Rutas, 🚛 Tracking Camiones, 📊 PageRank, 📋 Eventos, 👤 Gestor).
    - Selecciona una categoría del primer desplegable y luego una consulta específica.
+   - Expander **«Consulta CQL y modelo de datos (Cassandra)»**: muestra la **plantilla CQL**, el keyspace y una **descripción del modelo** (rol de cada tabla y columnas habituales). Opcional: **«Leer columnas desde Cassandra»** para metadatos en vivo.
    - Pulsas **“Ejecutar consulta Cassandra”**.
    - Se muestra un `st.dataframe`.
-   - (Siempre puedes ver la CQL exacta en el expander “CQL ejecutado”.)
-   - También dispones de un bloque **“CQL (copiar / pegar / ejecutar)”** para consultas `SELECT` directas.
+   - También dispones de un bloque **“CQL personalizado (copiar / pegar / ejecutar)”** para consultas `SELECT` directas (el texto por defecto es la plantilla; algunas consultas del gestor aplican filtro o agregación extra solo al pulsar **Ejecutar consulta**, no al ejecutar el CQL pegado tal cual).
 5. **Consultas supervisadas — Hive (histórico)**:
    - Las consultas están organizadas por **categorías** (🔧 Diagnóstico, 📋 Eventos Histórico, 🌤 Clima Histórico, 🚛 Tracking Camiones, 📦 Transporte Ingestado, 🟤 Rutas Alternativas, 📊 Agregaciones Diarias, 👤 Gestor).
    - Selecciona una categoría del primer desplegable y luego una consulta específica.
-   - Igual que Cassandra, pero usando HiveServer2 con PyHive.
-   - Se limita para evitar bloqueos del UI.
-   - También dispones de **“SQL (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.
+   - Expander **«Consulta SQL y modelo de datos (Hive)»**: **plantilla SQL**, base de datos (`HIVE_DB`), tablas requeridas y descripción analítica. Opcional: **«Leer columnas desde Hive (DESCRIBE)»**.
+   - **Verificar tablas en Hive** (opcional): oculta consultas cuyas tablas aún no existen en el metastore; el criterio usa los mismos nombres que Spark (`SIMLOG_HIVE_TABLA_TRANSPORTE`, etc.).
+   - Ejecución con HiveServer2 vía PyHive; timeout configurable (`HIVE_QUERY_TIMEOUT_SEC`, por defecto 600 s). Las consultas de **«últimas 24h»** están optimizadas con poda de particiones acotada (mes de hoy y mes de ayer) para reducir timeouts.
+   - También dispones de **“SQL personalizado (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.
+5.b **Análisis asistido sobre histórico (Hive)** (debajo de las consultas Hive):
+   - Botón **«Ejecutar paquete de análisis y predicciones simples»**: lanza varias plantillas aprobadas, muestra **estadísticas numéricas** (`describe`), **gráficos de serie** y textos de **síntesis / extrapolación heurística** (regresión lineal simple sobre la muestra). Es orientativo; no es un modelo de IA entrenado ni llama a APIs externas.
 6. **Informes a medida (Cassandra/Hive)**:
    - Selección por motor, tabla y campos (o modo `SELECT *`).
    - Configuración de `WHERE`, `ORDER BY`, `LIMIT`.
@@ -150,8 +164,14 @@ Qué incluye:
    - Exportación a PDF para visualización o impresión.
 7. **Slides — Clima y anticipación de retrasos**:
    - Genera una estimación orientativa por hub combinando variables meteorológicas y estados.
+8. **Flota: rutas por camión y mapa operativo**:
+   - Añade **varias** rutas (camión + origen + destino) sobre la red de nodos; **Añadir ruta** persiste en Cassandra (`asignaciones_ruta_cuadro`) y actualiza `tracking_camiones`.
+   - Mapa Folium con polilínea según la ruta por nodos (BFS en simulación) o línea plan origen→destino; marcadores de camión con color según estado/retraso.
+   - **Simulación de movimiento (expander):** tras **Iniciar simulación**, la posición se interpola a lo largo del camino mínimo y se refresca el mapa cada *N* segundos (por defecto 5); la **duración total del viaje** define cuándo se alcanza el destino. Al finalizar: **toast** en pantalla y, si activas **Correo al finalizar cada ruta** y hay SMTP configurado, mensaje con ruta, camión, horas de salida/llegada (UTC) e incidencias si las hubo.
+   - **Detener simulación** cancela el refresco automático (no borra filas en Cassandra).
+   - **Correo electrónico** (bloque inferior): resumen de flota; requiere variables `SIMLOG_SMTP_*` (ver `.env.example`).
 
-**Resultado esperado**: tablas y métricas listas para usuario final, con opción de consulta libre segura y generación de informes PDF.
+**Resultado esperado**: tablas y métricas listas para usuario final, con opción de consulta libre segura, generación de informes PDF, asignación operativa de rutas y demostración visual de movimiento en mapa.
 
 ---
 
@@ -237,6 +257,25 @@ Cómo usarla:
 3. En la parte inferior encontrarás **FAQ IA** para resolver dudas rápidas sobre operación, informes, NiFi, Swagger o uso general del dashboard.
 
 **Resultado esperado**: estados por servicio (OK/❌), enlaces a consolas web si existen y un asistente de FAQ local para incidencias frecuentes.
+
+### 4.7.a Qué es automático y qué es manual
+
+- **Automático (backend)**:
+  - Si despliegas el DAG maestro `simlog_maestro` en Airflow, la **ingesta + procesamiento** se ejecutan **cada 15 minutos** (o el intervalo configurado en `SIMLOG_INGESTA_INTERVAL_MINUTES`).
+  - El dashboard **no programa por sí mismo** esas ejecuciones: solo muestra siempre los **últimos datos disponibles** en Cassandra/HDFS/Hive.
+- **Manual (desde la UI)**:
+  - En la **barra lateral** puedes lanzar:
+    - `Ejecutar ingesta (fases 1–2 KDD)`,
+    - `Ejecutar procesamiento Spark (fases 3–5 KDD)`,
+    - `Avanzar paso + ingesta + procesamiento`.
+  - En la pestaña **Ciclo KDD** puedes ejecutar cada fase manualmente.
+  - En **Servicios** solo arrancas/parás demonios (HDFS, Kafka, Cassandra, Hive, Airflow, API, FAQ IA, NiFi); no se programa el pipeline.
+
+Para un listado de DAGs y su propósito, ver: `docs/AIRFLOW_DAGS_SIMLOG.md`.
+
+### Correo y Telegram (configuración en `.env`)
+
+Las **alertas por correo** (SMTP) y **Telegram** no se configuran desde la interfaz: usa variables `SIMLOG_SMTP_*` y `SIMLOG_TELEGRAM_*` en `.env` (ver `docs/NOTIFICACIONES_EMAIL_TELEGRAM.md`). Tras cambiar credenciales, reinicia Streamlit. Si SMTP o Telegram están bien definidos, el cuadro de mando y scripts relacionados pueden enviar avisos automáticos.
 
 Si NiFi está activo, el linaje de la ingesta enriquecida se puede revisar en la UI de NiFi:
 
@@ -350,30 +389,10 @@ Muestra:
 2. Verifica HiveServer2 (pestaña **Resultados pipeline** o **Verificación técnica**).
 3. Si Hive no responde, el núcleo del proyecto igual valida con Cassandra (tiempo casi real).
 
+**Si HiveServer2 (JDBC 10000) no arranca y el log dice “Stop it first”**: puede quedar un PID stale que bloquea el arranque. Arreglo rápido:
 
----
+```bash
+rm -f ~/proyecto_transporte_global/hive/conf/hiveserver2.pid
+python ~/proyecto_transporte_global/scripts/simlog_stack.py start
+```
 
-## 📚 Obsidian Vault - Documentación Extendida
-
-Este proyecto incluye un **vault de Obsidian** con documentación interactiva adicional.
-
-### Cómo Acceder
-
-1. Abre **Obsidian** en tu ordenador
-2. File → Open Vault → Selecciona la carpeta del proyecto
-3. El archivo `Bienvenido.md` es el punto de entrada
-
-### Contenido Adicional
-
-- **Glosario técnico**: `01_Conceptos/` - Kafka, Spark, Cassandra, GraphFrames...
-- **Snippets de código**: `05_Snippets_Code/` - Código reutilizable
-- **Modelos IA**: `06_Modelos_IA/` - PageRank, Detección de Anomalías
-- **Manuales completos**: `07_Documentacion/`
-
-### Navegación
-
-- `Ctrl+O` - Buscar notas
-- `Ctrl+G` - Ver grafo de conocimientos
-- `Ctrl+P` - Paleta de comandos
-
-Ver [`OBSIDIAN_VAULT.md`](OBSIDIAN_VAULT.md) para guía completa.

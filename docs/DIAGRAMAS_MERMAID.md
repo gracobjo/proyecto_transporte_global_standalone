@@ -34,6 +34,7 @@ flowchart TB
     UC17[CU-17 Auditar provenance NiFi]
     UC18[CU-18 Reconfig. logística]
     UC19[CU-19 Flota cuadro + simulación mapa]
+    UC20[CU-20 Análisis histórico Hive]
   end
   OP --> UC1
   OP --> UC2
@@ -65,6 +66,31 @@ flowchart TB
   AN --> UC18
   AN --> UC19
   OP --> UC19
+  AN --> UC20
+  OP --> UC20
+```
+
+---
+
+## 1.b Secuencia — Consulta supervisada con contexto de modelo (cuadro de mando)
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit (cuadro_mando_ui)
+  participant MD as cuadro_mando_modelo_datos
+  participant CM as consultas_cuadro_mando
+  participant HS2 as HiveServer2 / Cassandra
+  U->>ST: Elige categoría y consulta
+  ST->>MD: markdown_contexto_* (tablas de la plantilla)
+  MD-->>ST: Descripción negocio + columnas referencia
+  ST->>U: Muestra expander SQL/CQL + modelo
+  U->>ST: Ejecutar consulta
+  ST->>CM: ejecutar_*_consulta(código)
+  CM->>HS2: SELECT supervisado
+  HS2-->>CM: Resultados
+  CM-->>ST: Filas / TSV
+  ST->>U: st.dataframe
 ```
 
 ---

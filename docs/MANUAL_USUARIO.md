@@ -144,16 +144,19 @@ Qué incluye:
 4. **Consultas supervisadas — Cassandra**:
    - Las consultas están organizadas por **categorías** (📍 Estado de Nodos, 🟤 Estado de Rutas, 🚛 Tracking Camiones, 📊 PageRank, 📋 Eventos, 👤 Gestor).
    - Selecciona una categoría del primer desplegable y luego una consulta específica.
+   - Expander **«Consulta CQL y modelo de datos (Cassandra)»**: muestra la **plantilla CQL**, el keyspace y una **descripción del modelo** (rol de cada tabla y columnas habituales). Opcional: **«Leer columnas desde Cassandra»** para metadatos en vivo.
    - Pulsas **“Ejecutar consulta Cassandra”**.
    - Se muestra un `st.dataframe`.
-   - (Siempre puedes ver la CQL exacta en el expander “CQL ejecutado”.)
-   - También dispones de un bloque **“CQL (copiar / pegar / ejecutar)”** para consultas `SELECT` directas.
+   - También dispones de un bloque **“CQL personalizado (copiar / pegar / ejecutar)”** para consultas `SELECT` directas (el texto por defecto es la plantilla; algunas consultas del gestor aplican filtro o agregación extra solo al pulsar **Ejecutar consulta**, no al ejecutar el CQL pegado tal cual).
 5. **Consultas supervisadas — Hive (histórico)**:
    - Las consultas están organizadas por **categorías** (🔧 Diagnóstico, 📋 Eventos Histórico, 🌤 Clima Histórico, 🚛 Tracking Camiones, 📦 Transporte Ingestado, 🟤 Rutas Alternativas, 📊 Agregaciones Diarias, 👤 Gestor).
    - Selecciona una categoría del primer desplegable y luego una consulta específica.
-   - Igual que Cassandra, pero usando HiveServer2 con PyHive.
-   - Se limita para evitar bloqueos del UI.
-   - También dispones de **“SQL (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.
+   - Expander **«Consulta SQL y modelo de datos (Hive)»**: **plantilla SQL**, base de datos (`HIVE_DB`), tablas requeridas y descripción analítica. Opcional: **«Leer columnas desde Hive (DESCRIBE)»**.
+   - **Verificar tablas en Hive** (opcional): oculta consultas cuyas tablas aún no existen en el metastore; el criterio usa los mismos nombres que Spark (`SIMLOG_HIVE_TABLA_TRANSPORTE`, etc.).
+   - Ejecución con HiveServer2 vía PyHive; timeout configurable (`HIVE_QUERY_TIMEOUT_SEC`, por defecto 600 s). Las consultas de **«últimas 24h»** están optimizadas con poda de particiones acotada (mes de hoy y mes de ayer) para reducir timeouts.
+   - También dispones de **“SQL personalizado (copiar / pegar / ejecutar)”** para `SHOW`, `SELECT`, `WITH`, `DESCRIBE`.
+5.b **Análisis asistido sobre histórico (Hive)** (debajo de las consultas Hive):
+   - Botón **«Ejecutar paquete de análisis y predicciones simples»**: lanza varias plantillas aprobadas, muestra **estadísticas numéricas** (`describe`), **gráficos de serie** y textos de **síntesis / extrapolación heurística** (regresión lineal simple sobre la muestra). Es orientativo; no es un modelo de IA entrenado ni llama a APIs externas.
 6. **Informes a medida (Cassandra/Hive)**:
    - Selección por motor, tabla y campos (o modo `SELECT *`).
    - Configuración de `WHERE`, `ORDER BY`, `LIMIT`.

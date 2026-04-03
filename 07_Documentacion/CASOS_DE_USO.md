@@ -19,11 +19,11 @@ Documento funcional para la plataforma en modo standalone.
 | CU-02 | Supervisar y gobernar el stack | Operador | Servicios coherentes (puertos / estado) |
 | CU-03 | Gestionar stack vía script CLI | Operador | `simlog_stack.py start/status/stop` |
 | CU-04 | Visualizar estado de red y camiones | Analista | Dashboard Streamlit / mapa |
-| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado (+ analítica Hive 24h: riesgo por hub y top causas) |
+| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado; ventanas 24h con poda `_P24H`; opcional **CU-20** para síntesis numérica en el cuadro de mando |
 | CU-06 | Evaluar rutas híbridas | Planificador | Rutas y métricas en UI de planificación |
 | CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
 | CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
-| CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba OpenWeather si hay clave válida; respaldo DGT visible cuando falla; simulación por paso; topología sin duplicar mapas |
+| CU-09 | Explorar y validar el ciclo KDD en el dashboard | Analista / Operador | Fases enlazadas a código y datos; prueba clima en vivo (Open-Meteo por defecto; OpenWeather opcional con clave); respaldo DGT visible cuando falla; simulación por paso; topología sin duplicar mapas |
 | CU-10 | Consultar operativamente con “Asistente de Flota” | Analista / Operador | Traducción lenguaje natural → CQL/HiveSQL supervisado + `st.dataframe` |
 | CU-11 | Detectar anomalías en el grafo con Graph AI | Operador / Analista | NetworkX metrics + scoring + persistencia en `graph_anomalies` |
 | CU-12 | Desplegar clúster didáctico en GitHub Codespaces | Operador / Docente | Hadoop+Spark+Kafka+Jupyter en perfil aislado `*.codespaces.*` |
@@ -33,6 +33,8 @@ Documento funcional para la plataforma en modo standalone.
 | CU-16 | Integrar incidencias reales DATEX2 DGT | Operador / Programador | Snapshot enriquecido con señal real y prioridad sobre simulación |
 | CU-17 | Auditar procedencia de la ingesta en NiFi | Operador | Trazabilidad por relaciones y atributos de provenance |
 | CU-18 | Reconfigurar la red logística ante fallo crítico | Operador / Analista | Nodos/rutas desactivados, rutas alternativas recalculadas y alertas activas |
+| CU-19 | Asignar rutas en cuadro de mando y simular movimiento en mapa | Analista / Operador | Filas en `asignaciones_ruta_cuadro`, `tracking_camiones` actualizado, mapa en vivo cada *N* s, alerta/correo al finalizar ruta |
+| CU-20 | Analizar histórico Hive con estadísticas y predicción heurística | Analista | Paquete de consultas aprobadas (`agg_ultima_semana`, `eventos_evolucion_dia`, `gestor_incidencias_resumen`), `describe`, gráficos de serie y extrapolación lineal simple (sin API de IA externa) |
 
 ## Detalle breve
 
@@ -40,7 +42,7 @@ Documento funcional para la plataforma en modo standalone.
 
 - **Precondiciones:** HDFS, Kafka, Cassandra (y opcionalmente Hive) activos.
 - **Flujo:** ingesta genera JSON → Kafka + HDFS → Spark procesa → Cassandra + Hive.
-- **Variante real:** si DATEX2 DGT está disponible, la ingesta añade incidencias reales; si OpenWeather falla, el clima por hub se reconstruye desde DGT; si la DGT también falla, usa caché o sigue solo con simulación.
+- **Variante real:** si DATEX2 DGT está disponible, la ingesta añade incidencias reales; si la API de clima primaria (Open-Meteo) falla, el clima por hub se reconstruye desde DGT; si la DGT también falla, usa caché o sigue solo con simulación.
 - **Disparadores:** Streamlit “Paso siguiente”, Airflow `simlog_maestro`, DAGs `simlog_kdd_*`, NiFi.
 
 ### CU-02 — Supervisar el stack
@@ -66,23 +68,41 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-06 — Rutas híbridas
 
 - **UI:** vistas de planificación / mapa híbrido en el proyecto.
+- **Detalle (cómo se obtienen alternativas):**
+  - Se calcula una **ruta principal** por mínimo número de saltos (BFS) sobre el catálogo `datos/rutas_red_simlog.yaml`.
+  - Se simulan cortes por **tramo** o **nodo intermedio** (clima severo/obras/bloqueos) y se recomputa un camino distinto como **ruta alternativa**.
+  - La salida se visualiza en la pestaña **Rutas híbridas** y en **Mapa y métricas → Planificación**.
 
 ### CU-07 — Airflow
 
 - **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
-- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`.
+- **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`; utilidades `simlog_arranque_servicios`, `simlog_parar_servicios`, `simlog_comprobar_servicios`.
+- **Documentación:** `docs/AIRFLOW_DAGS_SIMLOG.md`.
+
+### CU-20 — Análisis asistido (histórico Hive)
+
+- **Precondiciones:** HiveServer2 accesible; tablas históricas con datos (p. ej. tras Spark con `SIMLOG_ENABLE_HIVE=1`).
+- **Flujo:** pestaña **Cuadro de mando** → sección **Análisis asistido sobre histórico (Hive)** → **Ejecutar paquete de análisis y predicciones simples**.
+- **Postcondiciones:** Se muestran estadísticas numéricas (`describe`), gráficos de serie cuando hay columnas adecuadas y texto de síntesis con extrapolación heurística (regresión lineal simple). No ejecuta modelos ML entrenados ni llama a APIs externas.
+- **Implementación:** `servicios/cuadro_mando_analisis_hive.py`.
+
+### CU-19 — Cuadro de mando: flota y simulación en mapa
+
+- **Precondiciones:** Cassandra accesible; tabla `asignaciones_ruta_cuadro` creada (migración en `cassandra/migracion_asignaciones_ruta_cuadro.cql` si hace falta).
+- **Flujo:** pestaña **Cuadro de mando** → sección **Flota: rutas por camión** → **Añadir ruta** → opcionalmente **Iniciar simulación** (intervalo de refresco, duración del viaje) → observación del marcador en mapa → al llegar al destino: toast y correo opcional (`SIMLOG_SMTP_*`, mismos destinatarios que el resumen de flota).
+- **Postcondiciones:** `tracking_camiones` refleja posición interpolada por BFS; `estado_ruta` puede pasar a `Finalizada`. Documentación: `servicios/simulacion_movimiento_flota.py`, `docs/MANUAL_USUARIO.md` §4.3.
 
 ### CU-08 — NiFi
 
 - **Documentación:** `nifi/README_NIFI.md`, especificación de flujo en `nifi/flow/`.
-- **Relaciones clave:** `Build_GPS_Sintetico -> OpenWeather_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload`.
-- **Comportamiento actual:** si `OpenWeather_InvokeHTTP` no aporta clima válido, `Merge_Weather_Into_Payload` deja pasar el payload y `Merge_DGT_Into_Payload` genera `clima_hubs` alternativo desde DATEX2.
+- **Relaciones clave:** `Build_GPS_Sintetico -> OpenMeteo_InvokeHTTP -> Merge_Weather_Into_Payload -> DGT_DATEX2_InvokeHTTP -> Merge_DGT_Into_Payload`.
+- **Comportamiento actual:** si `OpenMeteo_InvokeHTTP` no aporta clima válido, `Merge_Weather_Into_Payload` deja pasar el payload y `Merge_DGT_Into_Payload` genera `clima_hubs` alternativo desde DATEX2.
 - **Provenance:** atributos `simlog.provenance.stage`, `simlog.provenance.sources`, `simlog.provenance.dgt_mode`, `simlog.provenance.dgt_incidents`.
 
 ### CU-09 — Explorar ciclo KDD en Streamlit
 
 - **Precondiciones:** proyecto clonado; opcionalmente ingesta previa para ver `ultimo_payload.json`.
-- **Flujo principal:** abrir pestaña **Ciclo KDD** → elegir fase (◀ ▶ o desplegable) → leer reglas / vistas previas / grafo topológico según fase → en 1–2 ajustar paso, ejecutar ingesta o guardar instantánea y comparar payload → en 1–2 opcionalmente introducir API key y consultar OpenWeather; si no responde, revisar en el snapshot `source=dgt` y `fallback_activo=true`.
+- **Flujo principal:** abrir pestaña **Ciclo KDD** → elegir fase (◀ ▶ o desplegable) → leer reglas / vistas previas / grafo topológico según fase → en 1–2 ajustar paso, ejecutar ingesta o guardar instantánea y comparar payload → en 1–2 opcionalmente consultar clima en vivo (Open-Meteo; OpenWeather solo si `SIMLOG_WEATHER_PROVIDER=openweather`); si no responde, revisar en el snapshot `source=dgt` y `fallback_activo=true`.
 - **Postcondiciones:** comprensión del alineamiento fase–script–datos sin exigir lectura directa de todo el código.
 - **Diseño:** `docs/DASHBOARD_KDD_UI.md`.
 
@@ -127,14 +147,14 @@ Documento funcional para la plataforma en modo standalone.
 ### CU-16 — Integrar DATEX2 DGT
 
 - **Entrada:** feed XML DATEX2 v3.6 de la DGT.
-- **Flujo:** `ingesta/ingesta_dgt_datex2.py` descarga/parsing -> mapeo a nodos -> merge con simulación -> respaldo climático para hubs cuando OpenWeather falla -> publicación en Kafka/HDFS -> Spark recalcula criticidad.
+- **Flujo:** `ingesta/ingesta_dgt_datex2.py` descarga/parsing -> mapeo a nodos -> merge con simulación -> respaldo climático para hubs cuando falla Open-Meteo -> publicación en Kafka/HDFS -> Spark recalcula criticidad.
 - **Salida:** nodos afectados con `source=dgt`, `severity`, `peso_pagerank`, `fallback_activo` en clima cuando aplica y evidencia en `transporte_dgt_raw`.
 
 ### CU-17 — Auditar procedencia de la ingesta en NiFi
 
 - **Entrada:** evento generado por `PG_SIMLOG_KDD`.
 - **Flujo:** revisar `Data Provenance` y atributos `simlog.provenance.*` en los procesadores de merge.
-- **Salida:** trazabilidad sobre qué datos proceden de simulación, OpenWeather y DGT, y sobre si el clima final se obtuvo por fuente principal o por respaldo.
+- **Salida:** trazabilidad sobre qué datos proceden de simulación, Open-Meteo (u OpenWeather) y DGT, y sobre si el clima final se obtuvo por fuente principal o por respaldo.
 
 ### CU-18 — Reconfigurar la red logística ante fallo crítico
 
@@ -202,13 +222,3 @@ flowchart LR
   PR --> CU16
   OP --> CU17
 ```
-
----
-
-## 📚 Obsidian Vault
-
-Para explorar los casos de uso con mayor detalle interactivo y navegar entre conceptos relacionados, consulta el **Obsidian Vault**:
-
-- **Bienvenido.md** - Índice principal
-- **Conceptos**: `01_Conceptos/índice_Conceptos.md`
-- **Proyectos**: `02_Proyectos/índice_Proyectos.md`

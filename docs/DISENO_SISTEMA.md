@@ -52,6 +52,7 @@ Funcionales incorporados en la versión actual:
 - Ejecución de SQL/CQL de lectura desde frontend (modo seguro).
 - Constructor de informes a medida por selección de tabla/campos/filtros.
 - Exportación de informes en PDF y gestión de plantillas personalizadas.
+- Cuadro de mando: **contexto de modelo de datos** junto a cada plantilla CQL/SQL; **análisis asistido** sobre histórico Hive (estadísticas y tendencia heurística en cliente).
 - Buscador semántico en cabecera con navegación directa a la sección objetivo.
 - Inclusión de Swagger API en el panel de servicios y en el resumen del stack.
 
@@ -78,6 +79,8 @@ La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **
 | Hive opcional en Spark (`SIMLOG_ENABLE_HIVE`) | Evitar bloqueos de metastore en desarrollo |
 | Airflow 3 + `LocalExecutor` | `[api] base_url` y puerto deben coincidir con el api-server (p. ej. 8088) para no dejar tareas en cola |
 | `simlog_stack.py` | Arranque/parada secuencial reproducible tras reinicio |
+| Poda Hive `_P24H` + `_F24` | Ventanas «24h» sin abrir el mes de `date_sub(...,6)`; evita escanear todo el mes anterior en agregaciones |
+| CQL agregación/filtro en cliente | Donde CQL no admite `OR`+`LIKE` o `GROUP BY` no alineado con PK, el resultado se refina en Python tras un `SELECT` acotado |
 | systemd (YARN + Airflow) | Evitar caídas de `scheduler`/`api-server` y el “reinicio manual” de YARN por conflicto de puertos |
 | Perfil Codespaces aislado (`*.codespaces.*`) | Evitar conflictos con `docker-compose.yml` principal y facilitar prácticas cloud |
 | `widget_scope` en vistas KDD | Prefijo único (`kdd_principal` vs `kdd_lista_fN`) para claves Streamlit y un solo formulario OpenWeather por vista |

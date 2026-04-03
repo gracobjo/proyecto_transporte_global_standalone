@@ -157,7 +157,8 @@ Todo lo que se escribe en Cassandra (y en Hive si aplica) pasa por esta capa ant
 
 ## 5. Hive en la infraestructura
 
-- **Hive** tiene su propia base de datos (p. ej. `logistica_db` en `persistencia_hive.py`) y tablas (eventos, clima, camiones, rutas alternativas, agregados diarios), particionadas por año/mes.
+- **Hive** tiene su propia base de datos (por defecto `logistica_espana` vía `HIVE_DB` en `config.py`) y tablas (eventos, clima, camiones, rutas alternativas, agregados diarios), con particiones **`anio_part` / `mes_part`** en el esquema SIMLOG (`persistencia_hive.py`).
+- **Consultas del cuadro de mando**: la UI usa fragmentos SQL generados en `servicios/consultas_cuadro_mando.py`. Para ventanas «**últimas 24h**» se combinan el filtro de día (`_F24`) con la poda **`_P24H`** (solo el mes calendario de hoy y el de ayer), evitando abrir particiones de un mes anterior completo cuando no hace falta.
 - **Origen de los datos**: lo que Spark escribe en Hive (o lo que escribe `persistencia_hive.py`) viene del **mismo** flujo que alimenta Cassandra: datos de la ingesta (JSON en HDFS o simulación), procesados y opcionalmente limpiados en Spark.
 - **Uso**: Hive sirve para consultas analíticas e histórico (por fechas); Cassandra para estado actual y dashboard. No hay flujo “Hive → Cassandra”; ambos se alimentan desde el procesamiento Spark.
 
@@ -221,12 +222,15 @@ Diseño detallado: **`docs/DASHBOARD_KDD_UI.md`**.
 | RF-CM-HIVE-01 | En el **Cuadro de mando**, permitir consultas Hive supervisadas para analizar **incidencias** del histórico en una ventana temporal de **24 horas** | `servicios/consultas_cuadro_mando.py` (whitelist) + `render_consultas_hive()` en `servicios/cuadro_mando_ui.py` |
 | RF-CM-HIVE-02 | Calcular un informe **Riesgo por hub (últimas 24h)** derivando un tipo de incidencia a partir de `estado`, `motivo_retraso` y `clima_actual` (clasificación: OK/Congestionado/Bloqueado + subtipos) | Query Hive `riesgo_hub_24h` (deriva severidad/tipo y agrega top 3 por hub) |
 | RF-CM-HIVE-03 | Calcular un informe **Top causas (últimas 24h)** que agregue los tipos derivados de incidencia y devuelva el ranking de causas con su share y una **duración aproximada** sobre 24h | Query Hive `top_causas_24h` (top 10 por muestras) |
+| RF-CM-HIVE-04 | Mostrar **descripción del modelo de datos** (Cassandra/Hive) junto a cada plantilla supervisada | `servicios/cuadro_mando_modelo_datos.py` + expanders en `cuadro_mando_ui.py` |
+| RF-CM-HIVE-05 | Ofrecer **análisis asistido** del histórico (estadísticas y extrapolación heurística) sin SQL arbitrario | `servicios/cuadro_mando_analisis_hive.py` + botón en cuadro de mando |
 
 ## 10. Requisitos no funcionales — Cuadro de mando (Hive histórico 24h)
 
 | ID | Requisito | Notas |
 |----|-----------|-------|
-| RNF-CM-HIVE-01 | Las consultas Hive usadas en el UI deben ser agregadas y filtradas por ventana temporal (24h) para evitar bloqueos de la interfaz | SQL agregadas con `WHERE fecha_proceso >= ...` + límites/ranking |
+| RNF-CM-HIVE-01 | Las consultas Hive usadas en el UI deben ser agregadas y filtradas por ventana temporal (24h) para evitar bloqueos de la interfaz | SQL agregadas + `LIMIT`; filtros `anio`/`mes`/`dia`; poda `_P24H` con `_F24` (ver `docs/HIVE_CUADRO_MANDO_CORRECCIONES.md` §8) |
+| RNF-CM-HIVE-02 | Timeout PyHive acotado pero configurable | `HIVE_QUERY_TIMEOUT_SEC` (p. ej. 600 s); evitar escaneos de partición completos innecesarios |
 
 Diseño detallado: **`docs/DIAGRAMAS_MERMAID.md`**, apartados de flujo UI/analítica y diagramas UML en `docs/uml/`.
 

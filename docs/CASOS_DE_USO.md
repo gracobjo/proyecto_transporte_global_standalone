@@ -19,7 +19,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-02 | Supervisar y gobernar el stack | Operador | Servicios coherentes (puertos / estado) |
 | CU-03 | Gestionar stack vía script CLI | Operador | `simlog_stack.py start/status/stop` |
 | CU-04 | Visualizar estado de red y camiones | Analista | Dashboard Streamlit / mapa |
-| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado (+ analítica Hive 24h: riesgo por hub y top causas) |
+| CU-05 | Consultar histórico analítico | Analista | Hive / SQL supervisado; ventanas 24h con poda `_P24H`; opcional **CU-20** para síntesis numérica en el cuadro de mando |
 | CU-06 | Evaluar rutas híbridas | Planificador | Rutas y métricas en UI de planificación |
 | CU-07 | Orquestar con Airflow (fases o maestro) | Operador / Programador | DAG runs e informes bajo `reports/kdd/` |
 | CU-08 | Ingestar vía NiFi con trigger periódico | Programador | Flujo hacia Kafka/HDFS según `nifi/` |
@@ -34,6 +34,7 @@ Documento funcional para la plataforma en modo standalone.
 | CU-17 | Auditar procedencia de la ingesta en NiFi | Operador | Trazabilidad por relaciones y atributos de provenance |
 | CU-18 | Reconfigurar la red logística ante fallo crítico | Operador / Analista | Nodos/rutas desactivados, rutas alternativas recalculadas y alertas activas |
 | CU-19 | Asignar rutas en cuadro de mando y simular movimiento en mapa | Analista / Operador | Filas en `asignaciones_ruta_cuadro`, `tracking_camiones` actualizado, mapa en vivo cada *N* s, alerta/correo al finalizar ruta |
+| CU-20 | Analizar histórico Hive con estadísticas y predicción heurística | Analista | Paquete de consultas aprobadas (`agg_ultima_semana`, `eventos_evolucion_dia`, `gestor_incidencias_resumen`), `describe`, gráficos de serie y extrapolación lineal simple (sin API de IA externa) |
 
 ## Detalle breve
 
@@ -77,6 +78,13 @@ Documento funcional para la plataforma en modo standalone.
 - **Entrada:** UI `http://localhost:8088` (puerto típico SIMLOG) con api-server + scheduler activos.
 - **DAGs:** fases `simlog_kdd_00_infra` … `simlog_kdd_99_consulta_final`; maestro `simlog_maestro`; utilidades `simlog_arranque_servicios`, `simlog_parar_servicios`, `simlog_comprobar_servicios`.
 - **Documentación:** `docs/AIRFLOW_DAGS_SIMLOG.md`.
+
+### CU-20 — Análisis asistido (histórico Hive)
+
+- **Precondiciones:** HiveServer2 accesible; tablas históricas con datos (p. ej. tras Spark con `SIMLOG_ENABLE_HIVE=1`).
+- **Flujo:** pestaña **Cuadro de mando** → sección **Análisis asistido sobre histórico (Hive)** → **Ejecutar paquete de análisis y predicciones simples**.
+- **Postcondiciones:** Se muestran estadísticas numéricas (`describe`), gráficos de serie cuando hay columnas adecuadas y texto de síntesis con extrapolación heurística (regresión lineal simple). No ejecuta modelos ML entrenados ni llama a APIs externas.
+- **Implementación:** `servicios/cuadro_mando_analisis_hive.py`.
 
 ### CU-19 — Cuadro de mando: flota y simulación en mapa
 

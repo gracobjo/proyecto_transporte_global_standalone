@@ -22,18 +22,20 @@ from servicios.clima_retrasos import (
     evaluar_retraso_integrado,
     obtener_clima_todos_hubs_completo,
 )
-from config import HIVE_TABLE_TRANSPORTE_HIST
+from config import HIVE_DB, HIVE_TABLE_TRANSPORTE_HIST, KEYSPACE
 from servicios.consultas_cuadro_mando import (
     CASSANDRA_CONSULTAS,
     CASSANDRA_CATEGORIAS,
     HIVE_CONSULTAS,
     HIVE_CATEGORIAS,
+    cassandra_tablas_de_consulta,
     ejecutar_cassandra_consulta,
     ejecutar_cassandra_cql_seguro,
     ejecutar_hive_consulta,
     ejecutar_hive_consulta_detalle,
     ejecutar_hive_sql_seguro,
     ejecutar_hive_sql_seguro_detalle,
+    hive_tablas_de_consulta,
     limpiar_cache_consultas_hive,
     listar_categorias_cassandra,
     listar_categorias_hive,
@@ -53,6 +55,11 @@ from servicios.consultas_cuadro_mando import (
     obtener_consultas_de_categoria_cassandra,
     titulo_cassandra,
     titulo_hive,
+)
+from servicios.cuadro_mando_analisis_hive import ejecutar_paquete_analisis_hive
+from servicios.cuadro_mando_modelo_datos import (
+    markdown_contexto_cassandra,
+    markdown_contexto_hive,
 )
 from servicios.asignaciones_ruta_cassandra import (
     listar_asignaciones_dia,
@@ -140,6 +147,93 @@ def _titulo_fase(orden: int) -> str:
         5: "Interpretación",
     }
     return titulos.get(orden, f"Fase {orden}")
+
+
+def _render_panel_modelo_cassandra(codigo: str) -> None:
+    """Muestra la plantilla CQL y la descripción de negocio del esquema tocado."""
+    tablas = cassandra_tablas_de_consulta(codigo)
+    cql = (CASSANDRA_CONSULTAS.get(codigo) or {}).get("cql", "").strip()
+    with st.expander("Consulta CQL y modelo de datos (Cassandra)", expanded=True):
+        st.markdown("#### Plantilla CQL supervisada")
+        st.code(cql or "(sin plantilla)", language="sql")
+        st.caption(f"Keyspace configurado: `{KEYSPACE}` · Tablas en esta consulta: **{len(tablas)}**")
+        if tablas:
+            st.markdown("#### Descripción del modelo")
+            st.markdown(markdown_contexto_cassandra(tablas))
+        if tablas and st.button(
+            "Leer columnas desde Cassandra (metadatos)",
+            key=f"cass_meta_cols_{codigo}",
+            help="Una petición de metadatos por tabla; requiere nodo CQL accesible.",
+        ):
+            for t in tablas:
+                ok_c, err_c, cols = listar_columnas_cassandra(t)
+                if ok_c and cols:
+                    st.markdown(f"**`{t}`** ({len(cols)} columnas)")
+                    st.code(", ".join(cols), language="text")
+                else:
+                    st.warning(f"No se pudieron listar columnas de `{t}`: {err_c}")
+
+
+def _render_panel_modelo_hive(codigo: str) -> None:
+    """Plantilla SQL Hive + tablas tocadas + descripción analítica."""
+    tablas = sorted(hive_tablas_de_consulta(codigo))
+    sql = (HIVE_CONSULTAS.get(codigo) or {}).get("sql", "").strip()
+    with st.expander("Consulta SQL y modelo de datos (Hive)", expanded=True):
+        st.markdown("#### Plantilla SQL supervisada")
+        st.code(sql or "(sin plantilla)", language="sql")
+        st.caption(
+            f"Base de datos Hive: `{HIVE_DB}` · Tablas requeridas: **{len(tablas)}** "
+            f"(nombre físico transporte: `{HIVE_TABLE_TRANSPORTE_HIST}`)"
+        )
+        if tablas:
+            st.markdown("#### Descripción del modelo")
+            st.markdown(markdown_contexto_hive(tablas, HIVE_TABLE_TRANSPORTE_HIST))
+        if tablas and st.button(
+            "Leer columnas desde Hive (DESCRIBE)",
+            key=f"hive_meta_cols_{codigo}",
+        ):
+            for t in tablas:
+                ok_h, err_h, cols = listar_columnas_hive(t)
+                if ok_h and cols:
+                    st.markdown(f"**`{t}`** ({len(cols)} columnas)")
+                    st.code(", ".join(cols), language="text")
+                else:
+                    st.warning(f"No se pudieron listar columnas de `{t}`: {err_h}")
+
+
+def render_analisis_hive_ia() -> None:
+    """Estadísticas y proyecciones simples sobre consultas históricas aprobadas."""
+    st.subheader("Análisis asistido sobre histórico (Hive)")
+    st.caption(
+        "Combina varias **plantillas Hive aprobadas** (agregaciones, evolución de eventos, resumen de incidencias). "
+        "Incluye `describe` sobre columnas numéricas, gráficos de serie y **proyecciones heurísticas** "
+        "(regresión lineal sobre el índice temporal de la muestra). No es un modelo de IA entrenado ni sustituye "
+        "a un motor de ML en producción."
+    )
+    if st.button("Ejecutar paquete de análisis y predicciones simples", key="btn_hive_ia_pack", type="secondary"):
+        with st.spinner("Consultando Hive (3 plantillas + cálculos en memoria)…"):
+            pack = ejecutar_paquete_analisis_hive()
+        if pack.get("errores"):
+            for e in pack["errores"]:
+                st.error(e)
+        if pack.get("ok_general") is False and not pack.get("errores"):
+            st.warning("Algunas consultas no devolvieron datos.")
+        if pack.get("predicciones_md"):
+            st.markdown("#### Síntesis y predicciones heurísticas")
+            st.markdown(pack["predicciones_md"])
+        if pack.get("tablas_resumen_md"):
+            with st.expander("Estadísticas numéricas (`describe`)", expanded=False):
+                st.markdown(pack["tablas_resumen_md"])
+        df_serie = pack.get("dfs", {}).get("_serie_agg_diaria")
+        if df_serie is not None and not df_serie.empty and "contador" in df_serie.columns:
+            st.markdown("#### Serie diaria — suma de `contador` (agregaciones)")
+            tmp = df_serie.copy()
+            tmp["fecha"] = tmp["fecha"].astype(str)
+            st.line_chart(tmp.set_index("fecha")["contador"])
+        df_ev = pack.get("dfs", {}).get("_eventos_total_por_dia")
+        if df_ev is not None and not df_ev.empty and "total" in df_ev.columns:
+            st.markdown("#### Eventos agregados por `dia` (evolución)")
+            st.line_chart(df_ev.set_index("dia")["total"])
 
 
 def render_acciones_rapidas() -> None:
@@ -244,6 +338,8 @@ def render_consultas_cassandra() -> None:
     )
     st.session_state["cass_consulta_seleccionada"] = consulta_seleccionada
 
+    _render_panel_modelo_cassandra(consulta_seleccionada)
+
     # Ejecutar consulta
     if st.button("Ejecutar consulta Cassandra", key="btn_cql", type="primary"):
         with st.spinner("Ejecutando Cassandra…"):
@@ -324,43 +420,9 @@ def render_consultas_hive() -> None:
 
     tablas_en_hive: set[str] = st.session_state.hive_tablas_en_hive
 
-    # Requisitos por consulta (tablas físicas)
-    requiere: dict[str, set[str]] = {
-        "diag_smoke_hive": set(),
-        "tablas_bd": set(),
-        "historico_nodos_muestra": {"historico_nodos"},
-        "historico_nodos_conteo": {"historico_nodos"},
-        "nodos_maestro_muestra": {"nodos_maestro"},
-        "nodos_maestro_conteo": {"nodos_maestro"},
-        "gemelo_red_nodos": {"red_gemelo_nodos"},
-        "gemelo_red_aristas": {"red_gemelo_aristas"},
-        "eventos_historico_muestra": {"eventos_historico"},
-        "eventos_nodos_24h": {"eventos_historico"},
-        "eventos_bloqueos_24h": {"eventos_historico"},
-        "eventos_evolucion_dia": {"eventos_historico"},
-        "clima_historico_muestra": {"clima_historico"},
-        "clima_historico_hoy": {"clima_historico"},
-        "clima_estado_carretera": {"clima_historico"},
-        "tracking_historico_muestra": {"tracking_camiones_historico"},
-        "tracking_camion_especifico": {"tracking_camiones_historico"},
-        "tracking_ultima_posicion": {"tracking_camiones_historico"},
-        "transporte_ingesta_real_muestra": {"transporte_ingesta_completa"},
-        "transporte_ingesta_hoy": {"transporte_ingesta_completa"},
-        "transporte_retrasos_hoy": {"transporte_ingesta_completa"},
-        "gestor_historial_rutas_camion": {"transporte_ingesta_completa"},
-        "rutas_alternativas_muestra": {"rutas_alternativas_historico"},
-        "rutas_alternativas_bloqueos": {"rutas_alternativas_historico"},
-        "agg_estadisticas_diarias": {"agg_estadisticas_diarias"},
-        "agg_ultima_semana": {"agg_estadisticas_diarias"},
-        "gestor_eventos_por_hub": {"eventos_historico"},
-        "gestor_clima_afecta_transporte": {"clima_historico", HIVE_TABLE_TRANSPORTE_HIST},
-        "gestor_incidencias_resumen": {"eventos_historico"},
-        "gestor_pagerank_historico": {"eventos_historico"},
-    }
-
     def _disponible(codigo: str) -> bool:
-        req = requiere.get(codigo)
-        if req is None:
+        req = hive_tablas_de_consulta(codigo)
+        if not req:
             return True
         if not tablas_en_hive:
             # Sin verificación aún: mostrar todas las consultas (fallará Hive si falta la tabla)
@@ -468,6 +530,9 @@ def render_consultas_hive() -> None:
             st.caption("⚠️ Estas consultas requieren tablas que se crean ejecutando Spark con `SIMLOG_ENABLE_HIVE=1`")
 
     sel = st.session_state["hive_consulta_seleccionada"] if consulta_seleccionada else None
+
+    if sel:
+        _render_panel_modelo_hive(sel)
 
     # ==========================================================================
     # Funciones auxiliares para renderizar resultados
@@ -1710,6 +1775,8 @@ def render_cuadro_mando_tab() -> None:
     render_consultas_cassandra()
     st.divider()
     render_consultas_hive()
+    st.divider()
+    render_analisis_hive_ia()
     st.divider()
     render_informes_a_medida()
     st.divider()

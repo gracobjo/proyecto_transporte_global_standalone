@@ -18,6 +18,32 @@ SIMLOG implementa un ciclo KDD logístico de extremo a extremo con foco en:
 5. **Orquestación** — Airflow (DAGs en `~/airflow/dags`, código en `orquestacion/`), NiFi (trigger), scripts de stack.
 6. **Presentación** — Streamlit, enlaces a UIs del stack (HDFS, Spark, etc.).
 
+### 2.1 Kafka (por qué existe en el diseño)
+
+- **Desacople**: la ingesta publica el snapshot aunque el procesamiento Spark vaya más lento o se ejecute en otra ventana.
+- **Auditoría / trazabilidad**: el topic permite inspeccionar el flujo de datos sin depender de la UI.
+- **Reproceso (si retención lo permite)**: re-ejecutar Spark sobre una ventana de mensajes sin volver a llamar a APIs externas.
+
+### 3.1 Spark: grafo, autosanación y métricas (PageRank)
+
+El procesamiento (`procesamiento/procesamiento_grafos.py`) convierte el snapshot en un modelo operativo:
+
+- **Grafo** (GraphFrames): vértices (nodos) y aristas (rutas).
+- **Autosanación**: elimina rutas *Bloqueadas* y penaliza *Congestionadas* (para priorizar desvíos).
+- **Métricas**: PageRank para estimar **criticidad** de nodos.
+- **Persistencia**:
+  - Cassandra (tiempo real): `nodos_estado`, `aristas_estado`, `tracking_camiones`, `pagerank_nodos`.
+  - Hive (opcional): histórico/analítica si `SIMLOG_ENABLE_HIVE=1`.
+
+### 6.2 Rutas alternativas (planificación)
+
+La planificación de rutas alternativas se expone en la UI (pestaña **Rutas híbridas**) y combina:
+
+- **Catálogo de red** (`datos/rutas_red_simlog.yaml`) para topología y distancias.
+- **Estado/incidencias** (clima/DGT/obras) para bloquear o penalizar tramos/nodos.
+- **Ruta principal**: mínimo saltos (BFS) sobre el catálogo.
+- **Alternativas**: recalcular caminos simulando cortes por tramo o nodo intermedio (plan B operativo).
+
 ## Requisitos actualizados (resumen)
 
 Funcionales incorporados en la versión actual:
@@ -26,6 +52,7 @@ Funcionales incorporados en la versión actual:
 - Ejecución de SQL/CQL de lectura desde frontend (modo seguro).
 - Constructor de informes a medida por selección de tabla/campos/filtros.
 - Exportación de informes en PDF y gestión de plantillas personalizadas.
+- Cuadro de mando: **contexto de modelo de datos** junto a cada plantilla CQL/SQL; **análisis asistido** sobre histórico Hive (estadísticas y tendencia heurística en cliente).
 - Buscador semántico en cabecera con navegación directa a la sección objetivo.
 - Inclusión de Swagger API en el panel de servicios y en el resumen del stack.
 
@@ -52,6 +79,9 @@ La pestaña **Ciclo KDD** no sustituye a Airflow ni a los scripts; sirve para **
 | Hive opcional en Spark (`SIMLOG_ENABLE_HIVE`) | Evitar bloqueos de metastore en desarrollo |
 | Airflow 3 + `LocalExecutor` | `[api] base_url` y puerto deben coincidir con el api-server (p. ej. 8088) para no dejar tareas en cola |
 | `simlog_stack.py` | Arranque/parada secuencial reproducible tras reinicio |
+| Poda Hive `_P24H` + `_F24` | Ventanas «24h» sin abrir el mes de `date_sub(...,6)`; evita escanear todo el mes anterior en agregaciones |
+| CQL agregación/filtro en cliente | Donde CQL no admite `OR`+`LIKE` o `GROUP BY` no alineado con PK, el resultado se refina en Python tras un `SELECT` acotado |
+| systemd (YARN + Airflow) | Evitar caídas de `scheduler`/`api-server` y el “reinicio manual” de YARN por conflicto de puertos |
 | Perfil Codespaces aislado (`*.codespaces.*`) | Evitar conflictos con `docker-compose.yml` principal y facilitar prácticas cloud |
 | `widget_scope` en vistas KDD | Prefijo único (`kdd_principal` vs `kdd_lista_fN`) para claves Streamlit y un solo formulario OpenWeather por vista |
 | Panel de reglas unificado | Menos repetición textual al navegar fases 3–5; misma figura topológica con leyenda clara |
@@ -83,7 +113,10 @@ Este perfil levanta Hadoop+Spark+Kafka+Jupyter con límites de recursos conserva
 
 1. Arrancar stack: `python -u scripts/simlog_stack.py start` (o DAG de arranque en Airflow).
 2. Comprobar: `… status` o panel de servicios.
-3. Ejecutar pipeline: DAG maestro cada 15 min y/o cadena `simlog_kdd_01_seleccion` … (si servicios ya están arriba).
+3. Ejecutar pipeline:
+   - Automático: `simlog_maestro` cada 15 min (o `SIMLOG_INGESTA_INTERVAL_MINUTES`).
+   - Manual: cadena `simlog_kdd_01_seleccion` … `simlog_kdd_05_interpretacion`.
+   - Catálogo completo: `docs/AIRFLOW_DAGS_SIMLOG.md`.
 4. Si OpenWeather no responde, validar que el payload entra con `source=dgt` y `fallback_activo=true` en `clima_hubs`.
 5. Parar demo: `… stop`.
 

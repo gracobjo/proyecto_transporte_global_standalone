@@ -12,12 +12,13 @@ Cotejo del enunciado con el estado operativo actual del proyecto SIMLOG (modo st
 | **Procesamiento (Spark)** | Sí | Spark 3.5 + GraphFrames, limpieza previa a persistencia, opción Hive enriquecimiento. |
 | **Persistencia (HDFS, Cassandra, Hive)** | Sí | HDFS backup raw, Cassandra operativo, Hive histórico. |
 | **Orquestación (Airflow)** | Sí | DAGs por fases KDD, maestro 15 min, gestión servicios; Airflow 3.x con api-server + scheduler; configurar `[api] base_url` al puerto real (p. ej. 8088). |
+| **Convención DAGs SIMLOG** | Sí | Los DAGs operativos del proyecto siguen prefijo `simlog_` y están documentados (`docs/AIRFLOW_DAGS_SIMLOG.md`). |
 | **YARN** | Parcial | Soportado (`SPARK_MASTER=yarn`); despliegue habitual `local[*]`. |
 | **Documentación** | Sí | Requisitos, diseño, casos de uso, diagramas Mermaid/PlantUML, Airflow, flujo de datos, **DASHBOARD_KDD_UI**. |
 | **Operación stack** | Sí | `scripts/simlog_stack.py` (`start` / `status` / `stop`) y `servicios/gestion_servicios.py`. |
 | **Cluster en Codespaces (perfil aislado)** | Sí | Guía y artefactos dedicados: `docker-compose.codespaces.yml`, `Dockerfile.codespaces`, `hadoop.codespaces.env`, `docs/CODESPACES_CLUSTER.md`. |
 | **Dashboard KDD (UI)** | Sí | Pestaña Ciclo KDD: fases enlazadas a código/datos, OpenWeather en formulario cuando hay clave válida, respaldo DGT visible cuando no responde, simulación por paso, topología única vs mapas en otras pestañas (`docs/DASHBOARD_KDD_UI.md`, RF/RNF en `FLUJO_DATOS_Y_REQUISITOS.md` §7–8). |
-| **Cuadro de mando extendido** | Sí | Consultas supervisadas Hive/Cassandra, SQL/CQL de lectura desde frontend, formateo tabular para usuario final, informes a medida con PDF y plantillas. |
+| **Cuadro de mando extendido** | Sí | Consultas supervisadas Hive/Cassandra, SQL/CQL de lectura desde frontend, **contexto de modelo de datos** (descripción + columnas), **análisis asistido** sobre histórico Hive (estadísticas y proyección heurística), formateo tabular, informes PDF/plantillas; poda Hive `_P24H` en ventanas 24h para evitar timeouts. |
 | **Navegación semántica UI** | Sí | Buscador semántico en cabecera con salto directo a pestañas/secciones. |
 | **Swagger en catálogo de servicios** | Sí | API FastAPI incluida en resumen de servicios y enlaces de acceso (`/docs`, `/redoc`). |
 | **FAQ IA operativa** | Sí | Microservicio FAQ local (`8091`) + panel Streamlit + KB JSON editable + Swagger. |

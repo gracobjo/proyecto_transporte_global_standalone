@@ -32,6 +32,9 @@ flowchart TB
     UC15[CU-15 FAQ IA]
     UC16[CU-16 Integrar DATEX2 DGT]
     UC17[CU-17 Auditar provenance NiFi]
+    UC18[CU-18 Reconfig. logística]
+    UC19[CU-19 Flota cuadro + simulación mapa]
+    UC20[CU-20 Análisis histórico Hive]
   end
   OP --> UC1
   OP --> UC2
@@ -59,6 +62,35 @@ flowchart TB
   OP --> UC16
   SCH --> UC16
   OP --> UC17
+  OP --> UC18
+  AN --> UC18
+  AN --> UC19
+  OP --> UC19
+  AN --> UC20
+  OP --> UC20
+```
+
+---
+
+## 1.b Secuencia — Consulta supervisada con contexto de modelo (cuadro de mando)
+
+```mermaid
+sequenceDiagram
+  participant U as Usuario
+  participant ST as Streamlit (cuadro_mando_ui)
+  participant MD as cuadro_mando_modelo_datos
+  participant CM as consultas_cuadro_mando
+  participant HS2 as HiveServer2 / Cassandra
+  U->>ST: Elige categoría y consulta
+  ST->>MD: markdown_contexto_* (tablas de la plantilla)
+  MD-->>ST: Descripción negocio + columnas referencia
+  ST->>U: Muestra expander SQL/CQL + modelo
+  U->>ST: Ejecutar consulta
+  ST->>CM: ejecutar_*_consulta(código)
+  CM->>HS2: SELECT supervisado
+  HS2-->>CM: Resultados
+  CM-->>ST: Filas / TSV
+  ST->>U: st.dataframe
 ```
 
 ---
@@ -85,7 +117,7 @@ flowchart LR
     P[procesamiento_grafos]
   end
   subgraph Externos
-    OWM[OpenWeather]
+    OM[Open-Meteo]
     DGT[DGT DATEX2]
   end
   subgraph Mensajería
@@ -123,6 +155,37 @@ flowchart LR
   ST --> SW
   ST --> FQ
   FQ --> KB
+
+  %% Vistas / conceptos derivados del modelo
+  C --> PR[PageRank (pagerank_nodos)]
+  C --> ES[Estado operativo (nodos_estado/aristas_estado)]
+  ST --> RH[Rutas híbridas (BFS + alternativas)]
+```
+
+---
+
+## 6. Secuencia — orquestación `simlog_maestro` (cada 15 min)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant AF as Airflow (simlog_maestro)
+  participant I as ingesta/ingesta_kdd.py
+  participant K as Kafka
+  participant H as HDFS
+  participant SP as Spark (procesamiento_grafos.py)
+  participant CA as Cassandra
+  participant HV as Hive (opcional)
+
+  Note over AF: Cada SIMLOG_INGESTA_INTERVAL_MINUTES (15 min por defecto)
+  AF->>I: Ejecutar ingesta (snapshot)
+  I->>K: Publicar raw/filtered
+  I->>H: Guardar backup JSON
+  AF->>SP: Ejecutar Spark (fases 3–5)
+  SP->>CA: Persistir estado operativo
+  opt SIMLOG_ENABLE_HIVE=true
+    SP->>HV: Persistir histórico/analítica
+  end
 ```
 
 ---
@@ -133,7 +196,7 @@ flowchart LR
 sequenceDiagram
   participant T as Trigger NiFi/Airflow
   participant I as Ingesta
-  participant OWM as OpenWeather
+  participant OM as Open-Meteo
   participant DGT as DGT DATEX2
   participant K as Kafka
   participant H as HDFS
@@ -142,11 +205,11 @@ sequenceDiagram
   participant V as Hive
   participant D as Dashboard
   T->>I: Disparo periódico
-  I->>OWM: Consulta clima por hubs
-  alt OpenWeather válido
-    OWM-->>I: Clima real por ciudad
-  else OpenWeather falla o clave inválida
-    OWM-->>I: Error / respuesta no usable
+  I->>OM: Consulta clima por hubs
+  alt Open-Meteo válido
+    OM-->>I: Clima real por ciudad
+  else Open-Meteo falla (red / timeout)
+    OM-->>I: Error / respuesta no usable
   end
   I->>DGT: Descarga XML DATEX2
   DGT-->>I: Incidencias reales / error
@@ -169,7 +232,7 @@ sequenceDiagram
   participant U as Analista / Operador
   participant ST as Streamlit Ciclo KDD
   participant W as ultimo_payload.json
-  participant OW as OpenWeather API
+  participant OW as API clima (Open-Meteo u OWM)
   participant DGT as Respaldo DGT
   participant ING as consulta_clima_hubs
   U->>ST: Elige fase 1–2, ajusta paso / formulario API
@@ -178,9 +241,9 @@ sequenceDiagram
   U->>ST: Consultar clima en vivo
   ST->>ING: api_key opcional
   ING->>OW: GET weather
-  alt OpenWeather responde
+  alt API clima responde
     OW-->>ING: JSON
-  else OpenWeather no responde / 401
+  else API no responde / 401 (OpenWeather)
     OW-->>ING: error
     ING->>DGT: reutilizar clima inferido
     DGT-->>ING: condiciones_meteorologicas / visibilidad / estado_carretera
@@ -196,16 +259,16 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant N as NiFi PG_SIMLOG_KDD
-  participant O as OpenWeather InvokeHTTP
+  participant O as OpenMeteo InvokeHTTP
   participant G as DGT DATEX2 InvokeHTTP
   participant M as Merge scripts
   participant P as Data Provenance
   N->>O: Snapshot sintético base
-  O-->>M: Atributo owm.response o error HTTP
+  O-->>M: Atributo owm.response (cuerpo Open-Meteo) o error HTTP
   M->>G: Payload con clima válido o payload intacto
   G-->>M: Atributo dgt.response.xml
   M-->>P: FlowFile con simlog.provenance.*\n(stage, sources, dgt_mode, dgt_incidents)
-  Note over M,P: Si falta clima OpenWeather,\nDGT rellena clima_hubs alternativo
+  Note over M,P: Si falta clima API,\nDGT rellena clima_hubs alternativo
 ```
 
 ---

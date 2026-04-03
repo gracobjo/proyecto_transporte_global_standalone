@@ -123,7 +123,11 @@ El script está pensado para ejecutarse de forma periódica (p. ej. cada 15 min 
 | `cassandra/` | Configuración y esquema CQL (`esquema_logistica.cql`) para nodos, aristas, tracking, PageRank. |
 | `sql/` | Consultas SQL/HQL auxiliares. |
 | `setup_hive.hql` | Script de inicialización de Hive. |
-| `requirements.txt` | Dependencias Python (requests, kafka-python, cassandra-driver, streamlit, folium, pyspark, etc.). |
+| `requirements.txt` | Dependencias Python (requests, kafka-python, cassandra-driver, streamlit, folium, pyspark, pandas, etc.). |
+| `servicios/consultas_cuadro_mando.py` | Whitelist CQL/SQL del cuadro de mando, poda Hive (`_PM`, `_P7`, `_P24H`, `_F24`, …), ejecución PyHive/Cassandra. |
+| `servicios/cuadro_mando_ui.py` | Pestaña Cuadro de mando: consultas, modelo de datos, análisis Hive, informes, flota. |
+| `servicios/cuadro_mando_modelo_datos.py` | Descripciones de tablas Cassandra/Hive para la UI. |
+| `servicios/cuadro_mando_analisis_hive.py` | Paquete de estadísticas y proyección heurística sobre histórico Hive. |
 
 ---
 
