@@ -278,6 +278,11 @@ def render_pipeline_resultados_tab() -> None:
             )
         else:
             st.error(cas.get("error", "No se pudo conectar a Cassandra."))
+            if cas.get("hint"):
+                st.warning(cas["hint"])
+            st.caption(
+                f"Host usado en esta comprobación: `{CASSANDRA_HOST}` (`CASSANDRA_HOST` en entorno o `config.py`)."
+            )
 
     # --- Hive histórico ---
     st.divider()

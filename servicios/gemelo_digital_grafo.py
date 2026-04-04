@@ -1,5 +1,12 @@
 """
 Generación de la red del gemelo digital (50 capitales + subnodos) y utilidades de distancia.
+
+Topología: **grafo completo (K_50)** entre capitales provinciales (arista por cada par);
+cada capital tiene además subnodos locales conectados a la capital y a las dos capitales
+vecinas más cercanas (híbrido denso + último tramo). Alineado conceptualmente con
+`config_nodos.py` (pipeline: solo capitales, K_n); Hive puede almacenar esta versión
+extendida vía `generar_red_gemelo_digital.py`.
+
 Compartido entre `procesamiento/generar_red_gemelo_digital.py` y el dashboard.
 """
 from __future__ import annotations

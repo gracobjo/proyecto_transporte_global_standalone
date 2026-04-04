@@ -101,14 +101,13 @@ def obtener_clima_completo_hub(hub: str, lat: float, lon: float) -> Dict[str, An
 
 
 def obtener_clima_todos_hubs_completo() -> Dict[str, Dict[str, Any]]:
-    """Clima detallado para los 5 hubs (coordenadas desde config_nodos)."""
+    """Clima detallado para todos los nodos ``hub`` de ``config_nodos`` (capitales provinciales)."""
     nodos = get_nodos()
-    hubs = ["Madrid", "Barcelona", "Bilbao", "Vigo", "Sevilla"]
     out: Dict[str, Dict[str, Any]] = {}
-    for h in hubs:
-        if h not in nodos:
+    for nid, meta in nodos.items():
+        if str(meta.get("tipo", "")).lower() != "hub":
             continue
-        out[h] = obtener_clima_completo_hub(h, nodos[h]["lat"], nodos[h]["lon"])
+        out[nid] = obtener_clima_completo_hub(nid, float(meta["lat"]), float(meta["lon"]))
     return out
 
 

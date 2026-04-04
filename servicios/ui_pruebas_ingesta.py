@@ -128,7 +128,12 @@ def render_pruebas_ingesta_tab() -> None:
         if blob.get("ok"):
             st.caption(f"**Directorio:** `{blob['base_dir']}`")
             rows_link = []
-            for i, h in enumerate(blob.get("html") or []):
+            html_list = blob.get("html") or []
+            if html_list and any(Path(x["ruta"]).is_file() for x in html_list):
+                st.caption(
+                    "Enlaces HTML: si el navegador bloquea `file://`, copia la ruta de la tabla o abre el fichero desde el IDE."
+                )
+            for i, h in enumerate(html_list):
                 p = Path(h["ruta"])
                 uri = p.as_uri() if p.is_file() else ""
                 rows_link.append(
@@ -140,12 +145,8 @@ def render_pruebas_ingesta_tab() -> None:
                     }
                 )
                 if uri:
-                    st.link_button(
-                        f"Abrir en navegador · {h['nombre']}",
-                        uri,
-                        key=f"kdd_open_html_{run_sel}_{i}",
-                        help="Si el navegador bloquea file://, copia la ruta o abre el fichero desde el IDE.",
-                    )
+                    # `st.link_button(..., key=..., help=...)` no existe en Streamlit 1.28 (solo label + url).
+                    st.link_button(f"Abrir en navegador · [{i + 1}] {h['nombre']}", uri)
             for j, m in enumerate(blob.get("markdown") or []):
                 p = Path(m["ruta"])
                 rows_link.append({"tipo": "Markdown", "archivo": m["nombre"], "ruta": m["ruta"], "uri": ""})

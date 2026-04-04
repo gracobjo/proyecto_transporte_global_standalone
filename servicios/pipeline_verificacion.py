@@ -417,6 +417,14 @@ def cassandra_resumen_tablas(host: str, keyspace: str, modo: str = "completo") -
     except Exception as e:
         out["ok"] = False
         out["error"] = str(e)[:300]
+        low = str(e).lower()
+        if "refused" in low or "unable to connect" in low or "connection refused" in low:
+            out["hint"] = (
+                f"No hay CQL en `{host}:9042` **visto desde el proceso que ejecuta Streamlit**. "
+                f"En terminal: `nc -zv {host} 9042` (o `ss -lntp | grep 9042`). "
+                "Si Cassandra está en **otro nodo**, en **Docker** (`cassandra`, otra red) o solo enlazó otra IP, "
+                "define `export CASSANDRA_HOST=…` (IP o hostname alcanzable) y **reinicia** la app."
+            )
     return out
 
 

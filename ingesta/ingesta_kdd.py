@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SIMLOG España — Fase I: Ingesta KDD
-- Consulta climática Open-Meteo por defecto (5 hubs o todos los nodos según `SIMLOG_CLIMA_TODOS_NODOS`); OpenWeather opcional
+- Consulta climática Open-Meteo por defecto (capitales provinciales / todos los nodos según `SIMLOG_CLIMA_TODOS_NODOS`); OpenWeather opcional
 - Simulación de incidentes (OK/Congestionado/Bloqueado)
 - Interpolación GPS cada 15 min para 5 camiones
 - Publicación a Kafka (transporte_status) y backup HDFS

@@ -97,10 +97,34 @@ PROCESSORS: List[Dict[str, Any]] = [
     },
     {
         "name": "Spark_Submit_Procesamiento",
-        "type": "ExecuteProcess",
-        "responsibility": "Procesador opcional para lanzar Spark desde NiFi.",
-        "inputs": ["Disparo manual u otra integración futura"],
-        "outputs": ["Proceso Spark batch"],
+        "type": "ExecuteStreamCommand",
+        "responsibility": "Tras HDFS: spark-submit vía run_spark_from_nifi_flow.sh → procesamiento_grafos.py (Cassandra/Hive).",
+        "inputs": ["FlowFile `original` desde HDFS_Backup_JSON"],
+        "outputs": [
+            "`original` → Route_Spark_Exito_Fallo (atributo execution.status)",
+            "`output stream` / `nonzero status` auto-terminados",
+        ],
+    },
+    {
+        "name": "Route_Spark_Exito_Fallo",
+        "type": "RouteOnAttribute",
+        "responsibility": "Bifurca según execution.status (0 → éxito; resto → fallo).",
+        "inputs": ["`original` desde Spark"],
+        "outputs": ["exito → Notify_OK", "fallo → Notify_FALLO", "unmatched → Log_Fallos"],
+    },
+    {
+        "name": "Notify_Pipeline_OK",
+        "type": "ExecuteStreamCommand",
+        "responsibility": "Telegram + correo (SIMLOG_*) y línea en reports/simlog_pipeline_runs.log.",
+        "inputs": ["Ruta `exito` del Route"],
+        "outputs": ["`original`/`output stream` auto-terminados; `nonzero status` → Log_Fallos si el script falla"],
+    },
+    {
+        "name": "Notify_Pipeline_FALLO",
+        "type": "ExecuteStreamCommand",
+        "responsibility": "Aviso de fallo Spark/procesamiento; mismo canal de notificación que el cuadro de mando.",
+        "inputs": ["Ruta `fallo` del Route"],
+        "outputs": ["`original`/`output stream` auto-terminados; `nonzero status` → Log_Fallos si el script falla"],
     },
     {
         "name": "Log_Fallos",
@@ -122,6 +146,11 @@ CONNECTIONS: List[Dict[str, str]] = [
     {"src": "Merge_DGT_Into_Payload", "dst": "Kafka_Publish_RAW", "rel": "success"},
     {"src": "Merge_DGT_Into_Payload", "dst": "Kafka_Publish_FILTERED", "rel": "success"},
     {"src": "Merge_DGT_Into_Payload", "dst": "HDFS_Backup_JSON", "rel": "success"},
+    {"src": "HDFS_Backup_JSON", "dst": "Spark_Submit_Procesamiento", "rel": "original"},
+    {"src": "Spark_Submit_Procesamiento", "dst": "Route_Spark_Exito_Fallo", "rel": "original"},
+    {"src": "Route_Spark_Exito_Fallo", "dst": "Notify_Pipeline_OK", "rel": "exito"},
+    {"src": "Route_Spark_Exito_Fallo", "dst": "Notify_Pipeline_FALLO", "rel": "fallo"},
+    {"src": "Route_Spark_Exito_Fallo", "dst": "Log_Fallos", "rel": "unmatched"},
 ]
 
 ERROR_CONNECTIONS: List[Dict[str, str]] = [
@@ -133,6 +162,8 @@ ERROR_CONNECTIONS: List[Dict[str, str]] = [
     {"src": "Kafka_Publish_DGT_RAW", "dst": "Log_Fallos", "rel": "failure"},
     {"src": "Kafka_Publish_RAW", "dst": "Log_Fallos", "rel": "failure"},
     {"src": "Kafka_Publish_FILTERED", "dst": "Log_Fallos", "rel": "failure"},
+    {"src": "Notify_Pipeline_OK", "dst": "Log_Fallos", "rel": "nonzero status"},
+    {"src": "Notify_Pipeline_FALLO", "dst": "Log_Fallos", "rel": "nonzero status"},
 ]
 
 

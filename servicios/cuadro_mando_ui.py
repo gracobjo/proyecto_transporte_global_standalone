@@ -18,10 +18,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from config_nodos import get_nodos
-from servicios.clima_retrasos import (
-    evaluar_retraso_integrado,
-    obtener_clima_todos_hubs_completo,
-)
+from servicios.clima_retrasos import evaluar_retraso_integrado, obtener_clima_completo_hub
 from config import HIVE_DB, HIVE_TABLE_TRANSPORTE_HIST, KEYSPACE
 from servicios.consultas_cuadro_mando import (
     CASSANDRA_CONSULTAS,
@@ -747,8 +744,15 @@ def render_slides_clima_retrasos() -> None:
         return
 
     nodos = cargar_nodos_cassandra()
-    clima = obtener_clima_todos_hubs_completo()
-    hubs_order: List[str] = ["Madrid", "Barcelona", "Bilbao", "Vigo", "Sevilla"]
+    # Solo 5 capitales de referencia (evita decenas de llamadas HTTP al cargar slides).
+    hubs_order: List[str] = ["Madrid", "Barcelona", "Bilbao", "Sevilla", "Valencia"]
+    nodos_cfg = get_nodos()
+    clima: Dict[str, Dict[str, Any]] = {}
+    for h in hubs_order:
+        if h not in nodos_cfg:
+            continue
+        m = nodos_cfg[h]
+        clima[h] = obtener_clima_completo_hub(h, float(m["lat"]), float(m["lon"]))
 
     slides: List[Tuple[str, dict, dict]] = []
     for h in hubs_order:
@@ -774,7 +778,7 @@ def render_slides_clima_retrasos() -> None:
     slides.append(
         (
             "Síntesis red nacional",
-            {"hub": "Síntesis", "descripcion": "Agregado orientativo 5 hubs"},
+            {"hub": "Síntesis", "descripcion": "Agregado orientativo (muestra de capitales)"},
             {
                 "hub": "Síntesis",
                 "nivel_riesgo": "alto" if max(totales) >= 45 else ("medio" if max(totales) >= 15 else "bajo"),

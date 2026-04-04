@@ -32,7 +32,7 @@ def get_operaciones_por_fase() -> Tuple[Tuple[int, List[OperacionFase]], ...]:
                 OperacionFase(
                     "sel_topologia",
                     "Topología de red (España)",
-                    "5 hubs + 25 secundarios; definición de aristas para el modelo.",
+                    "50 capitales provinciales; grafo completo (aristas haversine entre cada par).",
                     "verificacion",
                 ),
             ],

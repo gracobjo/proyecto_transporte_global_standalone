@@ -274,7 +274,7 @@ def api_verificacion() -> VerificacionResponse:
 @app.get(
     "/api/v1/topologia/nodos",
     tags=["topologia"],
-    summary="Nodos de la red (hubs + secundarios)",
+    summary="Nodos de la red (capitales provinciales; tipo hub)",
     response_model=Dict[str, Dict[str, Any]],
 )
 def api_topologia_nodos() -> Dict[str, Dict[str, Any]]:

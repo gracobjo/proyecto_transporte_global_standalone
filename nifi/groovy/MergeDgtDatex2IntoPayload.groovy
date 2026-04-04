@@ -133,8 +133,26 @@ def hasWeather = { Map incident ->
 
 def parseRoot = { String xml ->
     if (!xml?.trim()) return null
+    def t = xml.trim()
+    if (!t.startsWith("<")) return null
+    def head = t.substring(0, Math.min(400, t.length())).toLowerCase(Locale.ROOT)
+    if (head.contains("<html") || head.contains("<!doctype html") || head.contains("<head>")) return null
+    // XML truncado (DGT/proxy): heurística + parse; Xerces escribe [Fatal Error] en System.err aunque luego falle el parse.
+    int lt = t.count("<")
+    int gt = t.count(">")
+    if (lt > gt + 3) return null
+    if (t.length() > 800 && !(t.endsWith(">") || t.endsWith("]]>"))) return null
     try {
-        return new XmlSlurper(false, false).parseText(xml)
+        def lock = "simlog.MergeDgtDatex2.xml.parse".intern()
+        synchronized (lock) {
+            def savedErr = System.err
+            System.setErr(new java.io.PrintStream(new java.io.ByteArrayOutputStream()))
+            try {
+                return new XmlSlurper(false, false).parseText(xml)
+            } finally {
+                System.setErr(savedErr)
+            }
+        }
     } catch (Exception ignored) {
         return null
     }
@@ -149,6 +167,8 @@ def downloadXml = { String url ->
     return conn.getInputStream().getText("UTF-8")
 }
 
+def dgtMode = "live"
+def dgtWarn = ""
 def root = parseRoot(xmlText)
 def xmlSource = "attribute"
 if (root == null) {
@@ -157,19 +177,22 @@ if (root == null) {
         root = parseRoot(xmlText)
         xmlSource = "refetch"
     } catch (Exception e) {
-        flowFile = session.putAttribute(flowFile, "merge.error", "dgt xml unavailable: ${e.message}")
-        session.transfer(flowFile, REL_FAILURE)
-        return
+        dgtMode = "fetch_failed"
+        dgtWarn = e.message ?: "download failed"
     }
 }
 if (root == null) {
-    flowFile = session.putAttribute(flowFile, "merge.error", "dgt xml invalid after refetch")
-    session.transfer(flowFile, REL_FAILURE)
-    return
+    if (dgtMode == "live") {
+        dgtMode = "invalid_xml"
+        dgtWarn = dgtWarn ?: "dgt xml missing or invalid"
+    }
+    flowFile = session.putAttribute(flowFile, "merge.dgt.warn", dgtWarn ?: "dgt unavailable")
 }
 
 def allRecords = []
-descendants(root, ["situationRecord"] as Set).each { rec ->
+def affected = [:]
+if (root != null) {
+    descendants(root, ["situationRecord"] as Set).each { rec ->
     def severity = (firstText(rec, ["overallSeverity", "severity"]) ?: "low").toLowerCase(Locale.ROOT)
     if (!severityRank.containsKey(severity)) severity = "medium"
     def lat = firstText(rec, ["latitude", "latitudeDegrees"])
@@ -208,32 +231,32 @@ descendants(root, ["situationRecord"] as Set).each { rec ->
         lat: lat as Double,
         lon: lon as Double,
     ]
-    allRecords << incident
-}
+        allRecords << incident
+    }
 
-def affected = [:]
-allRecords.each { incident ->
-    def best = null
-    def bestDist = null
-    nodos.each { nid, meta ->
-        def dist = haversineKm(incident.lat as Double, incident.lon as Double, meta.lat as Double, meta.lon as Double)
-        if (bestDist == null || dist < bestDist) {
-            best = nid
-            bestDist = dist
+    allRecords.each { incident ->
+        def best = null
+        def bestDist = null
+        nodos.each { nid, meta ->
+            def dist = haversineKm(incident.lat as Double, incident.lon as Double, meta.lat as Double, meta.lon as Double)
+            if (bestDist == null || dist < bestDist) {
+                best = nid
+                bestDist = dist
+            }
         }
-    }
-    if (best == null || bestDist == null || bestDist > 100.0d) return
-    incident.distancia_nodo_km = Math.round(bestDist * 100.0d) / 100.0d
-    incident.nodo_cercano = best
-    def current = affected[best]
-    if (current == null) {
-        affected[best] = incident
-        return
-    }
-    def candRank = severityRank[incident.severity] ?: 0
-    def curRank = severityRank[current.severity] ?: 0
-    if (candRank > curRank || (candRank == curRank && incident.distancia_nodo_km < current.distancia_nodo_km)) {
-        affected[best] = incident
+        if (best == null || bestDist == null || bestDist > 100.0d) return
+        incident.distancia_nodo_km = Math.round(bestDist * 100.0d) / 100.0d
+        incident.nodo_cercano = best
+        def current = affected[best]
+        if (current == null) {
+            affected[best] = incident
+            return
+        }
+        def candRank = severityRank[incident.severity] ?: 0
+        def curRank = severityRank[current.severity] ?: 0
+        if (candRank > curRank || (candRank == curRank && incident.distancia_nodo_km < current.distancia_nodo_km)) {
+            affected[best] = incident
+        }
     }
 }
 
@@ -322,8 +345,8 @@ if (!weatherAvailable || climaHubs.isEmpty()) {
     }
 }
 payload.resumen_dgt = [
-    source_mode: "live",
-    error: "",
+    source_mode: (dgtMode == "live") ? "live" : "skipped",
+    error: dgtWarn ?: "",
     incidencias_totales: allRecords.size(),
     nodos_afectados: affected.size(),
     hubs_clima_respaldo: (payload.clima_hubs instanceof Map ? payload.clima_hubs.size() : 0)
@@ -338,7 +361,7 @@ session.putAttribute(flowFile, "mime.type", "application/json")
 session.putAttribute(flowFile, "simlog.provenance.stage", "dgt_merged")
 def weatherSrc = flowFile.getAttribute("simlog.weather.source") ?: "openmeteo"
 session.putAttribute(flowFile, "simlog.provenance.sources", allRecords ? (weatherAvailable ? "simulacion,${weatherSrc},dgt" : "simulacion,dgt") : (weatherAvailable ? "simulacion,${weatherSrc}" : "simulacion"))
-session.putAttribute(flowFile, "simlog.provenance.dgt_mode", allRecords ? "live" : "disabled")
+session.putAttribute(flowFile, "simlog.provenance.dgt_mode", dgtMode)
 session.putAttribute(flowFile, "simlog.provenance.dgt_xml_source", xmlSource)
 session.putAttribute(flowFile, "simlog.provenance.dgt_incidents", String.valueOf(allRecords.size()))
 session.putAttribute(flowFile, "simlog.provenance.dgt_nodes_affected", String.valueOf(affected.size()))

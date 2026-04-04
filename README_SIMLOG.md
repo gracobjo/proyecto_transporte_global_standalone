@@ -179,7 +179,7 @@ Si antes usabas el id `dag_maestro_transporte`, desactívalo en la UI y usa el D
 
 | Archivo | Descripción |
 |---------|-------------|
-| `config_nodos.py` | Topología: 5 hubs, 25 secundarios, aristas |
+| `config_nodos.py` | Topología: 50 capitales provinciales, grafo completo (K_n, haversine) |
 | `config.py` | Marca SIMLOG, JARs, API keys |
 | `ingesta/ingesta_kdd.py` | API clima, simulación, GPS 15min, Kafka+HDFS |
 | `procesamiento/procesamiento_grafos.py` | GraphFrames, autosanación, Cassandra+Hive |

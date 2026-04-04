@@ -14,7 +14,7 @@ def _bloque_comun_grafo_base() -> str:
     return f"""
 **Grafo base (antes de reglas)** — `construir_grafo_base`:
 
-- **Vértices:** todos los nodos de `config_nodos` (hubs + secundarios).
+- **Vértices:** todos los nodos de `config_nodos` (capitales provinciales; tipo hub).
 - **Aristas:** topología estática (`get_aristas()`), peso inicial = **distancia en km** (haversine entre nodos).
 """
 

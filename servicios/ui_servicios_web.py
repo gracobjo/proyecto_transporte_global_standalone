@@ -218,7 +218,7 @@ def render_bloque_interfaz_web(sid: str) -> None:
         )
         if url:
             try:
-                st.link_button("Abrir interfaz en nueva pestaña", url=url, width="stretch", key=f"link_ui_{sid}")
+                st.link_button("Abrir interfaz en nueva pestaña", url, width="stretch")
             except Exception:
                 st.markdown(
                     f'<a href="{url}" target="_blank" rel="noopener noreferrer">Abrir interfaz en nueva pestaña</a>',
@@ -249,12 +249,7 @@ def render_sidebar_enlaces_ui() -> None:
                 )
                 continue
             try:
-                st.link_button(
-                    f"Abrir {ui.nombre}",
-                    url=url,
-                    width="stretch",
-                    key=f"sb_ui_{ui.servicio_id}",
-                )
+                st.link_button(f"Abrir {ui.nombre}", url, width="stretch")
             except Exception:
                 st.markdown(f"- [{ui.nombre}]({url})")
 

@@ -39,3 +39,27 @@ Resumen de cambios funcionales reflejados en manuales, diseño, requisitos y dia
 | `README.md` / `README_SIMLOG.md` | Estructura y punteros |
 
 La carpeta `07_Documentacion/` se sincroniza con copias de los mismos ficheros bajo `docs/` cuando procede el mantenimiento paralelo del vault.
+
+## NiFi PG_SIMLOG_KDD, verificación por terminal y Streamlit (2026-04-04)
+
+### Scripts y API NiFi
+
+| Script | Uso |
+|--------|-----|
+| `scripts/recreate_nifi_practice_flow.py` | Crea/actualiza `PG_SIMLOG_KDD`: ExecuteScript con `Script File` absoluto bajo `nifi/groovy/`, **`Script Body` vacío** (evita que un cuerpo pegado en la UI anule el fichero), **`concurrentTasks` = 2** en esos Groovy, flujo HDFS → Spark → `RouteOnAttribute` → notificaciones. Constante `NIFI_PG_EXECUTE_SCRIPTS` y `assert_nifi_groovy_sources_exist`. NiFi 2.x aquí no admite `EVENT_DRIVEN` en la API (solo `TIMER_DRIVEN` / `CRON_DRIVEN`). |
+| `scripts/sync_nifi_groovy_scripts.py` | Solo vuelca rutas y propiedades de los tres ExecuteScript Groovy (tras `git pull` o editar `.groovy`). |
+| `scripts/verificar_flujo_nifi_api.py` | Comprueba procesadores y aristas HDFS → Spark → notify; escribe `reports/nifi_flow_verify.log`. |
+| `scripts/nifi_iniciar_pipeline_simlog.py` | RUNNING/STOPPED por procesador; intento de `run-status` del grupo silenciado en **404** (NiFi 2 no expone ese endpoint para grupos locales). |
+
+### Groovy DGT
+
+- `nifi/groovy/MergeDgtDatex2IntoPayload.groovy`: durante `XmlSlurper.parseText`, redirección temporal de `System.err` (con bloqueo) para evitar líneas `[Fatal Error]` de Xerces en XML truncado/ inválido aunque el flujo siga en modo degradado.
+
+### Dashboard (Streamlit)
+
+- **Resultados pipeline**: si Cassandra CQL falla con *connection refused*, mensaje de ayuda y caption con `CASSANDRA_HOST` (`servicios/pipeline_verificacion.py`, `servicios/ui_pipeline_resultados.py`).
+- **`st.link_button`**: eliminado el argumento `key` (no soportado en Streamlit ~1.28 del venv) en `servicios/ui_pruebas_ingesta.py` y `servicios/ui_servicios_web.py`.
+
+### Otros ficheros en el mismo commit
+
+Incluye además cambios en `nifi/flow/simlog_kdd_flow_spec.yaml`, scripts bajo `nifi/scripts/`, `ingesta/`, `procesamiento/`, `servicios/` (API, gemelo digital, KDD UI), `config_nodos.py` y punteros en `README_SIMLOG.md`; revisar `git show` para el detalle por archivo.

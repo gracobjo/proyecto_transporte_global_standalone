@@ -60,9 +60,9 @@ def get_fases_kdd() -> Tuple[FaseKDD, ...]:
             titulo="Selección de datos",
             resumen="Elegir fuentes relevantes para el dominio logístico (España).",
             actividades=(
-                "Red de 5 hubs + 25 nodos secundarios (coordenadas reales).",
+                "Red de 50 capitales provinciales (coordenadas reales); aristas en grafo completo K_n.",
                 linea_actividad_clima_por_hub(),
-                "Definición de aristas (malla hubs + estrella + redundancia secundarios).",
+                "Definición de aristas: tramo directo haversine entre cada par de capitales.",
             ),
             datos_entrada=("coordenadas nodos", "API clima", "topología de red"),
             datos_salida=("payload JSON enriquecido con contexto temporal",),

@@ -128,23 +128,50 @@ processors:
       Delivery Guarantee: "at_least_once"
 
   # --- PERSISTENCIA HDFS / TRIGGER SPARK DESDE EL SNAPSHOT FINAL ---
+  # En despliegue con `scripts/recreate_nifi_practice_flow.py`: ExecuteStreamCommand + put_hdfs_from_stdin.sh
+  # (backup fechado bajo nifi_raw/ y copia plana transporte_nifi_*.json para Spark).
   - id: N11
-    type: PutHDFS
+    type: ExecuteStreamCommand
     name: HDFS_Backup_JSON
     properties:
-      Hadoop Configuration Resources: "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml"
-      Directory: "${HDFS_BACKUP_PATH}/${now():format('yyyy/MM/dd')}"
-      Conflict Resolution: replace
+      Command Path: /bin/bash
+      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/put_hdfs_from_stdin.sh"
+      Ignore STDIN: "false"
 
   - id: N12
-    type: ExecuteProcess
+    type: ExecuteStreamCommand
     name: Spark_Submit_Procesamiento
     properties:
       Command Path: /bin/bash
-      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/spark_submit_yarn.sh"
+      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/run_spark_from_nifi_flow.sh"
+      Ignore STDIN: "true"
     note: >
-      Este job ejecuta procesamiento/procesamiento_grafos.py y persiste en
-      Cassandra (tiempo real) + Hive (histórico).
+      Relaciones estándar: original | output stream | nonzero status (no success/failure).
+      Sin Output Destination Attribute: el FlowFile `original` lleva execution.status hacia el Route.
+
+  - id: N12r
+    type: RouteOnAttribute
+    name: Route_Spark_Exito_Fallo
+    properties:
+      Routing Strategy: Route to Property name
+      exito: "${execution.status:equals('0')}"
+      fallo: "${execution.status:equals('0'):not()}"
+
+  - id: N12b
+    type: ExecuteStreamCommand
+    name: Notify_Pipeline_OK
+    properties:
+      Command Path: /bin/bash
+      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/notify_pipeline_nifi_exito.sh"
+      Ignore STDIN: "true"
+
+  - id: N12c
+    type: ExecuteStreamCommand
+    name: Notify_Pipeline_FALLO
+    properties:
+      Command Path: /bin/bash
+      Command Arguments: "${PROJECT_ROOT}/nifi/scripts/notify_pipeline_nifi_fallo.sh"
+      Ignore STDIN: "true"
 
   # --- OBSERVABILIDAD / ERRORES ---
   - id: N13
@@ -172,7 +199,11 @@ connections:
   - { from: N07, to: N09, relationship: success }
   - { from: N07, to: N10, relationship: success }
   - { from: N07, to: N11, relationship: success }
-  - { from: N10, to: N12, relationship: success }
+  - { from: N11, to: N12, relationship: original }
+  - { from: N12, to: N12r, relationship: original }
+  - { from: N12r, to: N12b, relationship: exito }
+  - { from: N12r, to: N12c, relationship: fallo }
+  - { from: N12r, to: N13, relationship: unmatched }
 
   # Errores comunes
   - { from: N03, to: N13, relationship: failure }
@@ -186,7 +217,8 @@ connections:
   - { from: N06, to: N13, relationship: No Retry }
   - { from: N07, to: N13, relationship: failure }
   - { from: N11, to: N13, relationship: failure }
-  - { from: N12, to: N13, relationship: failure }
+  - { from: N12b, to: N13, relationship: nonzero status }
+  - { from: N12c, to: N13, relationship: nonzero status }
   - { from: N13, to: N14, relationship: success }
 
 runtime_notes:

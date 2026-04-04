@@ -328,7 +328,7 @@ def render_gemelo_digital_tab() -> None:
 
     G = construir_grafo_ponderado(aristas, atasco, clima)
 
-    caps = [n for n in nodos if (n.get("tipo") or "").lower() == "capital"]
+    caps = [n for n in nodos if (n.get("tipo") or "").lower() in ("capital", "hub")]
     cap_ids = sorted([str(c["id_nodo"]) for c in caps])
 
     tracking = cargar_tracking_gemelo_cassandra()

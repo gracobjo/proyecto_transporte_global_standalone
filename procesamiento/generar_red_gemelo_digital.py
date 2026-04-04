@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Genera la red estática del gemelo digital (50 capitales + 5 subnodos/capital),
-topología estrella híbrida, y la vuelca en HDFS + instrucciones Hive (logistica_espana).
+Genera la red estática del gemelo digital (50 capitales + 5 subnodos/capital):
+capitales en **grafo completo** entre sí; subnodos enlazados a su capital y capitales
+cercanas. Volcado a HDFS + instrucciones Hive (logistica_espana). El pipeline batch usa
+solo capitales en `config_nodos.py` (mismo K_n haversine, sin subnodos).
 
 Ejecución (desde la raíz del proyecto):
   python3 procesamiento/generar_red_gemelo_digital.py

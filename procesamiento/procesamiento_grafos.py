@@ -369,30 +369,42 @@ def _persistir_historico_nodos_hive_compatible(spark, df_nodos):
     Mantiene `historico_nodos` vía la ruta externa que Hive ya expone en HDFS.
     Evita `saveAsTable()` contra Hive 4 desde Spark.
     """
-    df_hist = (
-        df_nodos.withColumn(
-            "motivo_retraso",
-            coalesce(col("motivo_retraso"), lit("")),
-        )
-        # Compatibilidad: antiguas versiones de la ingesta usaban `clima_desc`, `temp`, `viento`.
-        # La ingesta actual expone `clima_actual`, `temperatura`, `viento_velocidad`.
-        .withColumn("clima_actual", coalesce(col("clima_actual"), col("clima_desc")))
-        .withColumn("temperatura", coalesce(col("temperatura"), col("temp")))
-        .withColumn("viento_velocidad", coalesce(col("viento_velocidad"), col("viento")))
-        .select(
-            "id_nodo",
-            "lat",
-            "lon",
-            "tipo",
-            "estado",
-            "motivo_retraso",
+    df_hist = df_nodos.withColumn(
+        "motivo_retraso",
+        coalesce(col("motivo_retraso"), lit("")),
+    )
+    # Compatibilidad: solo si el DF trae nombres legacy (p. ej. lectura antigua).
+    # El pipeline actual construye `df_nodos` solo con clima_actual / temperatura / viento_velocidad;
+    # referenciar `clima_desc` aquí rompe el análisis de Spark (UNRESOLVED_COLUMN).
+    cols = set(df_hist.columns)
+    if "clima_desc" in cols:
+        df_hist = df_hist.withColumn(
             "clima_actual",
-            "temperatura",
-            "humedad",
-            "viento_velocidad",
-            "ultima_actualizacion",
-            "fecha_proceso",
+            coalesce(col("clima_actual"), col("clima_desc")),
         )
+    if "temp" in cols:
+        df_hist = df_hist.withColumn(
+            "temperatura",
+            coalesce(col("temperatura"), col("temp")),
+        )
+    if "viento" in cols:
+        df_hist = df_hist.withColumn(
+            "viento_velocidad",
+            coalesce(col("viento_velocidad"), col("viento")),
+        )
+    df_hist = df_hist.select(
+        "id_nodo",
+        "lat",
+        "lon",
+        "tipo",
+        "estado",
+        "motivo_retraso",
+        "clima_actual",
+        "temperatura",
+        "humedad",
+        "viento_velocidad",
+        "ultima_actualizacion",
+        "fecha_proceso",
     )
     (
         df_hist.coalesce(1)
@@ -1036,18 +1048,17 @@ def main():
         # Intentar leer desde HDFS solo si hay ficheros (evita FileNotFoundException en análisis)
         payload = None
         try:
-            r = subprocess.run(
-                ["hdfs", "dfs", "-ls", HDFS_BACKUP_PATH],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if r.returncode == 0 and ".json" in (r.stdout or ""):
-                df = spark.read.json(f"{HDFS_BACKUP_PATH}/*.json")
-                rows = df.collect()
-                if rows:
-                    last = rows[-1]
-                    payload = last.asDict() if hasattr(last, "asDict") else dict(last)
+            # Incluye JSON en subcarpetas (p. ej. nifi_raw/…/ del flujo NiFi) y planos transporte_*.json.
+            df = spark.read.option("recursiveFileLookup", "true").json(HDFS_BACKUP_PATH)
+            if df.take(1):
+                if "timestamp" in df.columns:
+                    row = df.orderBy(col("timestamp").desc()).limit(1).collect()[0]
+                else:
+                    rows = df.collect()
+                    row = rows[-1]
+                payload = row.asDict() if hasattr(row, "asDict") else dict(row)
+            else:
+                payload = None
         except Exception:
             payload = None
 
